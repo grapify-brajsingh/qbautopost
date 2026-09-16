@@ -21,7 +21,8 @@ public static class JobStatusRules
         [JobStatus.Queued] = [JobStatus.Analysing, JobStatus.Failed],
         [JobStatus.Analysing] = [JobStatus.Failed, JobStatus.Ready, JobStatus.Posting],
         [JobStatus.Ready] = [JobStatus.Posting],
-        [JobStatus.Posting] = [JobStatus.Posted, JobStatus.Partial],
+        // SPEC-GAP T-604: FR-11 fails a job whose backup is too old; that check runs in posting, before anything is sent.
+        [JobStatus.Posting] = [JobStatus.Posted, JobStatus.Partial, JobStatus.Failed],
         [JobStatus.Posted] = [JobStatus.Undone],
         [JobStatus.Partial] = [JobStatus.Undone],
         [JobStatus.Failed] = [],

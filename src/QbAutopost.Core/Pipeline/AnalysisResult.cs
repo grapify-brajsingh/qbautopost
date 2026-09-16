@@ -68,7 +68,10 @@ public sealed record AnalysisResult
 /// <summary>A line QuickBooks accepted and G5 verified.</summary>
 public sealed record PostedLine(MappedTxn Txn, string TxnId, string? EditSequence);
 
-/// <summary>Outcome of FR-10…FR-12. <see cref="Status"/> is <c>posted</c> or <c>partial</c>.</summary>
+/// <summary>
+/// Outcome of FR-10…FR-12. <see cref="Status"/> is <c>posted</c> or <c>partial</c>, or <c>failed</c> when the FR-11
+/// backup guard refused before anything was sent.
+/// </summary>
 public sealed record PostOutcome
 {
     public required JobStatus Status { get; init; }

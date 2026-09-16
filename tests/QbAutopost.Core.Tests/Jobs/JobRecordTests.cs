@@ -15,6 +15,7 @@ public sealed class JobRecordTests
     [InlineData(JobStatus.Ready, JobStatus.Posting)]
     [InlineData(JobStatus.Posting, JobStatus.Posted)]
     [InlineData(JobStatus.Posting, JobStatus.Partial)]
+    [InlineData(JobStatus.Posting, JobStatus.Failed)]
     [InlineData(JobStatus.Posted, JobStatus.Undone)]
     [InlineData(JobStatus.Partial, JobStatus.Undone)]
     public void Should_Move_When_SpecStateMachineAllowsIt(JobStatus from, JobStatus to)
@@ -29,7 +30,7 @@ public sealed class JobRecordTests
     [InlineData(JobStatus.Queued, JobStatus.Ready)]
     [InlineData(JobStatus.Ready, JobStatus.Posted)]
     [InlineData(JobStatus.Ready, JobStatus.Analysing)]
-    [InlineData(JobStatus.Posting, JobStatus.Failed)]
+    [InlineData(JobStatus.Posting, JobStatus.Ready)]
     [InlineData(JobStatus.Failed, JobStatus.Posting)]
     [InlineData(JobStatus.Posted, JobStatus.Posting)]
     public void Should_Throw_When_SpecStateMachineForbidsTheMove(JobStatus from, JobStatus to)

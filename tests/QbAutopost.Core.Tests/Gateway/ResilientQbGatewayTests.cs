@@ -118,6 +118,118 @@ public sealed class ResilientQbGatewayTests
             () => new ResilientQbGateway(inner, FastPolicy).CurrentCompanyFileAsync(CancellationToken.None));
     }
 
+    private const string QueryRequest = "<?xml version=\"1.0\"?><QBXML><QBXMLMsgsRq onError=\"stopOnError\"><CheckQueryRq requestID=\"1\" /></QBXMLMsgsRq></QBXML>";
+
+    private static ScriptedGateway FailingFirst(Exception first, Func<int>? onCall = null)
+    {
+        var calls = 0;
+        return new ScriptedGateway
+        {
+            Respond = (_, _) =>
+            {
+                onCall?.Invoke();
+                return ++calls == 1 ? Task.FromException<string>(first) : Task.FromResult("<second/>");
+            },
+        };
+    }
+
+    private sealed class DelayRecorder
+    {
+        public List<TimeSpan> Delays { get; } = [];
+
+        public Task Delay(TimeSpan delay, CancellationToken ct)
+        {
+            Delays.Add(delay);
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task Should_RetryOnceAfterRetryDelay_When_SessionCouldNotOpen()
+    {
+        var delays = new DelayRecorder();
+        var inner = FailingFirst(new QuickBooksUnavailableException("no session"));
+
+        var response = await new ResilientQbGateway(inner, FastPolicy, delays.Delay).ProcessAsync(AddRequest, CancellationToken.None);
+
+        Assert.Equal("<second/>", response);
+        Assert.Equal([TimeSpan.FromSeconds(5)], delays.Delays);
+    }
+
+    [Fact]
+    public async Task Should_GiveUpAfterOneRetry_When_SessionNeverOpens()
+    {
+        var calls = 0;
+        var inner = new ScriptedGateway { Respond = (_, _) => { calls++; throw new QuickBooksUnavailableException("no session"); } };
+
+        await Assert.ThrowsAsync<QuickBooksUnavailableException>(
+            () => new ResilientQbGateway(inner, FastPolicy, new DelayRecorder().Delay).ProcessAsync(AddRequest, CancellationToken.None));
+
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task Should_RetryComFailure_When_MessageSetOnlyReads()
+    {
+        var delays = new DelayRecorder();
+        var inner = FailingFirst(new QuickBooksCallException("RPC failed", unchecked((int)0x80010105)));
+
+        var response = await new ResilientQbGateway(inner, FastPolicy, delays.Delay).ProcessAsync(QueryRequest, CancellationToken.None);
+
+        Assert.Equal("<second/>", response);
+        Assert.Single(delays.Delays);
+    }
+
+    [Fact]
+    public async Task Should_NotRetryComFailure_When_MessageSetAddsTransactions()
+    {
+        var calls = 0;
+        var inner = FailingFirst(new QuickBooksCallException("RPC failed", unchecked((int)0x80010105)), () => ++calls);
+
+        await Assert.ThrowsAsync<QuickBooksCallException>(
+            () => new ResilientQbGateway(inner, FastPolicy, new DelayRecorder().Delay).ProcessAsync(AddRequest, CancellationToken.None));
+
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task Should_NotRetry_When_CallWasBusy()
+    {
+        var calls = 0;
+        var inner = new ScriptedGateway { Respond = (_, _) => { calls++; return new TaskCompletionSource<string>().Task; } };
+
+        await Assert.ThrowsAsync<QuickBooksBusyException>(
+            () => new ResilientQbGateway(inner, FastPolicy, new DelayRecorder().Delay).ProcessAsync(QueryRequest, CancellationToken.None));
+
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task Should_NotRetry_When_LockWaitTimedOut()
+    {
+        var calls = 0;
+        var inner = new ScriptedGateway { Respond = (_, _) => ++calls == 1 ? new TaskCompletionSource<string>().Task : Task.FromResult("<ok/>") };
+        var delays = new DelayRecorder();
+        var gateway = new ResilientQbGateway(inner, FastPolicy, delays.Delay);
+        await Assert.ThrowsAsync<QuickBooksBusyException>(() => gateway.ProcessAsync(AddRequest, CancellationToken.None));
+
+        await Assert.ThrowsAsync<QuickBooksUnavailableException>(() => gateway.ProcessAsync(AddRequest, CancellationToken.None));
+
+        Assert.Empty(delays.Delays);
+    }
+
+    [Fact]
+    public async Task Should_RetryCompanyFileQuery_When_SessionCouldNotOpen()
+    {
+        var calls = 0;
+        var inner = new ScriptedGateway
+        {
+            CompanyFile = _ => ++calls == 1 ? Task.FromException<string>(new QuickBooksUnavailableException("x")) : Task.FromResult(@"C:\a.QBW"),
+        };
+
+        Assert.Equal(@"C:\a.QBW", await new ResilientQbGateway(inner, FastPolicy, new DelayRecorder().Delay).CurrentCompanyFileAsync(CancellationToken.None));
+    }
+
     internal sealed class ScriptedGateway : IQbGateway
     {
         public Func<string, CancellationToken, Task<string>> Respond { get; init; } = (_, _) => Task.FromResult("");

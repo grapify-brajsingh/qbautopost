@@ -116,6 +116,12 @@ public sealed class JobPipeline(
 
         if (analysis.ToPost.Count > 0)
         {
+            // FR-11: no posting without a recent backup (nothing has been sent yet).
+            if (BackupGuard.Check(options.BackupFolder, options.BackupMaxAgeHours, clock.UtcNow) is { } backupProblem)
+            {
+                return new PostOutcome { Status = JobStatus.Failed, Error = backupProblem, Analysis = analysis };
+            }
+
             try
             {
                 analysis = await CheckQuickBooksDuplicatesAsync(analysis, ct);
@@ -138,7 +144,7 @@ public sealed class JobPipeline(
         string? error = null;
         try
         {
-            // TODO(T-604): retry-once and backup-age guard.
+            // The gateway (ResilientQbGateway) applies the busy timeout and the one safe retry (FR-11).
             var response = await gateway.ProcessAsync(analysis.QbXml, ct);
             JobOutputWriter.WriteResponse(analysis.Input.OutputDir, response);
             verification = PostVerifier.Verify(toPost, QbXmlParser.ParseAddResponse(response));

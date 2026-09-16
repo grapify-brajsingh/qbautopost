@@ -19,6 +19,11 @@ public sealed class AppSettings
     {
         Company.RulesFile = Path.GetFullPath(Company.RulesFile, root);
         Paths.ResolveAgainst(root);
+        if (!string.IsNullOrWhiteSpace(QuickBooks.BackupFolder))
+        {
+            QuickBooks.BackupFolder = Path.GetFullPath(QuickBooks.BackupFolder, root);
+        }
+
         if (!string.IsNullOrWhiteSpace(Ocr.TessDataPath))
         {
             Ocr.TessDataPath = Path.GetFullPath(Ocr.TessDataPath, root);

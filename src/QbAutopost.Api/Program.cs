@@ -84,6 +84,8 @@ builder.Services.AddSingleton(sp =>
         QbListsFile = s.Paths.QbLists,
         QbXmlVersion = s.QuickBooks.QbXmlVersion,
         DuplicateWindowDays = s.QuickBooks.DuplicateWindowDays,
+        BackupFolder = s.QuickBooks.BackupFolder,
+        BackupMaxAgeHours = s.QuickBooks.BackupMaxAgeHours,
     };
 });
 builder.Services.AddSingleton<JobPipeline>();

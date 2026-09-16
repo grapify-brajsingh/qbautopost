@@ -15,4 +15,9 @@ public sealed record PipelineOptions
 
     /// <summary>FR-8 <c>QuickBooks:DuplicateWindowDays</c> (W).</summary>
     public int DuplicateWindowDays { get; init; } = 3;
+
+    /// <summary>FR-11 <c>QuickBooks:BackupFolder</c>; blank = no backup check.</summary>
+    public string BackupFolder { get; init; } = "";
+
+    public int BackupMaxAgeHours { get; init; } = 36;
 }
