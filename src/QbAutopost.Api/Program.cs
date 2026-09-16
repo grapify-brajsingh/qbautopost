@@ -86,6 +86,7 @@ builder.Services.AddSingleton(sp =>
     };
 });
 builder.Services.AddSingleton<JobPipeline>();
+builder.Services.AddSingleton<QbListSync>();
 builder.Services.AddSingleton<IJobProcessor, JobRunner>();
 builder.Services.AddSingleton<JobAdmission>();
 builder.Services.AddSingleton<StartupRecovery>();
@@ -110,6 +111,7 @@ app.UseStatusCodePages();
 app.UseMiddleware<ApiKeyMiddleware>();
 app.MapJobEndpoints();
 app.MapHealthEndpoints();
+app.MapQuickBooksEndpoints();
 
 app.Run();
 

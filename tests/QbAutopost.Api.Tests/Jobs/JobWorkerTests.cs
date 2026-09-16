@@ -91,6 +91,33 @@ public sealed class JobWorkerTests : IDisposable
         Assert.Equal(["a:Analyse", "b:Analyse"], processor.Seen);
     }
 
+    [Fact]
+    public async Task Should_RunExclusiveWorkAfterQueuedJobs_When_Requested()
+    {
+        var processor = new RecordingProcessor();
+        _queue.Enqueue(new JobWorkItem("a", JobAction.Analyse));
+        var exclusive = _queue.RunExclusiveAsync("sync", _ => Task.FromResult(processor.Seen.Count), CancellationToken.None);
+
+        await RunUntil(processor, () => exclusive.IsCompleted);
+
+        Assert.Equal(1, await exclusive); // the job ahead of it had finished
+        Assert.Equal(["a:Analyse"], processor.Seen); // exclusive work never reaches the job processor
+    }
+
+    [Fact]
+    public async Task Should_ReturnErrorToCallerAndKeepJob_When_ExclusiveWorkThrows()
+    {
+        Save("a", JobStatus.Posted);
+        var processor = new RecordingProcessor();
+        var exclusive = _queue.RunExclusiveAsync<int>("a", _ => throw new InvalidOperationException("undo failed"), CancellationToken.None);
+
+        await RunUntil(processor, () => exclusive.IsCompleted);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => exclusive);
+        Assert.Equal("undo failed", ex.Message);
+        Assert.Equal(JobStatus.Posted, _store.Get("a")!.Status);
+    }
+
     private sealed class RecordingProcessor : IJobProcessor
     {
         private readonly object _gate = new();

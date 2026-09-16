@@ -48,6 +48,20 @@ public sealed record Rules
 
     private static IReadOnlyDictionary<string, string> Empty { get; } = new Dictionary<string, string>();
 
+    /// <summary>Every QuickBooks account name this file refers to (FR-15 <c>missingInRules</c>), distinct, in file order.</summary>
+    public IReadOnlyList<string> AccountNames() =>
+        BankAccounts.Values
+            .Concat(CardAccounts.Values)
+            .Concat(VendorAccounts.Values)
+            .Concat(KeywordAccounts.Select(k => k.Account))
+            .Concat(TransferPatterns.Select(t => t.Account))
+            .Append(HoldingExpenseAccount)
+            .Append(DepositIncomeAccount)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Select(n => n!)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
     public static Rules Load(string path) => Parse(File.ReadAllText(path));
 
     public static Rules Parse(string json)

@@ -31,6 +31,14 @@ public sealed class JobWorker(JobQueue queue, IJobProcessor processor, IJobStore
         try
         {
             log.LogInformation("Job {JobId}: {Action} started", item.JobId, item.Action);
+            if (item.Action == JobAction.Exclusive)
+            {
+                // Not a job: the work reports its own errors to the caller and never changes a job's status here.
+                await item.Work!(stoppingToken);
+                log.LogInformation("Job {JobId}: {Action} finished", item.JobId, item.Action);
+                return;
+            }
+
             await processor.ProcessAsync(item, stoppingToken);
             log.LogInformation("Job {JobId}: {Action} finished with status {Status}", item.JobId, item.Action, store.Get(item.JobId)?.Status);
         }

@@ -1,0 +1,41 @@
+<?xml version="1.0" ?>
+<QBXML>
+  <QBXMLMsgsRs>
+    <AccountQueryRs requestID="accounts" statusCode="0" statusSeverity="Info" statusMessage="Status OK">
+      <AccountRet>
+        <ListID>80000001-1787000001</ListID>
+        <Name>Chase Checking 4521</Name>
+        <FullName>Chase Checking 4521</FullName>
+        <IsActive>true</IsActive>
+        <AccountType>Bank</AccountType>
+      </AccountRet>
+      <AccountRet>
+        <ListID>80000002-1787000001</ListID>
+        <Name>Electric</Name>
+        <FullName>Utilities:Electric</FullName>
+        <IsActive>true</IsActive>
+        <AccountType>Expense</AccountType>
+      </AccountRet>
+      <AccountRet>
+        <ListID>80000003-1787000001</ListID>
+        <Name>Repairs and Maintenance</Name>
+        <FullName>Repairs and Maintenance</FullName>
+        <IsActive>true</IsActive>
+        <AccountType>Expense</AccountType>
+      </AccountRet>
+    </AccountQueryRs>
+    <VendorQueryRs requestID="vendors" statusCode="0" statusSeverity="Info" statusMessage="Status OK">
+      <VendorRet>
+        <ListID>80000010-1787000001</ListID>
+        <Name>Home Depot</Name>
+        <IsActive>true</IsActive>
+      </VendorRet>
+      <VendorRet>
+        <ListID>80000011-1787000001</ListID>
+        <Name>Florida Power &amp; Light</Name>
+        <IsActive>true</IsActive>
+      </VendorRet>
+    </VendorQueryRs>
+    <CustomerQueryRs requestID="customers" statusCode="1" statusSeverity="Info" statusMessage="A query request did not find a matching object in QuickBooks" />
+  </QBXMLMsgsRs>
+</QBXML>

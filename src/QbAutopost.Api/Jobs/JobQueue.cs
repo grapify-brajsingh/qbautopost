@@ -9,9 +9,16 @@ public enum JobAction
 
     /// <summary><c>POST /jobs/{id}/post</c>: re-run mapping and post (FR-10).</summary>
     Post,
+
+    /// <summary>
+    /// A self-contained operation that must not overlap a job (undo, sync-lists): it touches QuickBooks and the shared
+    /// ledger/list files. The worker runs <see cref="JobWorkItem.Work"/> itself; errors go back to the waiting caller.
+    /// </summary>
+    Exclusive,
 }
 
-public sealed record JobWorkItem(string JobId, JobAction Action);
+/// <summary>One unit of work. <paramref name="JobId"/> is the log correlation id (for exclusive work: a label).</summary>
+public sealed record JobWorkItem(string JobId, JobAction Action, Func<CancellationToken, Task>? Work = null);
 
 /// <summary>In-process FIFO for the single <see cref="JobWorker"/> (ADR-0003). Not durable: startup recovery covers a restart.</summary>
 public sealed class JobQueue
@@ -28,4 +35,30 @@ public sealed class JobQueue
     }
 
     public IAsyncEnumerable<JobWorkItem> ReadAllAsync(CancellationToken ct) => _channel.Reader.ReadAllAsync(ct);
+
+    /// <summary>
+    /// Runs <paramref name="work"/> on the single worker, after any job ahead of it, and returns its result. The work
+    /// runs to the end even if the caller stops waiting (<paramref name="ct"/> only ends the wait).
+    /// </summary>
+    public Task<T> RunExclusiveAsync<T>(string label, Func<CancellationToken, Task<T>> work, CancellationToken ct)
+    {
+        var result = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Enqueue(new JobWorkItem(label, JobAction.Exclusive, async workerCt =>
+        {
+            try
+            {
+                result.TrySetResult(await work(workerCt));
+            }
+            catch (OperationCanceledException) when (workerCt.IsCancellationRequested)
+            {
+                result.TrySetCanceled(workerCt);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                result.TrySetException(ex);
+            }
+        }));
+        return result.Task.WaitAsync(ct);
+    }
 }

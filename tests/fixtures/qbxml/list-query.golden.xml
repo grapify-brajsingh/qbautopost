@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="13.0"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <AccountQueryRq requestID="accounts">
+      <ActiveStatus>ActiveOnly</ActiveStatus>
+    </AccountQueryRq>
+    <VendorQueryRq requestID="vendors">
+      <ActiveStatus>ActiveOnly</ActiveStatus>
+    </VendorQueryRq>
+    <CustomerQueryRq requestID="customers">
+      <ActiveStatus>ActiveOnly</ActiveStatus>
+    </CustomerQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>
