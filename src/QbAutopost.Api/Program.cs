@@ -9,6 +9,7 @@ using QbAutopost.Api.QuickBooks;
 using QbAutopost.Api.Security;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Extract;
+using QbAutopost.Core.Gateway;
 using QbAutopost.Core.Hermes;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Mapping;
@@ -60,7 +61,18 @@ builder.Services.AddSingleton<StatementLlmExtractor>();
 builder.Services.AddSingleton<StatementReader>();
 builder.Services.AddSingleton<InvoiceExtractor>();
 builder.Services.AddSingleton<AccountChooser>();
-builder.Services.AddSingleton<IQbGateway, UnconfiguredQbGateway>(); // TODO(T-601): COM gateway / fake switch
+// T-601: the SDK on Windows, the simulated company with QuickBooks:Fake=true, otherwise nothing is ever sent.
+builder.Services.AddSingleton(sp => QbConnection.Create(
+    sp.GetRequiredService<IOptions<AppSettings>>().Value, sp.GetRequiredService<IHostEnvironment>()));
+builder.Services.AddSingleton<IQbGateway>(sp =>
+{
+    var qb = sp.GetRequiredService<IOptions<AppSettings>>().Value.QuickBooks;
+    return new ResilientQbGateway(sp.GetRequiredService<QbConnection>().Gateway, new QbGatewayPolicy
+    {
+        BusyTimeout = TimeSpan.FromSeconds(qb.BusyTimeoutSeconds),
+        RetryDelay = TimeSpan.FromSeconds(qb.RetryDelaySeconds),
+    });
+});
 builder.Services.AddSingleton(sp =>
 {
     var s = sp.GetRequiredService<IOptions<AppSettings>>().Value;
@@ -85,6 +97,10 @@ RequireApiKey(app);
 
 // With Ocr:Enabled the engine loads now, so missing language data stops startup rather than failing a job.
 app.Services.GetRequiredService<IOcr>();
+
+// QuickBooks:Fake outside Development/Testing stops startup; the chosen mode is logged once.
+var qbConnection = app.Services.GetRequiredService<QbConnection>();
+app.Logger.LogInformation("QuickBooks gateway: {Mode}", qbConnection.Mode);
 
 // Spec §6: before the worker starts (hosted services start in app.Run), no job may remain active.
 app.Services.GetRequiredService<StartupRecovery>().Run();

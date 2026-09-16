@@ -13,6 +13,8 @@ public static class HoldReasons
     public const string AlreadyInQuickBooks = "already-in-quickbooks";
     public const string PossibleDuplicate = "possible-duplicate";
     public const string Ambiguous = "ambiguous";
+    public const string QuickBooksBusy = "quickbooks-busy";
+    public const string BackupTooOld = "backup-too-old";
 
     // SPEC-GAP T-002: codes below are not named in the spec; each holds rather than guesses (see tracker Questions).
     public const string AmbiguousCsvLayout = "ambiguous-csv-layout";

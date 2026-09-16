@@ -8,6 +8,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using QbAutopost.Api.Endpoints;
+using QbAutopost.Api.QuickBooks;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Jobs;
 
@@ -65,11 +66,13 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             // Rule 1: even a real HermesClient built by mistake cannot reach a Hermes on this machine (.invalid never resolves).
             ["Hermes:BaseUrl"] = "http://hermes.invalid:8642",
             ["Hermes:ApiKey"] = "",
+            ["QuickBooks:RetryDelaySeconds"] = "0.01",
         }));
         builder.ConfigureTestServices(services =>
         {
-            services.RemoveAll<IQbGateway>();
-            services.AddSingleton<IQbGateway>(Gateway);
+            // The fake replaces the raw connection; the host still wraps it in ResilientQbGateway (busy timeout, retry).
+            services.RemoveAll<QbConnection>();
+            services.AddSingleton(new QbConnection(Gateway, QbConnectionMode.Test));
             services.RemoveAll<IHermesClient>();
             services.AddSingleton<IHermesClient>(Hermes);
         });

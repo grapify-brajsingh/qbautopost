@@ -49,6 +49,15 @@ public sealed class QuickBooksSettings
     public int BusyTimeoutSeconds { get; set; } = 60;
     public string BackupFolder { get; set; } = "";
     public int BackupMaxAgeHours { get; set; } = 36;
+
+    /// <summary>
+    /// SPEC-GAP T-601: <c>true</c> answers from an in-memory simulated company instead of the SDK (plan T-601
+    /// "QuickBooks:Fake"). Allowed only in Development/Testing because its TxnIDs would enter the real ledger.
+    /// </summary>
+    public bool Fake { get; set; }
+
+    /// <summary>FR-11 pause before the one retry (5 s). Configurable only so tests do not wait.</summary>
+    public double RetryDelaySeconds { get; set; } = 5;
 }
 
 public sealed class HermesSettings

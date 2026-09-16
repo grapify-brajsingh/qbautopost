@@ -144,11 +144,17 @@ public sealed class JobPipeline(
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // The request may or may not have been applied: hold every line and record the batch so a re-run is refused (F3).
-            error = $"quickbooks call failed ({ex.GetType().Name}: {ex.Message}); run duplicates before re-post";
-            var note = ex is FormatException or XmlException ? "unreadable QuickBooks response" : "QuickBooks call failed";
+            var busy = ex is QuickBooksBusyException;
+            error = busy
+                ? $"{HoldReasons.QuickBooksBusy}: {ex.Message}; run duplicates before re-post"
+                : $"quickbooks call failed ({ex.GetType().Name}: {ex.Message}); run duplicates before re-post";
+            var reason = busy ? HoldReasons.QuickBooksBusy : HoldReasons.QuickBooksNoResponse;
+            var note = busy ? "QuickBooks did not answer in time; check QuickBooks before re-posting"
+                : ex is FormatException or XmlException ? "unreadable QuickBooks response"
+                : "QuickBooks call failed";
             verification = new PostVerification(
                 [],
-                toPost.Select(t => t with { Decision = Decision.Hold, Reason = HoldReasons.QuickBooksNoResponse, Note = note }).ToList());
+                toPost.Select(t => t with { Decision = Decision.Hold, Reason = reason, Note = note }).ToList());
         }
 
         RecordInLedger(job, analysis, verification);

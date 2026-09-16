@@ -3,12 +3,12 @@ using QbAutopost.Core.Abstractions;
 namespace QbAutopost.Api.QuickBooks;
 
 /// <summary>
-/// Default gateway until the COM gateway exists. It never sends anything, so posting ends <c>partial</c> with nothing
-/// recorded in the ledger. TODO(T-601): replaced by <c>QbGateway</c> (Windows) / fake switch in M6.
+/// The gateway on a host that is not Windows and not faked (T-601). It never sends anything, so posting ends
+/// <c>partial</c> ("nothing posted") with nothing recorded in the ledger.
 /// </summary>
 public sealed class UnconfiguredQbGateway : IQbGateway
 {
-    private const string Message = "the QuickBooks gateway is not available in this build (arrives in M6)";
+    private const string Message = "the QuickBooks SDK is only available on Windows (set QuickBooks:Fake=true in Development to simulate it)";
 
     public Task<string> ProcessAsync(string qbxml, CancellationToken ct) =>
         throw new QuickBooksUnavailableException(Message);
