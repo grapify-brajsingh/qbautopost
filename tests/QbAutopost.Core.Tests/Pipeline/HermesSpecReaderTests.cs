@@ -114,6 +114,8 @@ public sealed class HermesSpecReaderTests : IDisposable
     {
         public List<HermesRequest> Requests { get; } = [];
 
+        public Task<HermesPing> PingAsync(CancellationToken ct) => throw new NotSupportedException();
+
         public Task<T> CompleteJsonAsync<T>(HermesRequest request, CancellationToken ct)
             where T : IValidatable
         {

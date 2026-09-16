@@ -15,6 +15,11 @@ public sealed class FakeHermesClient : IHermesClient
 
     public List<HermesRequest> Calls { get; } = [];
 
+    /// <summary>What <see cref="PingAsync"/> answers; defaults to a healthy Hermes.</summary>
+    public HermesPing Ping { get; set; } = new(true, "fake-model", 1, null);
+
+    public Task<HermesPing> PingAsync(CancellationToken ct) => Task.FromResult(Ping);
+
     public static string FixtureJson(HermesTask task) =>
         File.ReadAllText(Fixtures.PathOf("hermes", task.ToString().ToLowerInvariant() + ".json"));
 

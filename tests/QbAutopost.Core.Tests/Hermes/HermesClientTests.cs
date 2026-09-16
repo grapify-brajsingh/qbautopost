@@ -220,6 +220,84 @@ public sealed class HermesClientTests : IDisposable
         Assert.All(files, file => Assert.DoesNotContain(ApiKey, File.ReadAllText(file), StringComparison.Ordinal));
     }
 
+
+    [Fact]
+    public async Task Should_SendFiveTokenCompletionWithoutAudit_When_Pinging()
+    {
+        _handler.ReplyContent("ok");
+
+        var ping = await Client().PingAsync(CancellationToken.None);
+
+        Assert.Equal(new HermesPing(true, "test-model", ping.LatencyMs, null), ping);
+        Assert.True(ping.LatencyMs >= 0);
+        var sent = Assert.Single(_handler.Requests);
+        Assert.Equal("http://hermes.test:8642/v1/chat/completions", sent.Uri.ToString());
+        Assert.Equal("Bearer " + ApiKey, sent.Authorization);
+        Assert.Equal(5, sent.Json.GetProperty("max_tokens").GetInt32());
+        Assert.Equal(0m, sent.Json.GetProperty("temperature").GetDecimal());
+        Assert.Equal("user", sent.Json.GetProperty("messages")[0].GetProperty("role").GetString());
+        Assert.False(Directory.Exists(AuditDir));
+    }
+
+    [Fact]
+    public async Task Should_NotSendMaxTokens_When_CompletingJson()
+    {
+        _handler.ReplyContent(ValidJson);
+
+        await Client().CompleteJsonAsync<Answer>(Request(), CancellationToken.None);
+
+        Assert.False(_handler.Requests[0].Json.TryGetProperty("max_tokens", out _));
+    }
+
+    [Fact]
+    public async Task Should_ReportNotOk_When_PingStatusIsNot200()
+    {
+        _handler.ReplyRaw("""{ "choices": [ { "message": { "content": "ok" } } ] }""", HttpStatusCode.Accepted);
+
+        var ping = await Client().PingAsync(CancellationToken.None);
+
+        Assert.False(ping.Ok);
+        Assert.Equal("HTTP 202", ping.Message);
+    }
+
+    [Theory]
+    [InlineData("""{ "choices": [ { "message": { "content": "  " } } ] }""", "empty completion")]
+    [InlineData("""{ "choices": [ { "message": { "content": null } } ] }""", "empty completion")]
+    [InlineData("""{ "choices": [] }""", "response has no choices[0].message")]
+    [InlineData("<html/>", "response is not JSON")]
+    public async Task Should_ReportNotOk_When_PingReplyHasNoContent(string body, string message)
+    {
+        _handler.ReplyRaw(body);
+
+        var ping = await Client().PingAsync(CancellationToken.None);
+
+        Assert.False(ping.Ok);
+        Assert.Equal(message, ping.Message);
+    }
+
+    [Fact]
+    public async Task Should_ReportNotOk_When_PingTimesOutOrCannotConnect()
+    {
+        _handler.Hang().Throw(new HttpRequestException("Connection refused"));
+        var client = Client(timeout: TimeSpan.FromMilliseconds(50));
+
+        var timedOut = await client.PingAsync(CancellationToken.None);
+        var refused = await client.PingAsync(CancellationToken.None);
+
+        Assert.False(timedOut.Ok);
+        Assert.StartsWith("timed out", timedOut.Message, StringComparison.Ordinal);
+        Assert.False(refused.Ok);
+        Assert.Equal("Connection refused", refused.Message);
+    }
+
+    [Fact]
+    public async Task Should_PropagateCancellation_When_CallerCancelsPing()
+    {
+        _handler.Hang();
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Client().PingAsync(cts.Token));
+    }
     [Fact]
     public void Should_NotShowApiKey_When_OptionsAreFormatted()
     {

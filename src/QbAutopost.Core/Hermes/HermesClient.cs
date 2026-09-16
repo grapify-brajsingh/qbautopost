@@ -1,7 +1,10 @@
+using System.Diagnostics;
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Text;
 
@@ -14,6 +17,9 @@ namespace QbAutopost.Core.Hermes;
 /// </summary>
 public sealed class HermesClient(HttpClient http, HermesOptions options) : IHermesClient
 {
+    public const string PingPrompt = "Reply with the single word: ok";
+    public const int PingMaxTokens = 5;
+
     public async Task<T> CompleteJsonAsync<T>(HermesRequest request, CancellationToken ct)
         where T : IValidatable
     {
@@ -29,6 +35,30 @@ public sealed class HermesClient(HttpClient http, HermesOptions options) : IHerm
         content = await SendAsync(request, WithErrors(request.UserContent, errors), audit, ct);
         answer = JsonReply.TryParse<T>(content, out var retryErrors);
         return answer ?? throw new HermesValidationException(request.Task, retryErrors);
+    }
+
+    public async Task<HermesPing> PingAsync(CancellationToken ct)
+    {
+        var body = Serialize(new ChatRequest(options.Model, 0, [new ChatMessage("user", PingPrompt)], PingMaxTokens));
+        var watch = Stopwatch.StartNew();
+        string? failure;
+        try
+        {
+            var (status, text) = await PostAsync(body, ct);
+            failure = status != HttpStatusCode.OK
+                ? HttpFailure(status)
+                : string.IsNullOrWhiteSpace(ReadContent(HermesTask.Spec, text)) ? "empty completion" : null;
+        }
+        catch (Exception ex) when (ex is TimeoutException or HttpRequestException)
+        {
+            failure = ex.Message;
+        }
+        catch (HermesUnavailableException ex)
+        {
+            failure = ex.Reason;
+        }
+
+        return new HermesPing(failure is null, options.Model, watch.ElapsedMilliseconds, failure);
     }
 
     /// <summary>The user message for the retry: the original content plus why the previous answer was rejected.</summary>
@@ -49,14 +79,33 @@ public sealed class HermesClient(HttpClient http, HermesOptions options) : IHerm
         var systemPrompt = string.IsNullOrEmpty(request.SchemaHint)
             ? request.SystemPrompt
             : request.SystemPrompt + "\n\n" + request.SchemaHint;
-        var body = JsonSerializer.Serialize(
-            new ChatRequest(
-                options.Model,
-                0,
-                [new ChatMessage("system", systemPrompt), new ChatMessage("user", userContent)]),
-            JsonOptions.Default);
+        var body = Serialize(new ChatRequest(
+            options.Model,
+            0,
+            [new ChatMessage("system", systemPrompt), new ChatMessage("user", userContent)]));
         var n = audit.WriteRequest(body);
 
+        try
+        {
+            var (status, text) = await PostAsync(body, ct);
+            audit.WriteResponse(n, text);
+            if ((int)status is < 200 or > 299)
+            {
+                throw new HermesUnavailableException(request.Task, HttpFailure(status));
+            }
+
+            return ReadContent(request.Task, text);
+        }
+        catch (Exception ex) when (ex is TimeoutException or HttpRequestException)
+        {
+            audit.WriteResponse(n, Serialize(new { error = ex.Message }));
+            throw new HermesUnavailableException(request.Task, ex.Message, ex);
+        }
+    }
+
+    /// <summary>One POST with the per-call timeout; a timeout surfaces as <see cref="TimeoutException"/>, caller cancellation as itself.</summary>
+    private async Task<(HttpStatusCode Status, string Body)> PostAsync(string body, CancellationToken ct)
+    {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(options.Timeout);
         try
@@ -70,26 +119,12 @@ public sealed class HermesClient(HttpClient http, HermesOptions options) : IHerm
             }
 
             using var response = await http.SendAsync(message, timeout.Token);
-            var text = await response.Content.ReadAsStringAsync(timeout.Token);
-            audit.WriteResponse(n, text);
-            if (!response.IsSuccessStatusCode)
-            {
-                throw new HermesUnavailableException(
-                    request.Task, string.Create(CultureInfo.InvariantCulture, $"HTTP {(int)response.StatusCode}"));
-            }
-
-            return ReadContent(request.Task, text);
+            return (response.StatusCode, await response.Content.ReadAsStringAsync(timeout.Token));
         }
         catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
         {
-            var reason = $"timed out after {options.Timeout.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s";
-            audit.WriteResponse(n, ErrorJson(reason));
-            throw new HermesUnavailableException(request.Task, reason, ex);
-        }
-        catch (HttpRequestException ex)
-        {
-            audit.WriteResponse(n, ErrorJson(ex.Message));
-            throw new HermesUnavailableException(request.Task, ex.Message, ex);
+            throw new TimeoutException(
+                $"timed out after {options.Timeout.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s", ex);
         }
     }
 
@@ -120,10 +155,18 @@ public sealed class HermesClient(HttpClient http, HermesOptions options) : IHerm
         throw new HermesUnavailableException(task, "response has no choices[0].message");
     }
 
-    private static string ErrorJson(string reason) =>
-        JsonSerializer.Serialize(new { error = reason }, JsonOptions.Default);
+    private static string HttpFailure(HttpStatusCode status) =>
+        string.Create(CultureInfo.InvariantCulture, $"HTTP {(int)status}");
 
-    private sealed record ChatRequest(string Model, decimal Temperature, IReadOnlyList<ChatMessage> Messages);
+    private static string Serialize<TValue>(TValue value) => JsonSerializer.Serialize(value, JsonOptions.Default);
+
+    private sealed record ChatRequest(
+        string Model,
+        decimal Temperature,
+        IReadOnlyList<ChatMessage> Messages,
+        [property: JsonPropertyName("max_tokens")]
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        int? MaxTokens = null);
 
     private sealed record ChatMessage(string Role, string Content);
 }

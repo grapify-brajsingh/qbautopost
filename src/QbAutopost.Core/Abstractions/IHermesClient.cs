@@ -35,7 +35,13 @@ public interface IHermesClient
     /// </summary>
     Task<T> CompleteJsonAsync<T>(HermesRequest request, CancellationToken ct)
         where T : IValidatable;
+
+    /// <summary>FR-16: one 5-token completion; ok iff HTTP 200 with non-empty content. Never throws for a Hermes failure.</summary>
+    Task<HermesPing> PingAsync(CancellationToken ct);
 }
+
+/// <summary><c>GET /health/hermes</c> body (spec §6). <see cref="Message"/> says why the check failed (null when ok).</summary>
+public sealed record HermesPing(bool Ok, string Model, long LatencyMs, string? Message);
 
 /// <summary>Hermes gave no usable answer; callers catch this to hold or fall back.</summary>
 public abstract class HermesException(string message, Exception? inner = null) : Exception(message, inner)

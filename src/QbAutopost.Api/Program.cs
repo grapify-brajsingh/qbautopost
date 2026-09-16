@@ -78,6 +78,7 @@ app.UseExceptionHandler();
 app.UseStatusCodePages();
 app.UseMiddleware<ApiKeyMiddleware>();
 app.MapJobEndpoints();
+app.MapHealthEndpoints();
 
 app.Run();
 
