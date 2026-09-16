@@ -6,7 +6,7 @@ using QbAutopost.Core.Pipeline;
 namespace QbAutopost.Core.Output;
 
 /// <summary><c>output/spec.json</c>: T1 (or regex) result plus gate G2 (spec §5, FR-2).</summary>
-public sealed record SpecDocument(string Source, string Company, JobSpec Spec, SpecGateResult Gate);
+public sealed record SpecDocument(string Source, string Company, JobSpec Spec, SpecGateResult Gate, string? Note);
 
 /// <summary><c>output/statements/&lt;file&gt;.rows.json</c> (spec FR-3).</summary>
 public sealed record RowsDocument

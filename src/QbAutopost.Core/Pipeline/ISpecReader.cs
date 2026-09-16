@@ -12,15 +12,16 @@ public static class SpecSources
     public const string RegexFallback = "regex-fallback";
 }
 
-public sealed record SpecReadResult(JobSpec Spec, string Source);
+/// <summary><paramref name="Note"/> explains a fallback (e.g. why the Hermes answer was rejected); written to <c>spec.json.note</c>.</summary>
+public sealed record SpecReadResult(JobSpec Spec, string Source, string? Note = null);
 
-/// <summary>Requirement → <see cref="JobSpec"/> (spec FR-2). M1 uses <see cref="RegexSpecReader"/>; M2 adds Hermes T1.</summary>
+/// <summary>Requirement → <see cref="JobSpec"/> (spec FR-2): <see cref="HermesSpecReader"/>, or <see cref="RegexSpecReader"/> without Hermes.</summary>
 public interface ISpecReader
 {
     Task<SpecReadResult> ReadAsync(JobInput input, CancellationToken ct);
 }
 
-/// <summary>M1 stand-in for Hermes T1 (plan T-103).</summary>
+/// <summary>Deterministic reader without Hermes (the M1 stand-in, plan T-103); also the T1 fallback.</summary>
 public sealed class RegexSpecReader : ISpecReader
 {
     public async Task<SpecReadResult> ReadAsync(JobInput input, CancellationToken ct)

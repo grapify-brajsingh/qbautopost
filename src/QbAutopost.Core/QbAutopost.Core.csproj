@@ -5,4 +5,9 @@
     <RootNamespace>QbAutopost.Core</RootNamespace>
   </PropertyGroup>
 
+  <!-- Prompt files are read at startup from <app>/Hermes/prompts (spec §9); editable on the server. -->
+  <ItemGroup>
+    <None Update="Hermes\prompts\*.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

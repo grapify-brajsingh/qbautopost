@@ -18,7 +18,7 @@ public static class JobOutputWriter
     public static void WriteSpec(string outputDir, AnalysisResult analysis) =>
         AtomicFile.WriteJson(
             Path.Combine(outputDir, SpecFile),
-            new SpecDocument(analysis.Spec.Source, analysis.Company, analysis.Spec.Spec, analysis.Gate));
+            new SpecDocument(analysis.Spec.Source, analysis.Company, analysis.Spec.Spec, analysis.Gate, analysis.Spec.Note));
 
     public static void WriteRows(string outputDir, StatementSummary statement) =>
         AtomicFile.WriteJson(RowsPath(outputDir, statement.File), RowsDocument.From(statement));

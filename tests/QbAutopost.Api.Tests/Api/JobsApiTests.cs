@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using QbAutopost.Api.Endpoints;
 using QbAutopost.Api.Tests.TestSupport;
+using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Models;
 using QbAutopost.Core.Store;
@@ -11,6 +12,11 @@ namespace QbAutopost.Api.Tests.Api;
 /// <summary>Dry-run lifecycle and error cases of the job routes (spec §6, plan T-107).</summary>
 public sealed class JobsApiTests : IDisposable
 {
+    private const string UselessRequirement = "nothing useful here";
+
+    /// <summary>What Hermes T1 answers for a requirement that names nothing: G2 then fails the job (no kinds).</summary>
+    private const string EmptySpecJson = """{ "company": null, "kinds": [], "bankLast4": [], "cardLast4": [] }""";
+
     private readonly ApiFactory _factory = new();
     private readonly HttpClient _client;
 
@@ -95,6 +101,9 @@ public sealed class JobsApiTests : IDisposable
         var folder = _factory.Dir.CopySampleJob();
         var requirement = Path.Combine(folder, "requirement.txt");
         File.WriteAllText(requirement, File.ReadAllText(requirement).Replace("(Last Four Digits) 4521", "(Last Four Digits) 4521 9999", StringComparison.Ordinal));
+        _factory.Hermes.Respond(r => r.UserContent.Contains("4521 9999", StringComparison.Ordinal)
+            ? FakeHermesClient.FixtureJson(HermesTask.Spec).Replace("\"bankLast4\": [\"4521\"]", "\"bankLast4\": [\"4521\", \"9999\"]", StringComparison.Ordinal)
+            : null);
 
         var view = await _client.RunToEndAsync(folder);
 
@@ -189,7 +198,8 @@ public sealed class JobsApiTests : IDisposable
     public async Task Should_Return409_When_PostingAJobThatIsNotReady()
     {
         var folder = _factory.Dir.CopySampleJob();
-        File.WriteAllText(Path.Combine(folder, "requirement.txt"), "nothing useful here");
+        File.WriteAllText(Path.Combine(folder, "requirement.txt"), UselessRequirement);
+        _factory.Hermes.Respond(r => r.UserContent == UselessRequirement ? EmptySpecJson : null);
         var view = await _client.RunToEndAsync(folder);
         Assert.Equal(JobStatus.Failed, view.Status);
 
@@ -247,7 +257,8 @@ public sealed class JobsApiTests : IDisposable
     {
         var ready = _factory.Dir.CopySampleJob("2026-08-ready");
         var failed = _factory.Dir.CopySampleJob("2026-08-failed");
-        File.WriteAllText(Path.Combine(failed, "requirement.txt"), "nothing useful here");
+        File.WriteAllText(Path.Combine(failed, "requirement.txt"), UselessRequirement);
+        _factory.Hermes.Respond(r => r.UserContent == UselessRequirement ? EmptySpecJson : null);
         await _client.RunToEndAsync(ready);
         await _client.RunToEndAsync(failed);
 

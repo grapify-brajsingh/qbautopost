@@ -41,8 +41,13 @@ builder.Services.AddSingleton(sp =>
     };
 });
 // HermesOptions.Timeout bounds each call; the HttpClient's own 100 s default would cut the 120 s budget short.
-builder.Services.AddHttpClient<IHermesClient, HermesClient>(http => http.Timeout = Timeout.InfiniteTimeSpan);
-builder.Services.AddSingleton<ISpecReader, RegexSpecReader>(); // TODO(T-202): Hermes T1 with regex fallback
+// A singleton reader holds its HermesClient, so the handler is never rotated (Hermes is a fixed loopback address).
+builder.Services.AddHttpClient<IHermesClient, HermesClient>(http => http.Timeout = Timeout.InfiniteTimeSpan)
+    .SetHandlerLifetime(Timeout.InfiniteTimeSpan);
+// Prompts load before the host starts: a missing required prompt stops startup (spec §9).
+builder.Services.AddSingleton(PromptLibrary.Load(
+    Path.Combine(AppContext.BaseDirectory, PromptLibrary.DefaultFolder), HermesTask.Spec));
+builder.Services.AddSingleton<ISpecReader, HermesSpecReader>();
 builder.Services.AddSingleton<IQbGateway, UnconfiguredQbGateway>(); // TODO(T-601): COM gateway / fake switch
 builder.Services.AddSingleton(sp =>
 {
