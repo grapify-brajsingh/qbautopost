@@ -47,7 +47,7 @@ builder.Services.AddHttpClient<IHermesClient, HermesClient>(http => http.Timeout
     .SetHandlerLifetime(Timeout.InfiniteTimeSpan);
 // Prompts load before the host starts: a missing required prompt stops startup (spec §9).
 builder.Services.AddSingleton(PromptLibrary.Load(
-    Path.Combine(AppContext.BaseDirectory, PromptLibrary.DefaultFolder), HermesTask.Spec));
+    Path.Combine(AppContext.BaseDirectory, PromptLibrary.DefaultFolder), HermesTask.Spec, HermesTask.Statement));
 builder.Services.AddSingleton<ISpecReader, HermesSpecReader>();
 builder.Services.AddSingleton<IOcr>(sp =>
 {

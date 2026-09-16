@@ -13,8 +13,23 @@ public sealed record StatementParseResult
     public string? Layout { get; init; }
 
     public IReadOnlyList<StatementLine> Rows { get; init; } = [];
+
+    /// <summary>Summary figures printed on the statement (T2 only; null for CSV/XLSX). Checked by G1 (spec FR-4).</summary>
+    public StatementTotals? Totals { get; init; }
+
     public string? HoldReason { get; init; }
     public IReadOnlyList<string> Errors { get; init; } = [];
 
     public bool IsHeld => HoldReason is not null;
 }
+
+/// <summary>
+/// Statement-level figures read by Hermes T2 (spec §9.2). Each is null when the statement does not print it;
+/// the model reports them, code never derives them.
+/// </summary>
+public sealed record StatementTotals(
+    DateOnly? PeriodStart,
+    DateOnly? PeriodEnd,
+    decimal? OpeningBalance,
+    decimal? ClosingBalance,
+    int? TransactionCount);

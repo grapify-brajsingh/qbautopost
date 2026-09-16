@@ -1,0 +1,31 @@
+SYNTHETIC TEST STATEMENT (same transactions as samples/jobs/2026-08-tropicana/statements/chase-checking-4521.csv)
+CHASE TOTAL CHECKING
+TROPICANA PROPERTIES LLC
+Account Number: 000000000004521
+August 01, 2026 through August 31, 2026
+
+CHECKING SUMMARY
+Beginning Balance $13,195.87
+Deposits and Additions 2 $2,650.00
+Checks Paid 1 -$420.00
+Electronic Withdrawals 4 -$5,195.42
+Ending Balance $10,230.45
+Transactions 7
+
+TRANSACTION DETAIL
+DATE DESCRIPTION AMOUNT BALANCE
+Beginning Balance $13,195.87
+08/02 Online Transfer To Chase Card 7788 -1,500.00 11,695.87
+08/05 Check # 1043 -420.00 11,275.87
+08/08 Deposit Palm Court Rentals 2,400.00 13,675.87
+08/12 ACH Debit FPL Electric Utility -311.40 13,364.47
+Page 1 of 2
+<<PAGE>>
+TROPICANA PROPERTIES LLC Account Number: 000000000004521
+TRANSACTION DETAIL (continued)
+DATE DESCRIPTION AMOUNT BALANCE
+08/15 ACH Debit Unknown Plumber Svc -3,199.70 10,164.77
+08/22 Home Depot #4521 Noida -184.32 9,980.45
+08/28 Deposit Sunrise Property Mgmt 250.00 10,230.45
+Ending Balance $10,230.45
+Page 2 of 2

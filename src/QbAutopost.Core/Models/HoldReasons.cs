@@ -37,6 +37,10 @@ public static class HoldReasons
     // SPEC-GAP T-301: a statement file the extractor cannot open (corrupt or encrypted workbook) is held whole.
     public const string UnreadableStatement = "unreadable-statement";
 
+    // SPEC-GAP T-303: T2 holds (spec §9 says "hold" on a Hermes failure but names no code).
+    public const string HermesFailed = "hermes-failed";
+    public const string ExtractionConflict = "extraction-conflict";
+
     // TODO(T-502): replaced by Hermes T4 tiers 3–4; until then a line without a rule/history account is held.
     public const string NoAccountRule = "no-account-rule";
 }
