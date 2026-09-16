@@ -87,7 +87,7 @@ public sealed class JobStore : IJobStore
             return;
         }
 
-        var index = JsonSerializer.Deserialize<JobIndex>(File.ReadAllText(_indexPath), JsonOptions.Default) ?? new JobIndex();
+        var index = JsonSerializer.Deserialize<JobIndex>(AtomicFile.ReadAllText(_indexPath), JsonOptions.Default) ?? new JobIndex();
         foreach (var entry in index.Jobs)
         {
             var statusFile = JobRecord.StatusFileOf(entry.Folder);
@@ -99,7 +99,7 @@ public sealed class JobStore : IJobStore
 
             try
             {
-                var record = JsonSerializer.Deserialize<JobRecord>(File.ReadAllText(statusFile), JsonOptions.Default);
+                var record = JsonSerializer.Deserialize<JobRecord>(AtomicFile.ReadAllText(statusFile), JsonOptions.Default);
                 if (record is not null)
                 {
                     // The index decides where the job lives, even if the folder was moved after status.json was written.

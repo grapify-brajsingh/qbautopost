@@ -59,10 +59,11 @@ public static class JobOutputWriter
 
         try
         {
-            return JsonSerializer.Deserialize<ResultDocument>(File.ReadAllText(path), JsonOptions.Default);
+            return JsonSerializer.Deserialize<ResultDocument>(AtomicFile.ReadAllText(path), JsonOptions.Default);
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
+            // Unreadable or still locked after retries: the view falls back to the status record alone.
             return null;
         }
     }

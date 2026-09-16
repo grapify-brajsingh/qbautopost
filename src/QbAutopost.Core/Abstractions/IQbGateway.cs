@@ -11,3 +11,9 @@ public interface IQbGateway
 
     Task<string> CurrentCompanyFileAsync(CancellationToken ct);
 }
+
+/// <summary>
+/// Thrown by a gateway when it could not reach QuickBooks <b>before</b> sending anything (no session, not configured).
+/// Any other exception from <see cref="IQbGateway.ProcessAsync"/> means the request may have been applied.
+/// </summary>
+public sealed class QuickBooksUnavailableException(string message, Exception? inner = null) : Exception(message, inner);

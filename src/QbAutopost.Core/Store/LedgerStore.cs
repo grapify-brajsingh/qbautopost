@@ -15,7 +15,7 @@ public sealed class LedgerStore(string filePath)
             return Ledger.Empty;
         }
 
-        return JsonSerializer.Deserialize<Ledger>(File.ReadAllText(FilePath), JsonOptions.Default)
+        return JsonSerializer.Deserialize<Ledger>(AtomicFile.ReadAllText(FilePath), JsonOptions.Default)
             ?? throw new InvalidDataException($"Ledger file '{FilePath}' is empty or null.");
     }
 

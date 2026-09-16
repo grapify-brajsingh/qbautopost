@@ -16,7 +16,7 @@ Status legend: `todo` · `doing` · `done` · `blocked` · `ready-for-human`
 | M | Name | Tasks | Done | Status |
 |---|---|---|---|---|
 | M0 | Bootstrap | 5 | 5 | done (Windows; Linux run pending) |
-| M1 | API host, lifecycle, CSV dry run | 7 | 0 | todo |
+| M1 | API host, lifecycle, CSV dry run | 7 | 7 | done (Windows; Linux run pending) |
 | M2 | Hermes client, T1, G2 | 5 | 0 | todo |
 | M3 | XLSX, PDF, T2, G1 | 5 | 0 | todo |
 | M4 | Invoices T3 + matcher | 4 | 0 | todo |
@@ -41,11 +41,11 @@ Status legend: `todo` · `doing` · `done` · `blocked` · `ready-for-human`
 |---|---|---|---|---|---|---|
 | T-101 | FolderReader + folder validation F1–F5, JobInput | §5 | `src/QbAutopost.Core/Jobs/{FolderReader,JobInput,InvalidJobFolderException}.cs`, `HoldReasons.SubfolderIgnored`; `tests/QbAutopost.Core.Tests/Jobs/FolderReaderTests.cs`, `TestSupport/TempJobFolder.cs` | `FolderReaderTests` (22); `dotnet test` → Core 113, Api 1 | done | F1 validate, F2 unreadable, F4 top-level only / `output/` never listed, F5 file-name last-four (content fallback stays in the parsers). F3 is checked by the endpoint (T-104). Job-id charset and subfolder reporting are SPEC-GAPs (Q-12, Q-13) |
 | T-102 | JobRecord, JobStore (memory + status.json), JobQueue (Channel), JobWorker | §6 | `src/QbAutopost.Core/Jobs/{JobStatus,JobRecord,IJobStore}.cs`, `Core/Abstractions/IClock.cs`, `Core/Text/JsonOptions.cs` (camelCase enums); `src/QbAutopost.Api/Configuration/AppSettings.cs`, `Api/Jobs/{JobStore,JobQueue,IJobProcessor,JobWorker}.cs`; `tests/QbAutopost.Api.Tests/{Jobs/JobStoreTests,Jobs/JobWorkerTests,TestSupport/*}.cs`, `Core.Tests/Jobs/JobRecordTests.cs`, `Core.Tests/Text/JsonOptionsTests.cs` | `JobStoreTests` (7), `JobWorkerTests` (4), `JobRecordTests`, `JsonOptionsTests`; `dotnet test` → Core 139, Api 12 | done | One job at a time (single reader, asserted). State machine enforced by `JobRecord.MoveTo`. status.json is written atomically, before memory. Worker fail-safe: if the processor crashes, the job goes to `failed` (from analysing) or `partial (interrupted …)` (from posting); cancellation at shutdown leaves the status for startup recovery. Job index file is a SPEC-GAP (Q-14). Worker DI registration is in T-104 |
-| T-103 | Pipeline orchestrator (RunAnalysisAsync / RunPostAsync) with RegexSpecParser stand-in | §8 | | Api tests | todo | |
-| T-104 | Endpoints POST /jobs, GET /jobs/{id}, GET /jobs, POST /jobs/{id}/post; problem details; API key; Kestrel bind | §6 | | Api tests | todo | |
-| T-105 | Writers: analysis.json, result.json, status.json, paste-ready CSVs | §10 | | golden compare | todo | |
-| T-106 | Startup recovery of interrupted jobs | §6 | | Api test | todo | |
-| T-107 | Api tests: happy path to ready; 400/404/409; auth; recovery | §15 | | `dotnet test` | todo | FakeHermesClient, FakeQbGateway |
+| T-103 | Pipeline orchestrator (RunAnalysisAsync / RunPostAsync) with RegexSpecParser stand-in | §8 | `src/QbAutopost.Core/Pipeline/{JobPipeline,PipelineOptions,ISpecReader,AnalysisResult}.cs`, `Core/Gates/{SpecGate,PostVerifier}.cs`, `Core/Abstractions/{IQbGateway,IHermesClient}.cs`, `Core/Store/QbListsStore.cs`, `HoldReasons` (pipeline codes); `src/QbAutopost.Api/Jobs/JobRunner.cs`; tests `Core.Tests/Pipeline/JobPipelineTests.cs`, `Core.Tests/Gates/{SpecGateTests,PostVerifierTests}.cs` | `JobPipelineTests` (17), `SpecGateTests` (10), `PostVerifierTests` (7); Api `PostingApiTests` | done | Analysis = FR-1…FR-9 (CSV only; xlsx/pdf held `extractor-not-available` until M3) + G1 per statement + **G2 (logic landed here, see T-203)** + ledger G4 (`already-posted`). Post = re-analysis → one qbXML call → G5 → ledger → posted/partial. Gateway exception → all lines held, batch recorded with 0 posted (F3 then refuses a re-run: check QuickBooks first); `QuickBooksUnavailableException` (nothing sent) → no ledger record. M6 adds live G4, retry, busy timeout, backup guard and the COM gateway. SPEC-GAPs Q-15…Q-18 |
+| T-104 | Endpoints POST /jobs, GET /jobs/{id}, GET /jobs, POST /jobs/{id}/post; problem details; API key; Kestrel bind | §6 | `src/QbAutopost.Api/{Program.cs,appsettings.json,appsettings.Development.json}`, `Api/Endpoints/{JobEndpoints,JobView}.cs`, `Api/Jobs/JobAdmission.cs`, `Api/Security/ApiKeyMiddleware.cs`, `Api/QuickBooks/UnconfiguredQbGateway.cs`, `Api/Configuration/AppSettings.cs` (`ResolvePaths`); `.gitignore` (`src/QbAutopost.Api/data/`) | `JobsApiTests` (19), `AuthTests` (8); manual run below | done | RFC 7807 for 400/401/404/409 (400 lists `errors[]`). Key compared via SHA-256 + fixed-time compare; empty key → host refuses to start; `change-me` refused outside Development (Q-19). Kestrel binds `Api:Bind`. Env prefix `QBAUTOPOST__`. Admission (create/post) is serialised; an active job → 409, ledger job → 409 unless `force`. `POST /jobs/{id}/post` moves the job to `posting` (with batch id) before queueing. `GET /jobs?status=` implemented here (T-704). Default gateway is `UnconfiguredQbGateway` until T-601. Manual (Windows, Development): sample → 202 → `ready` with 8/2/1 and totals 4942.64; post → `partial` "nothing posted: QuickBooks unavailable"; second post → 409; no key → 401; log has no secrets |
+| T-105 | Writers: analysis.json, result.json, status.json, paste-ready CSVs | §10 | `src/QbAutopost.Core/Output/{JobOutputWriter,OutputDocuments}.cs`, `Core/Store/AtomicFile.cs` (shared read + retry); tests `Core.Tests/Output/{ResultDocumentTests,AnalysisGoldenTests}.cs`, `Core.Tests/Store/AtomicFileTests.cs`, `tests/fixtures/output/sample-analysis.golden.json` | `AnalysisGoldenTests` (golden reviewed by hand against the FR-6 table), `ResultDocumentTests` (4), `AtomicFileTests` (3) | done | Writes spec.json, statements/&lt;file&gt;.rows.json, analysis.json, request.qbxml + 3 sheets (also in dry run), response.qbxml, result.json. result.json adds `company`, `error`, `counts.posted`, `totals.posted` to the spec shape (Q-20). Found while testing: on Windows a polling `GET /jobs/{id}` and the atomic replace block each other (500 / failed rename) → readers share delete access and both sides retry with backoff (≈1.5 s) |
+| T-106 | Startup recovery of interrupted jobs | §6 | `src/QbAutopost.Api/Jobs/StartupRecovery.cs`, `Program.cs` | `RecoveryTests` (6) | done | Runs after `Build()`, before the worker starts. analysing → `failed (interrupted)`; posting → `partial (interrupted — run duplicates before re-post)`; queued → `failed` (Q-14). result.json keeps the last completed run; status.json is the authority |
+| T-107 | Api tests: happy path to ready; 400/404/409; auth; recovery | §15 | `tests/QbAutopost.Api.Tests/TestSupport/{ApiFactory,FakeQbGateway,FakeHermesClient,TempDir,Fixtures,FixedClock}.cs`, `Api/{JobsApiTests,PostingApiTests,AuthTests,RecoveryTests}.cs`; removed `HostSmokeTests.cs` (covered by `AuthTests`) | `dotnet test` → Core 181, Api 54, 8 consecutive green runs | done | Every data file lives in a per-test temp folder; no real QuickBooks/Hermes. `FakeQbGateway` records requests, answers with sequential `FAKE-n` TxnIDs and echoed amounts, can refuse line N, throw, or hang. `FakeHermesClient` serves `tests/fixtures/hermes/*.json` (not called until M2). Posting covered: full post → partial (2 held), ledger entries, forced re-run skips posted lines and uses batch #2, dryRun=false, refused line, unavailable vs failed gateway, double post → 409 |
 
 ## M2 — Hermes client, T1, G2
 
@@ -53,7 +53,7 @@ Status legend: `todo` · `doing` · `done` · `blocked` · `ready-for-human`
 |---|---|---|---|---|---|---|
 | T-201 | HermesClient: OpenAI-compatible call, auth, timeout, fence strip, retry-with-error, audit copies | §9 | | Core tests (HttpMessageHandler fake) | todo | |
 | T-202 | Prompt spec.md + T1 JobSpec + validation + regex fallback | §9.1, FR-2 | | Core tests | todo | |
-| T-203 | Gate G2 → failed with explanation | FR-2 | | Api test | todo | |
+| T-203 | Gate G2 → failed with explanation | FR-2 | | Api test | todo | Gate logic and the `failed` transition already exist (T-103: `SpecGate`, `SpecGateTests`, `JobsApiTests`); M2 wires it to the Hermes T1 path |
 | T-204 | GET /health/hermes | FR-16 | | Api test | todo | |
 | T-205 | Tests: fixtures, retry, fallback, G2 negatives | §15 | | `dotnet test` | todo | |
 
@@ -93,7 +93,7 @@ Status legend: `todo` · `doing` · `done` · `blocked` · `ready-for-human`
 | T-602 | POST /qb/sync-lists + missingInRules | FR-15 | | Api test | todo | |
 | T-603 | G4 live duplicate query + query audit files | FR-8 | | Api test | todo | |
 | T-604 | Posting: retry once, backup-age guard, posting transition, response.qbxml | FR-11 | | Api test | todo | |
-| T-605 | G5 verify + ledger (atomic) + result.json + posted/partial | FR-12, §13 | | Api test | todo | |
+| T-605 | G5 verify + ledger (atomic) + result.json + posted/partial | FR-12, §13 | | Api test | todo | Basic version exists since T-103 (`PostVerifier`, `JobPipeline.RecordInLedger`, `PostingApiTests`); review against the real SDK response in T-609 |
 | T-606 | POST /batches/{id}/undo | FR-13 | | Api test | todo | |
 | T-607 | GET /health/quickbooks | FR-16 | | Api test | todo | |
 | T-608 | Api tests: full post, refused line → partial, hang → busy, undo, sync-lists | §15 | | `dotnet test` | todo | |
@@ -114,7 +114,7 @@ T-609 checklist (human):
 | T-701 | POST /rules/alias, /rules/account; validation vs qb-lists; hot reload | FR-14 | | Api test | todo | |
 | T-702 | Serilog console + rolling file; correlation id; secret scrubbing | §14 | | manual + test | todo | |
 | T-703 | Backup-age guard config + failed(backup-too-old) | FR-11 | | Api test | todo | |
-| T-704 | GET /jobs?status= | §6 | | Api test | todo | |
+| T-704 | GET /jobs?status= | §6 | | Api test | todo | Implemented in T-104 (`JobsApiTests.Should_ListJobsAndFilterByStatus_When_Asked`); confirm and close in M7 |
 | T-705 | docs/runbook.md | plan M7 | | review | todo | |
 
 ## M8 — Deploy
@@ -145,6 +145,12 @@ T-609 checklist (human):
 | Q-12 | T-101 | Which characters may a job folder name (= job id) contain? | Only letters, digits, `.`, `_`, `-`; anything else → 400. The id appears in URLs and in batch ids `<jobId>#<attempt>` | |
 | Q-13 | T-101 | Subfolders inside `statements\` / `invoices\`? | Not read; each is listed in `result.json.unreadable[]` with reason `subfolder-ignored`. `.jpeg`/`.tif` invoices are `unsupported-extension` (spec lists only pdf/png/jpg) | |
 | Q-14 | T-102 | Where are the "known job folders" (spec §6 `GET /jobs`, startup recovery) recorded? | New setting `Paths.JobIndex` (default `jobs.json`) maps job id → folder and is rewritten atomically when a job is first saved. A job found `queued` at startup is set `failed (interrupted)`, not re-queued, because it might be a non-dry run | |
+| Q-15 | T-103 | Must the company named in `requirement.txt` match `Company.Name`? | Yes: a different name (compared ignoring case and punctuation) fails G2, because the app always posts to the configured company file. The `Company` placeholder or no name → the configured name is used. An empty `Company.Name` fails every job | |
+| Q-16 | T-103 | Statement-level hold codes the spec does not name | `reconcile-failed` (G1), `extractor-not-available` (xlsx/pdf until M3), `kind-mismatch` (layout says bank but the requirement lists the last-four only as a card, or the reverse) | |
+| Q-17 | T-103 | Line-level: identical lines in one job (same fingerprint → same requestID), and kinds the requirement did not ask for | Every copy of an identical line is held `duplicate-line` (never post one of them); a postable line whose kind is not in the spec's kinds is held `kind-not-requested`. Precedence: skip-pattern → duplicate-line → already-posted → kind-not-requested | |
+| Q-18 | T-103 | What happens when the QuickBooks call itself fails? | Any exception → job `partial`, every sent line held `quickbooks-no-response`, and the batch is recorded in the ledger with 0 posted, so `POST /jobs` refuses a re-run until someone checks QuickBooks and uses `force`. `QuickBooksUnavailableException` (thrown only before anything is sent) → `partial` "nothing posted", no ledger record. A response line with status 0 but a different echoed amount is held `amount-mismatch`, and its note names the TxnID to delete | |
+| Q-19 | T-104 | API key defaults | An empty `Api:ApiKey` stops the host at startup; the shipped `change-me` is accepted only in Development. `appsettings.Development.json` uses `dev` (plan §4 curl) and local `data/` paths | |
+| Q-20 | T-105 | result.json fields beyond spec §10 | Adds `company`, `error`, `counts.posted`, `totals.posted`; held items carry `file`, `lineNo`, `kind`, `note`, `candidates`. `unmatchedInvoices` stays `[]` until M4. The sample's `invoices/home-depot-88213.txt` stand-in is reported `unsupported-extension` (invoices accept pdf/png/jpg only) | |
 
 ## Decisions
 
@@ -157,6 +163,7 @@ T-609 checklist (human):
 | 2026-09-16 | ADRs live in `docs/adr/` (0001–0007) | architecture decisions recorded with their alternatives |
 | 2026-09-16 | `global.json` pins SDK 8.0.x (`rollForward: latestFeature`) | SDK 10 is installed on the dev box and would otherwise be used |
 | 2026-09-16 | JSON enums are written camelCase (`"ready"`, `"post"`, `"ccCharge"`) and read case-insensitively | spec §6/§10 show lowercase values; `rules.json` `"Kind": "Bank"` still loads; `ledger.json` `kind` becomes `"check"` (no real ledger exists yet) |
+| 2026-09-16 | M1 already posts through `IQbGateway` (G5 + ledger), with an `UnconfiguredQbGateway` that sends nothing until M6 | T-103 names `RunPostAsync`; the state machine needs a real posting path to test; M6 tasks keep the COM, live-G4, retry, busy and backup work |
 | 2026-09-16 | Repo root is `D:\qb_post` (plan calls it `qb-autopost/`); `CLAUDE.md` copied to the root, `docs/CLAUDE.md` kept | plan T-005; copies must be kept in sync until one is removed |
 
 ## Blockers
@@ -170,3 +177,4 @@ T-609 checklist (human):
 | Date | Session | Tasks touched | Result |
 |---|---|---|---|
 | 2026-09-16 | 1 | ADRs, T-001…T-005 | M0 done on Windows: build has 0 warnings; 92 tests pass (Core 91, Api 1); scripts run. Linux test run still open. Found and fixed a `.gitignore` rule that hid `Output/` sources |
+| 2026-09-16 | 2 | T-101…T-107 | M1 done on Windows: 235 tests (Core 181, Api 54), 8 consecutive green runs; sample job reaches `ready` via HTTP in tests and by hand. No owner answers to Q-1…Q-11 yet, so the conservative choices stand. New gaps Q-12…Q-20. Found and fixed a Windows file-sharing race between polling readers and atomic replace. Linux test run still open |

@@ -13,6 +13,8 @@ TestResults/
 samples/jobs/*/output/
 tests/fixtures/jobs/*/output/
 /logs/
+# Development data (appsettings.Development.json: ledger, job index, qb-lists, logs)
+src/QbAutopost.Api/data/
 *.tmp
 .env
 appsettings.*.local.json

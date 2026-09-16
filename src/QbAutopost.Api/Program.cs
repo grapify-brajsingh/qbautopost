@@ -1,8 +1,77 @@
-// Host skeleton (T-001). Endpoints, JobQueue/JobWorker, config and API-key auth arrive in M1 (T-102..T-104).
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.Extensions.Options;
+using QbAutopost.Api.Configuration;
+using QbAutopost.Api.Endpoints;
+using QbAutopost.Api.Jobs;
+using QbAutopost.Api.QuickBooks;
+using QbAutopost.Api.Security;
+using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Jobs;
+using QbAutopost.Core.Pipeline;
+
 var builder = WebApplication.CreateBuilder(args);
+
+// Secrets may come from QBAUTOPOST__Section__Key environment variables (spec §12).
+builder.Configuration.AddEnvironmentVariables(prefix: "QBAUTOPOST__");
+builder.WebHost.UseUrls(builder.Configuration["Api:Bind"] ?? new ApiSettings().Bind);
+
+var contentRoot = builder.Environment.ContentRootPath;
+builder.Services.AddOptions<AppSettings>()
+    .Bind(builder.Configuration)
+    .PostConfigure(s => s.ResolvePaths(contentRoot));
+
+builder.Services.AddProblemDetails();
+builder.Services.ConfigureHttpJsonOptions(o =>
+    o.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
+
+builder.Services.AddSingleton<IClock, SystemClock>();
+builder.Services.AddSingleton<IJobStore, JobStore>();
+builder.Services.AddSingleton<JobQueue>();
+builder.Services.AddSingleton<ISpecReader, RegexSpecReader>(); // TODO(T-202): Hermes T1 with regex fallback
+builder.Services.AddSingleton<IQbGateway, UnconfiguredQbGateway>(); // TODO(T-601): COM gateway / fake switch
+builder.Services.AddSingleton(sp =>
+{
+    var s = sp.GetRequiredService<IOptions<AppSettings>>().Value;
+    return new PipelineOptions
+    {
+        CompanyName = s.Company.Name,
+        RulesFile = s.Company.RulesFile,
+        LedgerFile = s.Paths.Ledger,
+        QbListsFile = s.Paths.QbLists,
+        QbXmlVersion = s.QuickBooks.QbXmlVersion,
+    };
+});
+builder.Services.AddSingleton<JobPipeline>();
+builder.Services.AddSingleton<IJobProcessor, JobRunner>();
+builder.Services.AddSingleton<JobAdmission>();
+builder.Services.AddSingleton<StartupRecovery>();
+builder.Services.AddHostedService<JobWorker>();
+
 var app = builder.Build();
 
+RequireApiKey(app);
+
+// Spec §6: before the worker starts (hosted services start in app.Run), no job may remain active.
+app.Services.GetRequiredService<StartupRecovery>().Run();
+
+app.UseExceptionHandler();
+app.UseStatusCodePages();
+app.UseMiddleware<ApiKeyMiddleware>();
+app.MapJobEndpoints();
+
 app.Run();
+
+// Fail closed: without a real key every route except /health would be open.
+static void RequireApiKey(WebApplication app)
+{
+    var key = app.Services.GetRequiredService<IOptions<AppSettings>>().Value.Api.ApiKey;
+    if (string.IsNullOrWhiteSpace(key) || (key == "change-me" && !app.Environment.IsDevelopment()))
+    {
+        throw new InvalidOperationException(
+            "Api:ApiKey is not set. Configure it in appsettings or the QBAUTOPOST__Api__ApiKey environment variable.");
+    }
+}
 
 /// <summary>Entry point; public so <c>WebApplicationFactory&lt;Program&gt;</c> can host it in tests.</summary>
 public partial class Program

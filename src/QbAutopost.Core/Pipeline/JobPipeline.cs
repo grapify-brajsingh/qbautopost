@@ -113,6 +113,17 @@ public sealed class JobPipeline(PipelineOptions options, ISpecReader specReader,
             JobOutputWriter.WriteResponse(analysis.Input.OutputDir, response);
             verification = PostVerifier.Verify(toPost, QbXmlParser.ParseAddResponse(response));
         }
+        catch (QuickBooksUnavailableException ex)
+        {
+            // Nothing reached QuickBooks: no ledger record, so the job can simply be re-run.
+            return new PostOutcome
+            {
+                Status = JobStatus.Partial,
+                Error = $"nothing posted: QuickBooks unavailable ({ex.Message})",
+                Analysis = analysis,
+                Rejected = toPost.Select(t => t with { Decision = Decision.Hold, Reason = HoldReasons.QuickBooksUnavailable, Note = ex.Message }).ToList(),
+            };
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // The request may or may not have been applied: hold every line and record the batch so a re-run is refused (F3).

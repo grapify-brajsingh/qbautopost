@@ -31,6 +31,7 @@ public static class HoldReasons
     public const string DuplicateLine = "duplicate-line";
     public const string QuickBooksRejected = "quickbooks-rejected";
     public const string QuickBooksNoResponse = "quickbooks-no-response";
+    public const string QuickBooksUnavailable = "quickbooks-unavailable";
     public const string AmountMismatch = "amount-mismatch";
 
     // TODO(T-502): replaced by Hermes T4 tiers 3–4; until then a line without a rule/history account is held.

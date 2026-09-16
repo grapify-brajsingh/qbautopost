@@ -9,7 +9,7 @@ public sealed class QbListsStore(string filePath)
 {
     public QbLists Load() =>
         File.Exists(filePath)
-            ? JsonSerializer.Deserialize<QbLists>(File.ReadAllText(filePath), JsonOptions.Default) ?? QbLists.Empty
+            ? JsonSerializer.Deserialize<QbLists>(AtomicFile.ReadAllText(filePath), JsonOptions.Default) ?? QbLists.Empty
             : QbLists.Empty;
 
     public void Save(QbLists lists) => AtomicFile.WriteJson(filePath, lists);

@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Starts the API host. Configuration (bind address, API key, company file) arrives in M1 (T-104);
+# Starts the API host (bind address, API key, company file and paths come from appsettings*.json);
 # secrets come from appsettings or QBAUTOPOST__* environment variables, never from this script.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot

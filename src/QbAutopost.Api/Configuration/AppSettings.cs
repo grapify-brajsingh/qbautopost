@@ -13,6 +13,13 @@ public sealed class AppSettings
     public HermesSettings Hermes { get; set; } = new();
     public OcrSettings Ocr { get; set; } = new();
     public PathsSettings Paths { get; set; } = new();
+
+    /// <summary>Makes every configured file path absolute, relative ones against <paramref name="root"/>.</summary>
+    public void ResolvePaths(string root)
+    {
+        Company.RulesFile = Path.GetFullPath(Company.RulesFile, root);
+        Paths.ResolveAgainst(root);
+    }
 }
 
 public sealed class ApiSettings
