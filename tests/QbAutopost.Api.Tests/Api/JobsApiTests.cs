@@ -277,4 +277,34 @@ public sealed class JobsApiTests : IDisposable
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
+
+    [Fact]
+    public async Task Should_FilterIgnoringCase_When_StatusIsUpperCase()
+    {
+        await _client.RunToEndAsync(_factory.Dir.CopySampleJob());
+
+        var ready = await _client.GetFromJsonAsync<List<JobSummary>>("/jobs?status=READY", ApiFactory.Json);
+
+        Assert.Equal("2026-08-tropicana", Assert.Single(ready!).JobId);
+    }
+
+    [Fact]
+    public async Task Should_ReturnEmptyList_When_NoJobHasTheStatus()
+    {
+        await _client.RunToEndAsync(_factory.Dir.CopySampleJob());
+
+        var posted = await _client.GetFromJsonAsync<List<JobSummary>>("/jobs?status=posted", ApiFactory.Json);
+
+        Assert.Empty(posted!);
+    }
+
+    [Fact]
+    public async Task Should_Return401_When_ListingWithoutApiKey()
+    {
+        using var anonymous = _factory.CreateClient();
+
+        using var response = await anonymous.GetAsync("/jobs");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
 }

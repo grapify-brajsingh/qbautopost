@@ -150,4 +150,18 @@ public sealed class UndoApiTests : IDisposable
         Assert.Equal((8, 1), (ready.Counts.ToPost, ready.Counts.Skipped));
         Assert.DoesNotContain(ready.Skipped, s => s.Reason == HoldReasons.AlreadyPosted);
     }
+
+    [Fact]
+    public async Task Should_ListJobUnderUndone_When_BatchIsUndone()
+    {
+        await Posted();
+        await UndoOk();
+
+        var undone = await _client.GetFromJsonAsync<List<Endpoints.JobSummary>>("/jobs?status=undone", ApiFactory.Json);
+        var partial = await _client.GetFromJsonAsync<List<Endpoints.JobSummary>>("/jobs?status=partial", ApiFactory.Json);
+
+        var job = Assert.Single(undone!);
+        Assert.Equal(("2026-08-tropicana", "2026-08-tropicana#1"), (job.JobId, job.BatchId));
+        Assert.Empty(partial!);
+    }
 }

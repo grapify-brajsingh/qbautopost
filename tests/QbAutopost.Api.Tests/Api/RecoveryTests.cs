@@ -1,3 +1,5 @@
+using System.Net.Http.Json;
+using QbAutopost.Api.Endpoints;
 using QbAutopost.Api.Jobs;
 using QbAutopost.Api.Tests.TestSupport;
 using QbAutopost.Core.Jobs;
@@ -110,5 +112,32 @@ public sealed class RecoveryTests : IDisposable
 
         Assert.Equal(JobStatus.Ready, view.Status);
         Assert.Null(view.Error);
+    }
+
+    [Fact]
+    public async Task Should_ListKnownJobsFromStatusFiles_When_HostStarts()
+    {
+        SeedJob("2026-08-ready", JobStatus.Ready);
+        SeedJob("2026-08-posted", JobStatus.Posted);
+        using var client = _factory.CreateAuthorizedClient();
+
+        var all = await client.GetFromJsonAsync<List<JobSummary>>("/jobs", ApiFactory.Json);
+        var posted = await client.GetFromJsonAsync<List<JobSummary>>("/jobs?status=posted", ApiFactory.Json);
+
+        Assert.Equal(["2026-08-posted", "2026-08-ready"], all!.Select(j => j.JobId).Order(StringComparer.Ordinal));
+        Assert.Equal("2026-08-posted", Assert.Single(posted!).JobId);
+    }
+
+    [Fact]
+    public async Task Should_ListRecoveredStatus_When_FilteringAfterRestart()
+    {
+        SeedJob("2026-08-posting", JobStatus.Posting);
+        using var client = _factory.CreateAuthorizedClient();
+
+        var partial = await client.GetFromJsonAsync<List<JobSummary>>("/jobs?status=partial", ApiFactory.Json);
+        var posting = await client.GetFromJsonAsync<List<JobSummary>>("/jobs?status=posting", ApiFactory.Json);
+
+        Assert.Equal(JobWorker.InterruptedPosting, Assert.Single(partial!).Error);
+        Assert.Empty(posting!);
     }
 }
