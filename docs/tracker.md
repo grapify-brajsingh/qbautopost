@@ -39,7 +39,7 @@ Status legend: `todo` · `doing` · `done` · `blocked` · `ready-for-human`
 
 | ID | Task | Spec | Files | Verified by | Status | Notes |
 |---|---|---|---|---|---|---|
-| T-101 | FolderReader + folder validation F1–F5, JobInput | §5 | | Core tests | todo | |
+| T-101 | FolderReader + folder validation F1–F5, JobInput | §5 | `src/QbAutopost.Core/Jobs/{FolderReader,JobInput,InvalidJobFolderException}.cs`, `HoldReasons.SubfolderIgnored`; `tests/QbAutopost.Core.Tests/Jobs/FolderReaderTests.cs`, `TestSupport/TempJobFolder.cs` | `FolderReaderTests` (22); `dotnet test` → Core 113, Api 1 | done | F1 validate, F2 unreadable, F4 top-level only / `output/` never listed, F5 file-name last-four (content fallback stays in the parsers). F3 is checked by the endpoint (T-104). Job-id charset and subfolder reporting are SPEC-GAPs (Q-12, Q-13) |
 | T-102 | JobRecord, JobStore (memory + status.json), JobQueue (Channel), JobWorker | §6 | | Api tests | todo | one job at a time |
 | T-103 | Pipeline orchestrator (RunAnalysisAsync / RunPostAsync) with RegexSpecParser stand-in | §8 | | Api tests | todo | |
 | T-104 | Endpoints POST /jobs, GET /jobs/{id}, GET /jobs, POST /jobs/{id}/post; problem details; API key; Kestrel bind | §6 | | Api tests | todo | |
@@ -142,6 +142,8 @@ T-609 checklist (human):
 | Q-9 | T-002 | File name with several 4-digit groups (e.g. `2026-chase-4521.csv`)? | No last-four taken from the name; fall back to the content, else hold `unknown-account` | |
 | Q-10 | T-002 | One unparseable row in a CSV: hold the row or the whole statement? | Whole statement held (`unparsable-rows`), because a missing row makes the statement incomplete | |
 | Q-11 | T-003 | How should `requirement.txt` state real last-four values? | Assumed as 4-digit groups on the account lines ("Bank Account=… 4521"). Please share a real example | |
+| Q-12 | T-101 | Which characters may a job folder name (= job id) contain? | Only letters, digits, `.`, `_`, `-`; anything else → 400. The id appears in URLs and in batch ids `<jobId>#<attempt>` | |
+| Q-13 | T-101 | Subfolders inside `statements\` / `invoices\`? | Not read; each is listed in `result.json.unreadable[]` with reason `subfolder-ignored`. `.jpeg`/`.tif` invoices are `unsupported-extension` (spec lists only pdf/png/jpg) | |
 
 ## Decisions
 

@@ -21,6 +21,7 @@ public static class HoldReasons
     public const string RefNumberTooLong = "refnumber-too-long";
     public const string NoHoldingAccount = "no-holding-account";
     public const string NoDepositIncomeAccount = "no-deposit-income-account";
+    public const string SubfolderIgnored = "subfolder-ignored";
 
     // TODO(T-502): replaced by Hermes T4 tiers 3–4; until then a line without a rule/history account is held.
     public const string NoAccountRule = "no-account-rule";
