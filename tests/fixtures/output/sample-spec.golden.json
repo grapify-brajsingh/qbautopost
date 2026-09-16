@@ -1,0 +1,47 @@
+{
+  "source": "hermes",
+  "company": "Tropicana Properties LLC",
+  "spec": {
+    "company": "Tropicana Properties LLC",
+    "kinds": [
+      "check",
+      "ccCharge",
+      "ccCredit",
+      "deposit"
+    ],
+    "bankLast4": [
+      "4521"
+    ],
+    "cardLast4": [
+      "7788"
+    ],
+    "fieldRules": {
+      "check": {
+        "Bank Account": "From Statement (Last Four Digits) 4521",
+        "Check": "Check Number /ACH",
+        "Payee": "Vendor if ACH – Blank if Check",
+        "Account": "Account Type",
+        "Amount": "take from Bank Statement",
+        "Memo": "written from Bank Statement"
+      },
+      "card": {
+        "Credit Card Charges & Credits": "From Statement (Last Four) 7788",
+        "Payee": "ACH",
+        "Account": "Account Type",
+        "Amount": "take from Credit Card Statement",
+        "Memo": "written from Credit Card Statement"
+      },
+      "deposit": {
+        "Received From": "Customer",
+        "Account From": "Bank 4521",
+        "Memo": "Written from Bank Statement",
+        "Amount": "take from Bank Statement"
+      }
+    }
+  },
+  "gate": {
+    "ok": true,
+    "errors": []
+  },
+  "note": null
+}
