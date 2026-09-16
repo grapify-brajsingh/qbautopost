@@ -1,0 +1,17 @@
+<?xml version="1.0" ?>
+<QBXML>
+  <QBXMLMsgsRs>
+    <HostQueryRs requestID="1" statusCode="0" statusSeverity="Info" statusMessage="Status OK">
+      <HostRet>
+        <ProductName>QuickBooks Desktop Pro 2023</ProductName>
+        <MajorVersion>33</MajorVersion>
+        <MinorVersion>0</MinorVersion>
+        <Country>US</Country>
+        <SupportedQBXMLVersion>13.0</SupportedQBXMLVersion>
+        <SupportedQBXMLVersion>16.0</SupportedQBXMLVersion>
+        <IsAutomaticLogin>false</IsAutomaticLogin>
+        <QBFileMode>SingleUser</QBFileMode>
+      </HostRet>
+    </HostQueryRs>
+  </QBXMLMsgsRs>
+</QBXML>

@@ -1,4 +1,5 @@
 using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Pipeline;
 
 namespace QbAutopost.Api.Endpoints;
 
@@ -9,8 +10,20 @@ public static class HealthEndpoints
     {
         var health = app.MapGroup("/health");
         health.MapGet("/hermes", GetHermes);
-        // TODO(T-607): /health/quickbooks
+        health.MapGet("/quickbooks", GetQuickBooks);
         return app;
+    }
+
+    /// <summary>
+    /// FR-16. Not queued behind jobs (a health check must answer while a job analyses); the gateway still keeps QuickBooks
+    /// calls one at a time, so during a post this waits for it (at most the busy timeout).
+    /// </summary>
+    private static async Task<IResult> GetQuickBooks(QbHealth health, CancellationToken ct)
+    {
+        var result = await health.CheckAsync(ct);
+        return result.Ok
+            ? Results.Ok(result)
+            : Results.Json(result, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
     private static async Task<IResult> GetHermes(IHermesClient hermes, CancellationToken ct)
