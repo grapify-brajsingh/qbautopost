@@ -1,5 +1,7 @@
 using System.Net;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Configuration;
 using QbAutopost.Api.Tests.TestSupport;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Jobs;
@@ -189,5 +191,40 @@ public sealed class PostingSafetyApiTests : IDisposable
         Assert.Equal(JobStatus.Failed, view.Status);
         Assert.StartsWith("backup-too-old: no .QBB backup", view.Error, StringComparison.Ordinal);
         Assert.Empty(_factory.Gateway.Requests);
+    }
+
+    [Fact]
+    public async Task Should_UseConfiguredMaxAge_When_BackupMaxAgeHoursIsSet()
+    {
+        Directory.CreateDirectory(BackupDir);
+        _client.Dispose();
+        _host = _factory.WithWebHostBuilder(b => b.ConfigureAppConfiguration((_, config) =>
+            config.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["QuickBooks:BackupFolder"] = BackupDir,
+                ["QuickBooks:BackupMaxAgeHours"] = "48",
+            })));
+        _client = _host.CreateClient();
+        _client.DefaultRequestHeaders.Add("X-Api-Key", ApiFactory.ApiKey);
+        Backup(hoursOld: 40);
+        await Ready();
+
+        var view = await Post();
+
+        Assert.Equal(JobStatus.Partial, view.Status);
+        Assert.Equal(8, view.Counts.Posted);
+    }
+
+    [Fact]
+    public async Task Should_PersistFailedStatus_When_BackupIsTooOld()
+    {
+        UseBackupFolder();
+        await Ready();
+
+        await Post();
+
+        var status = File.ReadAllText(Path.Combine(Folder, "output", "status.json"));
+        Assert.Contains("\"failed\"", status, StringComparison.Ordinal);
+        Assert.Contains("backup-too-old", status, StringComparison.Ordinal);
     }
 }

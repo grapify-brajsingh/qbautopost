@@ -60,6 +60,33 @@ public sealed class BackupGuardTests : IDisposable
     }
 
     [Fact]
+    public void Should_Allow_When_NewestBackupIsExactlyAtTheLimit()
+    {
+        Backup("Tropicana.QBB", 36);
+
+        Assert.Null(BackupGuard.Check(Backups, 36, Now));
+    }
+
+    [Fact]
+    public void Should_UseTheGivenLimit_When_ItIsNotTheDefault()
+    {
+        Backup("Tropicana.QBB", 40);
+
+        Assert.Null(BackupGuard.Check(Backups, 48, Now));
+        Assert.NotNull(BackupGuard.Check(Backups, 24, Now));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public void Should_RefuseEveryPastBackup_When_LimitIsZeroOrLess(int maxAgeHours)
+    {
+        Backup("Tropicana.QBB", 0.01);
+
+        Assert.StartsWith(BackupGuard.Reason, BackupGuard.Check(Backups, maxAgeHours, Now), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Should_Refuse_When_FolderHasNoBackup()
     {
         Assert.StartsWith("backup-too-old: no .QBB backup", BackupGuard.Check(Backups, 36, Now), StringComparison.Ordinal);
