@@ -26,14 +26,14 @@ public sealed class HermesClient(HttpClient http, HermesOptions options) : IHerm
         var audit = new HermesAudit(request.AuditDir, request.Task, options.ApiKey);
 
         var content = await SendAsync(request, request.UserContent, audit, ct);
-        var answer = JsonReply.TryParse<T>(content, out var errors);
+        var answer = JsonReply.TryParse<T>(content, request.Check, out var errors);
         if (answer is not null)
         {
             return answer;
         }
 
         content = await SendAsync(request, WithErrors(request.UserContent, errors), audit, ct);
-        answer = JsonReply.TryParse<T>(content, out var retryErrors);
+        answer = JsonReply.TryParse<T>(content, request.Check, out var retryErrors);
         return answer ?? throw new HermesValidationException(request.Task, retryErrors);
     }
 

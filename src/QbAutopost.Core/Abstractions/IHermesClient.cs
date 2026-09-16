@@ -18,13 +18,16 @@ public interface IValidatable
 /// <summary>
 /// One Hermes call (spec §9: task, system prompt, user content, schema hint). <paramref name="AuditDir"/> is the job's
 /// <c>output/hermes/</c> folder; every request and response is copied there (FR-17). Null means no audit copy.
+/// <paramref name="Check"/> adds validation that needs the caller's data (e.g. T4's allowed accounts, §9.4); it runs
+/// after <see cref="IValidatable.Validate"/> passes, and its errors count as a failed answer (retried once).
 /// </summary>
 public sealed record HermesRequest(
     HermesTask Task,
     string SystemPrompt,
     string UserContent,
     string? AuditDir = null,
-    string? SchemaHint = null);
+    string? SchemaHint = null,
+    Func<IValidatable, IReadOnlyList<string>>? Check = null);
 
 /// <summary>Hermes (OpenAI-compatible) client (spec §9, ADR-0005); tests use <c>FakeHermesClient</c>.</summary>
 public interface IHermesClient

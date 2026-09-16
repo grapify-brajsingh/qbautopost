@@ -31,6 +31,11 @@ public static class JsonReply
 
     /// <summary>Returns the answer, or null with the reasons it was rejected.</summary>
     public static T? TryParse<T>(string? content, out IReadOnlyList<string> errors)
+        where T : IValidatable =>
+        TryParse<T>(content, null, out errors);
+
+    /// <summary>As above; <paramref name="check"/> (see <see cref="HermesRequest.Check"/>) runs once the answer validates.</summary>
+    public static T? TryParse<T>(string? content, Func<IValidatable, IReadOnlyList<string>>? check, out IReadOnlyList<string> errors)
         where T : IValidatable
     {
         if (string.IsNullOrWhiteSpace(content))
@@ -57,6 +62,11 @@ public static class JsonReply
         }
 
         errors = answer.Validate();
+        if (errors.Count == 0 && check is not null)
+        {
+            errors = check(answer);
+        }
+
         return errors.Count == 0 ? answer : default;
     }
 }

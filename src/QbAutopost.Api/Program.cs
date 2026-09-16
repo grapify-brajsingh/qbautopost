@@ -11,6 +11,7 @@ using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Extract;
 using QbAutopost.Core.Hermes;
 using QbAutopost.Core.Jobs;
+using QbAutopost.Core.Mapping;
 using QbAutopost.Core.Pipeline;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -48,7 +49,7 @@ builder.Services.AddHttpClient<IHermesClient, HermesClient>(http => http.Timeout
     .SetHandlerLifetime(Timeout.InfiniteTimeSpan);
 // Prompts load before the host starts: a missing required prompt stops startup (spec §9).
 builder.Services.AddSingleton(PromptLibrary.Load(
-    Path.Combine(AppContext.BaseDirectory, PromptLibrary.DefaultFolder), HermesTask.Spec, HermesTask.Statement, HermesTask.Invoice));
+    Path.Combine(AppContext.BaseDirectory, PromptLibrary.DefaultFolder), HermesTask.Spec, HermesTask.Statement, HermesTask.Invoice, HermesTask.Account));
 builder.Services.AddSingleton<ISpecReader, HermesSpecReader>();
 builder.Services.AddSingleton<IOcr>(sp =>
 {
@@ -58,6 +59,7 @@ builder.Services.AddSingleton<IOcr>(sp =>
 builder.Services.AddSingleton<StatementLlmExtractor>();
 builder.Services.AddSingleton<StatementReader>();
 builder.Services.AddSingleton<InvoiceExtractor>();
+builder.Services.AddSingleton<AccountChooser>();
 builder.Services.AddSingleton<IQbGateway, UnconfiguredQbGateway>(); // TODO(T-601): COM gateway / fake switch
 builder.Services.AddSingleton(sp =>
 {

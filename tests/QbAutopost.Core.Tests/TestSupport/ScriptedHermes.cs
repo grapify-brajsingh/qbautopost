@@ -17,7 +17,7 @@ internal sealed class ScriptedHermes(Func<HermesRequest, string> script) : IHerm
         where T : IValidatable
     {
         Requests.Add(request);
-        var answer = JsonReply.TryParse<T>(script(request), out var errors);
+        var answer = JsonReply.TryParse<T>(script(request), request.Check, out var errors);
         return answer is not null
             ? Task.FromResult(answer)
             : Task.FromException<T>(new HermesValidationException(request.Task, errors));

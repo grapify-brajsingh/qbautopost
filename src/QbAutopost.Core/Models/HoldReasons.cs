@@ -48,6 +48,9 @@ public static class HoldReasons
     public const string NoMatchingLine = "no-matching-line";
     public const string NoInvoiceDate = "no-invoice-date";
 
+    // SPEC-GAP T-501: T4 has no accounts to choose from (qb-lists.json empty or not synced).
+    public const string NoAccounts = "no-accounts";
+
     // TODO(T-502): replaced by Hermes T4 tiers 3–4; until then a line without a rule/history account is held.
     public const string NoAccountRule = "no-account-rule";
 }

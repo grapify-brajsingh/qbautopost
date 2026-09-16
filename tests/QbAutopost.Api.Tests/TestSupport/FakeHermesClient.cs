@@ -51,6 +51,11 @@ public sealed class FakeHermesClient : IHermesClient
         var answer = JsonSerializer.Deserialize<T>(json, JsonOptions.Default)
                      ?? throw new InvalidDataException($"Answer for {request.Task} is empty.");
         var errors = answer.Validate();
+        if (errors.Count == 0 && request.Check is not null)
+        {
+            errors = request.Check(answer);
+        }
+
         return errors.Count == 0
             ? Task.FromResult(answer)
             : Task.FromException<T>(new HermesValidationException(request.Task, errors));
