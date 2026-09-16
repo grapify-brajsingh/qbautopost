@@ -7,6 +7,7 @@ using QbAutopost.Api.Jobs;
 using QbAutopost.Api.QuickBooks;
 using QbAutopost.Api.Security;
 using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Hermes;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Pipeline;
 
@@ -28,6 +29,19 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 builder.Services.AddSingleton<IClock, SystemClock>();
 builder.Services.AddSingleton<IJobStore, JobStore>();
 builder.Services.AddSingleton<JobQueue>();
+builder.Services.AddSingleton(sp =>
+{
+    var h = sp.GetRequiredService<IOptions<AppSettings>>().Value.Hermes;
+    return new HermesOptions
+    {
+        BaseUrl = h.BaseUrl,
+        ApiKey = h.ApiKey,
+        Model = h.Model,
+        Timeout = TimeSpan.FromSeconds(h.TimeoutSeconds),
+    };
+});
+// HermesOptions.Timeout bounds each call; the HttpClient's own 100 s default would cut the 120 s budget short.
+builder.Services.AddHttpClient<IHermesClient, HermesClient>(http => http.Timeout = Timeout.InfiniteTimeSpan);
 builder.Services.AddSingleton<ISpecReader, RegexSpecReader>(); // TODO(T-202): Hermes T1 with regex fallback
 builder.Services.AddSingleton<IQbGateway, UnconfiguredQbGateway>(); // TODO(T-601): COM gateway / fake switch
 builder.Services.AddSingleton(sp =>

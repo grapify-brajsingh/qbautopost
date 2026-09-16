@@ -17,7 +17,7 @@ Status legend: `todo` · `doing` · `done` · `blocked` · `ready-for-human`
 |---|---|---|---|---|
 | M0 | Bootstrap | 5 | 5 | done (Windows; Linux run pending) |
 | M1 | API host, lifecycle, CSV dry run | 7 | 7 | done (Windows; Linux run pending) |
-| M2 | Hermes client, T1, G2 | 5 | 0 | todo |
+| M2 | Hermes client, T1, G2 | 5 | 1 | doing |
 | M3 | XLSX, PDF, T2, G1 | 5 | 0 | todo |
 | M4 | Invoices T3 + matcher | 4 | 0 | todo |
 | M5 | Tiers 3–4, G3 | 4 | 0 | todo |
@@ -51,7 +51,7 @@ Status legend: `todo` · `doing` · `done` · `blocked` · `ready-for-human`
 
 | ID | Task | Spec | Files | Verified by | Status | Notes |
 |---|---|---|---|---|---|---|
-| T-201 | HermesClient: OpenAI-compatible call, auth, timeout, fence strip, retry-with-error, audit copies | §9 | | Core tests (HttpMessageHandler fake) | todo | |
+| T-201 | HermesClient: OpenAI-compatible call, auth, timeout, fence strip, retry-with-error, audit copies | §9 | `src/QbAutopost.Core/Abstractions/IHermesClient.cs` (`HermesRequest`, `HermesException`, `HermesValidationException`, `HermesUnavailableException`), `src/QbAutopost.Core/Hermes/{HermesClient,HermesOptions,HermesAudit,JsonReply}.cs`, `src/QbAutopost.Api/Program.cs` (typed `HttpClient`, `HermesOptions`); `tests/QbAutopost.Core.Tests/Hermes/{HermesClientTests,JsonReplyTests}.cs`, `TestSupport/StubHttpHandler.cs`; `tests/QbAutopost.Api.Tests/TestSupport/FakeHermesClient.cs` | `HermesClientTests` (19), `JsonReplyTests` (16); `dotnet test` → Core 216, Api 54 | done | Interface now `CompleteJsonAsync<T>(HermesRequest, ct)` (spec §9 signature: task, system prompt, user content, schema hint + audit folder). Invalid answer (prose, bad JSON, empty, `Validate()` errors) → one retry with the errors appended → `HermesValidationException`. Non-2xx, timeout, connection error, malformed envelope → `HermesUnavailableException`, no retry (Q-21). Audit: `output/hermes/<task>-<n>.request/response.json`, one pair per HTTP attempt; key only in the header, and scrubbed from audit text when ≥ 8 chars. Timeout is per call (`HttpClient.Timeout` infinite). Empty key → no `Authorization` header (Q-21). Not yet resolved from the real host by any test; T-204 exercises it |
 | T-202 | Prompt spec.md + T1 JobSpec + validation + regex fallback | §9.1, FR-2 | | Core tests | todo | |
 | T-203 | Gate G2 → failed with explanation | FR-2 | | Api test | todo | Gate logic and the `failed` transition already exist (T-103: `SpecGate`, `SpecGateTests`, `JobsApiTests`); M2 wires it to the Hermes T1 path |
 | T-204 | GET /health/hermes | FR-16 | | Api test | todo | |
@@ -151,6 +151,7 @@ T-609 checklist (human):
 | Q-18 | T-103 | What happens when the QuickBooks call itself fails? | Any exception → job `partial`, every sent line held `quickbooks-no-response`, and the batch is recorded in the ledger with 0 posted, so `POST /jobs` refuses a re-run until someone checks QuickBooks and uses `force`. `QuickBooksUnavailableException` (thrown only before anything is sent) → `partial` "nothing posted", no ledger record. A response line with status 0 but a different echoed amount is held `amount-mismatch`, and its note names the TxnID to delete | |
 | Q-19 | T-104 | API key defaults | An empty `Api:ApiKey` stops the host at startup; the shipped `change-me` is accepted only in Development. `appsettings.Development.json` uses `dev` (plan §4 curl) and local `data/` paths | |
 | Q-20 | T-105 | result.json fields beyond spec §10 | Adds `company`, `error`, `counts.posted`, `totals.posted`; held items carry `file`, `lineNo`, `kind`, `note`, `candidates`. `unmatchedInvoices` stays `[]` until M4. The sample's `invoices/home-depot-88213.txt` stand-in is reported `unsupported-extension` (invoices accept pdf/png/jpg only) | |
+| Q-21 | T-201 | Should a Hermes transport failure (timeout, connection refused, HTTP 5xx, malformed envelope) be retried, and must the `Authorization` header be sent when `Hermes:ApiKey` is empty? | No retry: spec §9 names only the validation retry, and the caller already falls back (T1) or holds (T2–T4). Empty key → no header (a local Hermes may run without one). Audit copies are written for every HTTP attempt, including failed ones | |
 
 ## Decisions
 
