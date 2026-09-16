@@ -16,6 +16,7 @@ public static class JsonOptions
         WriteIndented = true,
         // Output files are local JSON, never embedded in HTML; keep "&" and quotes readable.
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        Converters = { new JsonStringEnumConverter() },
+        // Enums are written camelCase ("ready", "post", "ccCharge") as in spec §6/§10; reading ignores case.
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 }

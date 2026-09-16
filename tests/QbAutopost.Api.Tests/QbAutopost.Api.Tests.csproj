@@ -20,4 +20,9 @@
     <ProjectReference Include="..\..\src\QbAutopost.Api\QbAutopost.Api.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="..\fixtures\**\*" LinkBase="fixtures" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\samples\**\*" Exclude="..\..\samples\**\output\**" LinkBase="samples" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

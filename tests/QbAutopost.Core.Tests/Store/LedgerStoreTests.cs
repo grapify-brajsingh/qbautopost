@@ -82,7 +82,7 @@ public sealed class LedgerStoreTests : IDisposable
         var json = File.ReadAllText(path);
 
         Assert.Contains("\"date\": \"2026-08-12\"", json, StringComparison.Ordinal);
-        Assert.Contains("\"kind\": \"Check\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"kind\": \"check\"", json, StringComparison.Ordinal);
         Assert.Contains("\"amount\": 311.40", json, StringComparison.Ordinal);
     }
 

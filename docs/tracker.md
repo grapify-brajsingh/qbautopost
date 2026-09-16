@@ -40,7 +40,7 @@ Status legend: `todo` · `doing` · `done` · `blocked` · `ready-for-human`
 | ID | Task | Spec | Files | Verified by | Status | Notes |
 |---|---|---|---|---|---|---|
 | T-101 | FolderReader + folder validation F1–F5, JobInput | §5 | `src/QbAutopost.Core/Jobs/{FolderReader,JobInput,InvalidJobFolderException}.cs`, `HoldReasons.SubfolderIgnored`; `tests/QbAutopost.Core.Tests/Jobs/FolderReaderTests.cs`, `TestSupport/TempJobFolder.cs` | `FolderReaderTests` (22); `dotnet test` → Core 113, Api 1 | done | F1 validate, F2 unreadable, F4 top-level only / `output/` never listed, F5 file-name last-four (content fallback stays in the parsers). F3 is checked by the endpoint (T-104). Job-id charset and subfolder reporting are SPEC-GAPs (Q-12, Q-13) |
-| T-102 | JobRecord, JobStore (memory + status.json), JobQueue (Channel), JobWorker | §6 | | Api tests | todo | one job at a time |
+| T-102 | JobRecord, JobStore (memory + status.json), JobQueue (Channel), JobWorker | §6 | `src/QbAutopost.Core/Jobs/{JobStatus,JobRecord,IJobStore}.cs`, `Core/Abstractions/IClock.cs`, `Core/Text/JsonOptions.cs` (camelCase enums); `src/QbAutopost.Api/Configuration/AppSettings.cs`, `Api/Jobs/{JobStore,JobQueue,IJobProcessor,JobWorker}.cs`; `tests/QbAutopost.Api.Tests/{Jobs/JobStoreTests,Jobs/JobWorkerTests,TestSupport/*}.cs`, `Core.Tests/Jobs/JobRecordTests.cs`, `Core.Tests/Text/JsonOptionsTests.cs` | `JobStoreTests` (7), `JobWorkerTests` (4), `JobRecordTests`, `JsonOptionsTests`; `dotnet test` → Core 139, Api 12 | done | One job at a time (single reader, asserted). State machine enforced by `JobRecord.MoveTo`. status.json is written atomically, before memory. Worker fail-safe: if the processor crashes, the job goes to `failed` (from analysing) or `partial (interrupted …)` (from posting); cancellation at shutdown leaves the status for startup recovery. Job index file is a SPEC-GAP (Q-14). Worker DI registration is in T-104 |
 | T-103 | Pipeline orchestrator (RunAnalysisAsync / RunPostAsync) with RegexSpecParser stand-in | §8 | | Api tests | todo | |
 | T-104 | Endpoints POST /jobs, GET /jobs/{id}, GET /jobs, POST /jobs/{id}/post; problem details; API key; Kestrel bind | §6 | | Api tests | todo | |
 | T-105 | Writers: analysis.json, result.json, status.json, paste-ready CSVs | §10 | | golden compare | todo | |
@@ -144,6 +144,7 @@ T-609 checklist (human):
 | Q-11 | T-003 | How should `requirement.txt` state real last-four values? | Assumed as 4-digit groups on the account lines ("Bank Account=… 4521"). Please share a real example | |
 | Q-12 | T-101 | Which characters may a job folder name (= job id) contain? | Only letters, digits, `.`, `_`, `-`; anything else → 400. The id appears in URLs and in batch ids `<jobId>#<attempt>` | |
 | Q-13 | T-101 | Subfolders inside `statements\` / `invoices\`? | Not read; each is listed in `result.json.unreadable[]` with reason `subfolder-ignored`. `.jpeg`/`.tif` invoices are `unsupported-extension` (spec lists only pdf/png/jpg) | |
+| Q-14 | T-102 | Where are the "known job folders" (spec §6 `GET /jobs`, startup recovery) recorded? | New setting `Paths.JobIndex` (default `jobs.json`) maps job id → folder and is rewritten atomically when a job is first saved. A job found `queued` at startup is set `failed (interrupted)`, not re-queued, because it might be a non-dry run | |
 
 ## Decisions
 
@@ -155,6 +156,7 @@ T-609 checklist (human):
 | 2026-09-16 | Build Core from the spec; POC unavailable (ADR-0007) | owner chose to proceed without the POC; gaps listed in Questions |
 | 2026-09-16 | ADRs live in `docs/adr/` (0001–0007) | architecture decisions recorded with their alternatives |
 | 2026-09-16 | `global.json` pins SDK 8.0.x (`rollForward: latestFeature`) | SDK 10 is installed on the dev box and would otherwise be used |
+| 2026-09-16 | JSON enums are written camelCase (`"ready"`, `"post"`, `"ccCharge"`) and read case-insensitively | spec §6/§10 show lowercase values; `rules.json` `"Kind": "Bank"` still loads; `ledger.json` `kind` becomes `"check"` (no real ledger exists yet) |
 | 2026-09-16 | Repo root is `D:\qb_post` (plan calls it `qb-autopost/`); `CLAUDE.md` copied to the root, `docs/CLAUDE.md` kept | plan T-005; copies must be kept in sync until one is removed |
 
 ## Blockers
