@@ -21,7 +21,7 @@ Status legend: `todo` · `doing` · `done` · `blocked` · `ready-for-human`
 | M3 | XLSX, PDF, T2, G1 | 5 | 5 | done (Windows; Linux run pending) |
 | M4 | Invoices T3 + matcher | 4 | 4 | done (Windows; Linux run pending) |
 | M5 | Tiers 3–4, G3 | 4 | 4 | done (Windows; Linux run pending) |
-| M6 | QuickBooks gateway, post, undo | 9 | 8 | doing |
+| M6 | QuickBooks gateway, post, undo | 9 | 8 | done on Windows except T-609 (ready-for-human, server); Linux run pending |
 | M7 | Rules, logging, hardening | 5 | 0 | todo |
 | M8 | Deploy, shadow, go-live | 4 | 0 | todo |
 
@@ -97,14 +97,20 @@ Status legend: `todo` · `doing` · `done` · `blocked` · `ready-for-human`
 | T-606 | POST /batches/{id}/undo | FR-13 | `Core/QbXml/QbTxnDelete.cs`, `Core/Pipeline/BatchUndo.cs`, `Api/Endpoints/BatchEndpoints.cs`, `Api/Program.cs`; fixtures `qbxml/txn-del.golden.xml`, `qbxml/txn-del-response.xml`; tests `Core.Tests/QbXml/QbTxnDeleteTests.cs` (7), `Core.Tests/Pipeline/BatchUndoTests.cs` (8), `Api.Tests/Api/UndoApiTests.cs` (8) | `dotnet build -warnaserror` 0 warnings; `dotnet test` → Core 666, Api 126 | done | Runs as exclusive work on the job worker. Job goes `undone` only when every entry of its current batch is undone. A forced re-run after undo posts the lines again (undone entries no longer count for G4). New gap Q-38 |
 | T-607 | GET /health/quickbooks | FR-16 | `Core/QbXml/QbHostQuery.cs`, `Core/Pipeline/QbHealth.cs`, `Api/Endpoints/HealthEndpoints.cs`, `Api/Program.cs`; fixtures `qbxml/host-query.golden.xml`, `qbxml/host-response.xml`; tests `Core.Tests/Pipeline/QbHealthTests.cs` (7), `Api.Tests/Api/QuickBooksHealthApiTests.cs` (5) | `dotnet build -warnaserror` 0 warnings; `dotnet test` → Core 673, Api 131 | done | No API key (like `/health/hermes`). Not queued behind jobs, but shares the gateway lock. New gap Q-39 |
 | T-608 | Api tests: full post, refused line → partial, hang → busy, undo, sync-lists | §15 | tests `Api.Tests/Api/QuickBooksFlowApiTests.cs` (2: the T-609 order health → sync-lists → dry run → post → undo; `QuickBooks:Fake=true` through the real DI switch with no test gateway) | Gap check against §15: full post `PostingApiTests`/`PostResultApiTests`/`QuickBooksFlowApiTests`, refused line → partial `PostingApiTests.Should_HoldRefusedLineWithSdkMessage_When_QuickBooksRejectsIt`, hang → busy `QbConnectionTests.Should_EndPartialWithQuickBooksBusy_When_PostingCallHangs` + `QuickBooksHealthApiTests`, undo `UndoApiTests` (8), sync-lists `SyncListsApiTests` (6), G4 `DuplicateCheckApiTests` (6), retry/backup `PostingSafetyApiTests` (9); `dotnet build -warnaserror` 0 warnings; `dotnet test` 3 consecutive green runs → Core 673, Api 133 | done | Linux run still open |
-| T-609 | **[server]** Manual verification on a COPY of the company file: health → sync-lists → dry run → post → undo | §15 | | human checklist below | todo | |
+| T-609 | **[server]** Manual verification on a COPY of the company file: health → sync-lists → dry run → post → undo | §15 | `scripts/qb-server-check.ps1` (runs each step against the running API; `post`/`undo` need `-ConfirmCopy`; key from `QBAUTOPOST__Api__ApiKey`, never printed) | Prepared against fakes: the same order passes in `QuickBooksFlowApiTests`; the script was run by hand against a local host with `QuickBooks:Fake=true` (health 200, sync, undo 404, post refused without `-ConfirmCopy`). Human checklist below | ready-for-human | Needs the QuickBooks server; see Q-34…Q-39 for the choices to confirm there |
 
 T-609 checklist (human):
-- [ ] `GET /health/quickbooks` → ok (certificate dialog answered "Yes, always"; user HermesBridge)
-- [ ] `POST /qb/sync-lists` → counts plausible; `missingInRules` empty after fixing rules.json
-- [ ] Dry run on a real folder → `ready`; `analysis.json` reviewed
-- [ ] `POST /jobs/{id}/post` on the copy → `posted`; transactions visible in QuickBooks
-- [ ] `POST /batches/{id}/undo` → all deleted
+- [ ] Before starting: `Company:FilePath` points at a **copy** of the company file; QuickBooks is open on that copy in the same Windows session as the API; `QuickBooks:Fake` is not set
+- [ ] `.\scripts\qb-server-check.ps1 -Step health` → ok (certificate dialog answered "Yes, always"; user HermesBridge). If it fails with "not registered", the API bitness does not match QuickBooks
+- [ ] `-Step sync` → counts plausible; `missingInRules` empty after fixing rules.json; `qb-audit/sync-lists.response.qbxml` looks like a real SDK answer
+- [ ] `-Step dryrun -Folder <real folder>` → `ready`; `analysis.json` reviewed
+- [ ] `-Step post -JobId <id> -ConfirmCopy` → `posted` or `partial` as expected; transactions visible in QuickBooks with the right account, payee, date, amount and memo
+- [ ] Posting sends `query-1…n.qbxml` first: check the `query-*.response.qbxml` files show status 0 or 1 (confirms `DepositQuery` accepts `AccountFilter`, Q-36)
+- [ ] `response.qbxml`: each `*AddRs` has `TxnID`, `EditSequence` and `Amount`/`DepositTotal` equal to the statement (G5, T-605)
+- [ ] Re-run the same folder with `force=true` and post again → every line skipped `already-posted`; then undo, re-run and post → lines already in QuickBooks are skipped `already-in-quickbooks` only if they were not undone (G4 live check)
+- [ ] `-Step undo -BatchId '<id>#<n>' -ConfirmCopy` → all deleted; `undo-*.response.qbxml` shows status 0 per `TxnDelRs`; transactions gone in QuickBooks
+- [ ] With QuickBooks closed: `-Step health` → 503 with a clear message, and a post ends `partial` "nothing posted"
+- [ ] COM constants confirmed (`OpenConnection2` local = 1, `BeginSession` DoNotCare = 2, `QbSession.cs`)
 - [ ] Bitness confirmed (x64/x86) and recorded here: ______
 
 ## M7 — Rules, logging, hardening
@@ -214,3 +220,4 @@ T-609 checklist (human):
 | 2026-09-17 | 8 (cont.) | T-606 | `POST /batches/{id}/undo`: one `TxnDelRq` message set for the live ledger entries, entries marked `undone` per confirmed delete, batch and job `undone` when none is left; 404/503 problem details; runs on the job worker → Core 666, Api 126. New gap Q-38 |
 | 2026-09-17 | 8 (cont.) | T-607 | `GET /health/quickbooks`: `HostQuery` status 0 → 200 `{ ok, companyFile, message }`, else 503 with the reason and process bitness; hang → 503 after the busy timeout → Core 673, Api 131. New gap Q-39 |
 | 2026-09-17 | 8 (cont.) | T-608 | M6 API gap check: added the T-609 order end to end and a `QuickBooks:Fake=true` host run; every §15 QuickBooks scenario mapped to a test; 3 consecutive green runs → Core 673, Api 133 |
+| 2026-09-17 | 8 (cont.) | T-609 | **[server]** prepared: `scripts/qb-server-check.ps1` (health/sync/dryrun/post/undo against the running API, `-ConfirmCopy` guard), checklist extended (G4 query answers, G5 echo, undo answers, closed QuickBooks, COM constants, bitness). Row set `ready-for-human`. **M6 done on Windows apart from the server check: Core 673, Api 133.** No owner answers yet (Q-1…Q-39). Linux test run still open |
