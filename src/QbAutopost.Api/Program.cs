@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Endpoints;
 using QbAutopost.Api.Jobs;
+using QbAutopost.Api.Logging;
 using QbAutopost.Api.Ocr;
 using QbAutopost.Api.QuickBooks;
 using QbAutopost.Api.Security;
@@ -19,6 +20,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Secrets may come from QBAUTOPOST__Section__Key environment variables (spec §12).
 builder.Configuration.AddEnvironmentVariables(prefix: "QBAUTOPOST__");
+builder.AddQbAutopostLogging();
 builder.WebHost.UseUrls(builder.Configuration["Api:Bind"] ?? new ApiSettings().Bind);
 
 var contentRoot = builder.Environment.ContentRootPath;
