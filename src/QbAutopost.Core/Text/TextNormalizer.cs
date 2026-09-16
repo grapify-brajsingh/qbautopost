@@ -14,9 +14,12 @@ public static partial class TextNormalizer
             ? ""
             : Whitespace().Replace(text.Trim(), " ").ToUpperInvariant();
 
-    /// <summary>Looser form for fuzzy name matching: <see cref="Normalize"/> with every non-letter/digit run turned into one space.</summary>
+    /// <summary>
+    /// Looser form for fuzzy name matching: <see cref="Normalize"/> with apostrophes removed ("JOE'S" → "JOES",
+    /// as bank descriptions print it) and every other non-letter/digit run turned into one space.
+    /// </summary>
     public static string ForMatching(string? text) =>
-        NonAlphanumeric().Replace(Normalize(text), " ").Trim();
+        NonAlphanumeric().Replace(Apostrophes().Replace(Normalize(text), ""), " ").Trim();
 
     /// <summary>True when <paramref name="fragment"/> (normalised) is non-empty and occurs in the already-normalised description.</summary>
     public static bool ContainsFragment(string normalizedDescription, string? fragment)
@@ -27,6 +30,9 @@ public static partial class TextNormalizer
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex Whitespace();
+
+    [GeneratedRegex(@"['’]")]
+    private static partial Regex Apostrophes();
 
     [GeneratedRegex(@"[^\p{L}\p{N}]+")]
     private static partial Regex NonAlphanumeric();
