@@ -1,13 +1,13 @@
 # Session Handoff — QbAutopost
 
-Written: 2026-09-16 (session 4) · M0–M3 done · Next step: **M4** (invoices: Hermes T3 + matcher)
+Written: 2026-09-17 (session 5) · M0–M4 done · Next step: **M5** (tiers 3–4 with Hermes T4, gate G3)
 
 ## 1. Start the next session with this prompt
 
 ```
 Read handoff.md, CLAUDE.md, docs/tracker.md and docs/adr/README.md.
-Check the tracker "Questions" table for owner answers (Q-1…Q-27) and apply any
-that change behaviour first. Then continue with the first todo task in M4 (T-401).
+Check the tracker "Questions" table for owner answers (Q-1…Q-30) and apply any
+that change behaviour first. Then continue with the first todo task in M5 (T-501).
 One task at a time, tests green, tracker updated, one commit per task.
 ```
 
@@ -20,47 +20,51 @@ QbAutopost is a single .NET 8 app. It takes a job folder (`requirement.txt` plus
 | Item | State |
 |---|---|
 | Repo | `D:\qb_post`, branch `main`, remote `origin` = https://github.com/grapify-brajsingh/qbautopost.git |
-| Push | Session 2–4 commits (T-101…T-305) are **local only** — push when the owner agrees: `git push origin main` |
+| Push | Session 2–5 commits (T-101…T-404) are **local only** — push when the owner agrees: `git push origin main` |
 | SDK | pinned to 8.0.x by `global.json` |
 | Build | `dotnet build -warnaserror` → 0 warnings, 0 errors |
-| Tests | 455 passing (Core 382, Api 73) on Windows. **Not yet run on Linux.** |
-| Milestones | M0–M3 done; M4–M8 todo |
-| Packages added in M3 | ClosedXML 0.105.1 and PdfPig 0.1.16 (Core), Tesseract 5.2.0 (Api) — all on the CLAUDE.md list |
-| Manual check | Real Tesseract OCR verified once on Windows (scratch program, `eng.traineddata` not committed). No Hermes on the dev box, so a real job still fails at T1 (Q-22) |
+| Tests | 554 passing (Core 476, Api 78) on Windows, 3 consecutive green runs. **Not yet run on Linux.** |
+| Milestones | M0–M4 done; M5–M8 todo |
+| Packages | none added in M4 |
+| Manual check | None this session (no Hermes on the dev box, so a real job still fails at T1, Q-22) |
 
-## 4. What M3 added (code map delta)
+## 4. What M4 added (code map delta)
 
 ```
 src/QbAutopost.Core/
-  Abstractions/IOcr.cs            IOcr (Enabled, ReadImageAsync) + DisabledOcr
-  Extract/XlsxGrid.cs             first worksheet → string grid (culture-free; dates → yyyy-MM-dd; formulas → saved result)
-  Extract/XlsxStatementParser.cs  grid → StatementGridParser(acceptIsoDates: true); unopenable → unreadable-statement
-  Extract/PdfText.cs              PdfPig per page; < 40 non-space chars = scanned → OCR or scanned-pdf-ocr-disabled
-  Extract/StatementLlmExtractor.cs  Hermes T2: 60 000-char page-group chunks, merge, hermes-failed / extraction-conflict
-  Extract/StatementParseResult.cs   + Totals (StatementTotals: period, opening, closing, count)
-  Hermes/StatementAnswer.cs, Hermes/prompts/statement.md   T2 DTO + validation, prompt
-  Gates/ReconcileGate.cs          + CheckExtraction (T2 G1: totals, count, period, partial running balances; card sign)
-  Pipeline/StatementReader.cs     csv / xlsx / pdf(→PdfText→T2) — JobPipeline now takes this instead of IOcr
+  Hermes/InvoiceAnswer.cs, Hermes/prompts/invoice.md   T3 DTO + validation (party, role, ISO date, total > 0), prompt
+  Extract/InvoiceExtractor.cs     InvoiceReadResult; pdf → PdfText, png/jpg → IOcr (off → unreadable); no chunking (> 60 000 chars → unreadable); HermesException → hermes-failed
+  Mapping/InvoiceMatcher.cs       InvoiceMatch; FR-5 amount ±0.005 / date ±InvoiceMatchDays → direction → Fuzzy(description, party) ≥ threshold; ties / shared line → ambiguous
+  Mapping/Mapper.cs               optional invoices arg: InvoiceRef = invoice file; payee from a fitting invoice when the description names none (known names only)
+  Pipeline/AnalysisResult.cs      InvoiceSummary, AnalysisResult.Invoices
+  Pipeline/JobPipeline.cs         takes InvoiceExtractor; invoices read after G2, before mapping; output/invoices/<file>.json
+  Output/OutputDocuments.cs       result.json unmatchedInvoices = InvoiceSummary[] (unreadable invoices included)
+  Models/HoldReasons.cs           unreadable, no-matching-line, no-invoice-date
 src/QbAutopost.Api/
-  Ocr/TesseractOcr.cs             used only when Ocr:Enabled; missing eng.traineddata stops startup
-  Program.cs                      IOcr, StatementLlmExtractor, StatementReader; statement.md required at startup
-tests/  TestSupport/{XlsxBuilder,PdfBuilder,TestImage,FakeOcr,ScriptedHermes,TestStatementReader}.cs
-        fixtures/statements/{chase-checking-4521.xlsx, chase-checking-4521.pdf(.txt), chase-card-7788.pdf(.txt)}
-        fixtures/hermes/statement-card-7788.json
+  Program.cs                      invoice.md required at startup; InvoiceExtractor registered
+  Endpoints/JobView.cs            + unmatchedInvoices (addition to spec §6)
+tests/  TestSupport/TestInvoiceExtractor.cs; Mapping/{InvoiceMatcherTests,MapperInvoiceTests}.cs; Extract/InvoiceExtractorTests.cs;
+        Hermes/InvoiceAnswerTests.cs; Api/InvoiceApiTests.cs
+        fixtures/invoices/home-depot-88213.pdf(.txt); samples/…/invoices/home-depot-88213.pdf (replaces the .txt stand-in)
 ```
 
 ## 5. Things the next session must know
 
-1. **No owner answers yet.** Q-1…Q-27 all carry conservative choices. New this session: Q-23 (dates: Q-1 kept, XLSX also accepts ISO), Q-24 (scanned-page rule, OCR edge cases), Q-25 (T2 hold codes, parts must agree, file-name last-four wins), Q-26 (card sign; T2 without opening/closing is held), **Q-27 (posting re-runs T2 — decide before M6 whether to reuse the reviewed `rows.json` by PDF hash)**.
-2. **Behaviour changes this session:** `extractor-not-available` is gone (PDFs now post after G1); a CSV/XLSX account column that contradicts the file-name last-four now holds `conflicting-last4`.
-3. **M4 hints:** FR-5 says invoice files → text (PdfText/Ocr; images → Ocr) → Hermes T3. `PdfText` and `IOcr` are ready; images (`.png/.jpg`) go straight to `IOcr.ReadImageAsync` when enabled, else the plan says `unreadable`. Follow the T2 pattern: `Hermes/prompts/invoice.md`, an `InvoiceAnswer : IValidatable`, add `HermesTask.Invoice` to the required prompts in `Program.cs`, hold on `HermesException`. `tests/fixtures/hermes/invoice.json` already exists (FakeHermesClient serves it). The sample invoice is still a `.txt` stand-in reported `unsupported-extension` (Q-20); M4 needs a real PDF fixture — render one like `tests/fixtures/statements/*.pdf` (throw-away PdfPig program).
-4. **Test helpers:** `ScriptedHermes` (Core) validates like the real client; `TestStatementReader.Create(ocr, hermes)` builds the pipeline's reader; `JobPipelineTests` switches statements to PDFs with `UsePdf(name)` and scripts T2 via `_statementAnswer` / `_cardAnswer`.
-5. **Already true from earlier sessions:** JSON enums are camelCase; read shared JSON with `AtomicFile.ReadAllText`; `ApiFactory.WithSetting(key, value)` (not chainable — use `WithWebHostBuilder` for several keys); console logs lack the `jobId` scope until T-702; sample output and `src/QbAutopost.Api/data/` are git-ignored; `.gitattributes` marks `*.pdf *.xlsx *.png *.jpg` binary.
+1. **No owner answers yet.** Q-1…Q-30 all carry conservative choices. New this session: Q-28 (invoice hold codes, no chunking, "Our company" in the T3 message), Q-29 (matching details: no date, no preferred direction, similarity = description vs party, shared line, where unreadable invoices are reported), Q-30 (`InvoiceRef` = file name; invoice payee only when known and the role fits). **Q-27 now also covers invoices** (posting re-runs T3).
+2. **Behaviour changes this session:** the sample job makes a T3 call (tests that count Hermes calls filter by task); the sample invoice is a PDF and matches the Home Depot line; `result.json.unmatchedInvoices` is a list of objects, not strings; the analysis golden has `invoiceRef` on the Home Depot line. Line decisions on the sample are unchanged (8/2/1).
+3. **M5 hints:**
+   - T4 (`HermesTask.Account`, spec §9.4): add `Hermes/prompts/account.md` and an `AccountAnswer : IValidatable`. Its validation needs the allowed `accounts[]` (case-sensitive exact), but `IValidatable.Validate()` takes no arguments: either carry the list inside the answer after deserialising, or validate in the caller and treat a violation like a failed answer (the client's retry only covers `Validate()`). `tests/fixtures/hermes/account.json` exists.
+   - `Mapper` is synchronous; T4 is async. Lines needing tiers 3–4 are currently held `no-account-rule` (`HoldReasons.NoAccountRule`, `TODO(T-502)` in `Mapper.WithVendorAndTiers`). A clean option: keep `Mapper` sync, then run an async tier-3/4 pass in the pipeline over lines held `no-account-rule`.
+   - Tier 3 input is ready: `Mapper` holds the matched invoices by request id; `InvoiceFacts.CategoryHint` is the hint; `MappedTxn.InvoiceRef` names the file.
+   - `QbLists.Accounts` have an optional `Type` for the §9.4 filter; `Rules.ModelConfidenceThreshold` (0.8) exists; `Confidence.Invoice` / `Confidence.Model` exist in `Models/Enums.cs`.
+   - G3 (FR-7): `Model` posts only with confidence ≥ threshold **and** a prior posting of the payee to the same account (ledger); held lines carry top-3 account `candidates`.
+4. **Test helpers:** `ScriptedHermes` (Core) validates like the real client; `TestStatementReader.Create(ocr, hermes)` and `TestInvoiceExtractor.Create(ocr, hermes)` build the pipeline's readers; `JobPipelineTests` scripts T2 via `_statementAnswer` / `_cardAnswer` and T3 via `_invoiceAnswer`; in Api tests use `FakeHermesClient.Respond(r => r.Task == … ? json : null)`.
+5. **Already true from earlier sessions:** JSON enums are camelCase; read shared JSON with `AtomicFile.ReadAllText`; `ApiFactory.WithSetting(key, value)` (not chainable — use `WithWebHostBuilder` for several keys); console logs lack the `jobId` scope until T-702; sample output and `src/QbAutopost.Api/data/` are git-ignored; `.gitattributes` marks `*.pdf *.xlsx *.png *.jpg` binary; PDF fixtures are rendered from their `.pdf.txt` by a throw-away PdfPig program (one text line per PDF line, Helvetica 10 pt).
 6. **Running by hand:** `dotnet run` needs `ASPNETCORE_ENVIRONMENT=Development` (or a real `QBAUTOPOST__Api__ApiKey`). With `Ocr:Enabled=true`, set `Ocr:TessDataPath` to a folder holding `eng.traineddata`.
 7. **GateGuard hook** blocks the first edit/creation of every file until facts are stated (retry works); `ECC_GATEGUARD=off` disables it.
 
-## 6. Next milestone — M4 (invoices)
+## 6. Next milestone — M5 (tiers 3–4, G3)
 
-See `docs/plan.md` T-401…T-404 and spec FR-5 (T3 schema §9.3; matching by amount ±0.005 and date ±`InvoiceMatchDays`; ambiguous → no match; unmatched → `result.json.unmatchedInvoices[]`).
+See `docs/plan.md` T-501…T-504 and spec FR-6 (tiers), FR-7 (G3), §9.4 (T4 schema and validation), §10 (`analysis.json` tier, confidence, candidates, decision).
 
-Open follow-ups: run `dotnet test` on Linux (a CI workflow would do); decide whether `docs/CLAUDE.md` or the root `CLAUDE.md` is the single copy; push sessions 2–4; answer Q-27 before M6.
+Open follow-ups: run `dotnet test` on Linux (a CI workflow would do); decide whether `docs/CLAUDE.md` or the root `CLAUDE.md` is the single copy; push sessions 2–5; answer Q-27 before M6.

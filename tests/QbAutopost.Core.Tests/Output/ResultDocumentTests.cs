@@ -1,6 +1,7 @@
 using System.Text.Json;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Jobs;
+using QbAutopost.Core.Models;
 using QbAutopost.Core.Output;
 using QbAutopost.Core.Pipeline;
 using QbAutopost.Core.Tests.TestSupport;
@@ -62,6 +63,30 @@ public sealed class ResultDocumentTests : IDisposable
         Assert.Equal(result.Counts, read.Counts);
         Assert.Equal(result.Held.Select(h => h.RequestId), read.Held.Select(h => h.RequestId));
         Assert.Equal(result.Reconcile.Select(r => r.Reconcile), read.Reconcile.Select(r => r.Reconcile));
+    }
+
+    [Fact]
+    public async Task Should_RoundTripUnmatchedInvoices_When_ResultIsWrittenAndRead()
+    {
+        var (job, analysis) = await DryRun();
+        var facts = analysis.Invoices[0].Facts! with { File = "other.pdf", MatchedRequestId = null, Total = 999.99m };
+        analysis = analysis with
+        {
+            Invoices =
+            [
+                analysis.Invoices[0],
+                new InvoiceSummary { File = "other.pdf", Facts = facts, Reason = HoldReasons.NoMatchingLine, Note = "none" },
+                new InvoiceSummary { File = "scan.jpg", Reason = HoldReasons.Unreadable, Errors = ["OCR is disabled"] },
+            ],
+        };
+
+        JobOutputWriter.WriteResult(analysis.Input.OutputDir, ResultDocument.Build(job, analysis, null, Started, Started));
+        var read = JobOutputWriter.ReadResult(analysis.Input.OutputDir);
+
+        Assert.NotNull(read);
+        Assert.Equal(["other.pdf", "scan.jpg"], read.UnmatchedInvoices.Select(i => i.File));
+        Assert.Equal(facts, read.UnmatchedInvoices[0].Facts);
+        Assert.Equal(["OCR is disabled"], read.UnmatchedInvoices[1].Errors);
     }
 
     [Fact]

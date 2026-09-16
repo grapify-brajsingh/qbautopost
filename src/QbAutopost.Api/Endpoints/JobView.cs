@@ -2,6 +2,7 @@ using QbAutopost.Core.Gates;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Models;
 using QbAutopost.Core.Output;
+using QbAutopost.Core.Pipeline;
 
 namespace QbAutopost.Api.Endpoints;
 
@@ -20,6 +21,10 @@ public sealed record JobView
     public IReadOnlyList<SkippedItem> Skipped { get; init; } = [];
     public IReadOnlyList<PostedItem> Posted { get; init; } = [];
     public IReadOnlyList<UnreadableFile> Unreadable { get; init; } = [];
+
+    /// <summary>Addition to spec §6 (like <see cref="Unreadable"/>): <c>result.json.unmatchedInvoices</c>, so an operator sees them here.</summary>
+    public IReadOnlyList<InvoiceSummary> UnmatchedInvoices { get; init; } = [];
+
     public string? BatchId { get; init; }
     public string? Error { get; init; }
     public DateTime UpdatedUtc { get; init; }
@@ -45,6 +50,7 @@ public sealed record JobView
             Skipped = current?.Skipped ?? [],
             Posted = current?.Posted ?? [],
             Unreadable = current?.Unreadable ?? [],
+            UnmatchedInvoices = current?.UnmatchedInvoices ?? [],
             BatchId = job.BatchId,
             Error = job.Error,
             UpdatedUtc = job.UpdatedUtc,

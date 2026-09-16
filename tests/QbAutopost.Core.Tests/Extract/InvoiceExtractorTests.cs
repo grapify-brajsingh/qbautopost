@@ -202,6 +202,25 @@ public sealed class InvoiceExtractorTests : IDisposable
     }
 
     [Fact]
+    public async Task Should_ReturnFacts_When_RealClientSucceedsOnRetry()
+    {
+        using var handler = new StubHttpHandler()
+            .ReplyContent("""{ "party": "Home Depot", "role": "store", "date": "08/21/2026", "total": 184.32 }""")
+            .ReplyContent("```json\n" + Fixtures.Read("hermes", "invoice.json") + "\n```");
+        using var http = new HttpClient(handler);
+        var client = new HermesClient(http, new HermesOptions { BaseUrl = "http://hermes.test" });
+
+        var result = await new InvoiceExtractor(new DisabledOcr(), client, Prompts)
+            .ReadAsync(new JobFile(FixturePdf(), "home-depot-88213.pdf", null), Company, null, CancellationToken.None);
+
+        Assert.False(result.IsHeld, string.Join("; ", result.Errors));
+        Assert.Equal(184.32m, result.Facts!.Total);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Contains("role", handler.Requests[1].Message(1), StringComparison.Ordinal);
+        Assert.Contains("date", handler.Requests[1].Message(1), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Should_HoldHermesFailed_When_HermesIsUnreachable()
     {
         var hermes = new ScriptedHermes(_ => throw new HermesUnavailableException(HermesTask.Invoice, "connection refused"));
