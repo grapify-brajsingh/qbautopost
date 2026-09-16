@@ -7,9 +7,12 @@ TestResults/
 .vs/
 .idea/
 
-# Runtime output — never commit job output, logs or secrets
-**/output/
-logs/
+# Runtime output — never commit job output, logs or secrets.
+# Job output folders are matched only under job folders: git on Windows ignores case,
+# so a bare "output/" would also hide the src/**/Output/ code folders.
+samples/jobs/*/output/
+tests/fixtures/jobs/*/output/
+/logs/
 *.tmp
 .env
 appsettings.*.local.json
