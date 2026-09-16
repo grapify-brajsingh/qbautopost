@@ -19,6 +19,7 @@ namespace QbAutopost.Core.Pipeline;
 public sealed class JobPipeline(PipelineOptions options, ISpecReader specReader, IQbGateway gateway, IClock clock)
 {
     private const string CsvExtension = ".csv";
+    private const string XlsxExtension = ".xlsx";
 
     /// <summary>Folder → spec → statements → G1/G2 → mapping → ledger duplicates → qbXML and sheets.</summary>
     public async Task<AnalysisResult> RunAnalysisAsync(JobRecord job, CancellationToken ct)
@@ -149,19 +150,28 @@ public sealed class JobPipeline(PipelineOptions options, ISpecReader specReader,
 
     private StatementSummary ReadStatement(JobFile file, Rules rules, JobSpec spec)
     {
-        if (!string.Equals(Path.GetExtension(file.FileName), CsvExtension, StringComparison.OrdinalIgnoreCase))
+        var extension = Path.GetExtension(file.FileName);
+        StatementParseResult parsed;
+        if (string.Equals(extension, CsvExtension, StringComparison.OrdinalIgnoreCase))
         {
-            // TODO(T-301, T-303): XLSX and PDF extraction arrive in M3; until then the statement is held.
+            parsed = new CsvStatementParser(rules.CsvLayouts).Parse(file.Path);
+        }
+        else if (string.Equals(extension, XlsxExtension, StringComparison.OrdinalIgnoreCase))
+        {
+            parsed = new XlsxStatementParser(rules.CsvLayouts).Parse(file.Path);
+        }
+        else
+        {
+            // TODO(T-302, T-303): PDF extraction arrives later in M3; until then the statement is held.
             return new StatementSummary
             {
                 File = file.FileName,
                 Last4 = file.Last4FromName,
                 HoldReason = HoldReasons.ExtractorNotAvailable,
-                Errors = ["xlsx/pdf statements are not supported yet"],
+                Errors = ["pdf statements are not supported yet"],
             };
         }
 
-        var parsed = new CsvStatementParser(rules.CsvLayouts).Parse(file.Path);
         var summary = new StatementSummary
         {
             File = parsed.File,

@@ -80,6 +80,21 @@ public sealed class CsvStatementParserTests
     }
 
     [Fact]
+    public void Should_HoldWholeStatement_When_DateDoesNotMatchLayoutFormatEvenIfIso()
+    {
+        using var temp = new TempJobFolder();
+        var path = temp.WithFile(
+            Path.Combine("statements", "card-7788.csv"),
+            "Transaction Date,Post Date,Description,Category,Type,Amount,Memo\n2026-08-09,,SHELL OIL 57442,Gas,Sale,-48.75,\n")
+            .PathOf("statements", "card-7788.csv");
+
+        var result = _parser.Parse(path);
+
+        Assert.Equal(HoldReasons.UnparsableRows, result.HoldReason);
+        Assert.Contains(result.Errors, e => e.Contains("bad date '2026-08-09'", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Should_HoldAsUnknownAccount_When_NeitherFileNameNorContentHasLastFour()
     {
         var result = _parser.Parse(Fixtures.PathOf("statements", "card-without-account-number.csv"));

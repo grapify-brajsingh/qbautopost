@@ -34,6 +34,9 @@ public static class HoldReasons
     public const string QuickBooksUnavailable = "quickbooks-unavailable";
     public const string AmountMismatch = "amount-mismatch";
 
+    // SPEC-GAP T-301: a statement file the extractor cannot open (corrupt or encrypted workbook) is held whole.
+    public const string UnreadableStatement = "unreadable-statement";
+
     // TODO(T-502): replaced by Hermes T4 tiers 3–4; until then a line without a rule/history account is held.
     public const string NoAccountRule = "no-account-rule";
 }

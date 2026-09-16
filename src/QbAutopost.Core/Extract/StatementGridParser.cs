@@ -7,9 +7,14 @@ namespace QbAutopost.Core.Extract;
 
 /// <summary>
 /// Turns a grid of strings (first non-blank row = header) into statement lines using a
-/// <see cref="CsvLayout"/> (spec FR-3). Shared by the CSV parser and, from T-301, the XLSX parser.
+/// <see cref="CsvLayout"/> (spec FR-3). Shared by the CSV and XLSX parsers.
 /// </summary>
-public sealed class StatementGridParser(IReadOnlyDictionary<string, CsvLayout> layouts)
+/// <param name="layouts">Layouts from <c>rules.json.CsvLayouts</c>.</param>
+/// <param name="acceptIsoDates">
+/// Also accept an exact <c>yyyy-MM-dd</c> date next to the layout's format. Set by the XLSX parser, whose real date
+/// cells arrive in that form; CSV text must match the layout's format (tracker Q-1, Q-23).
+/// </param>
+public sealed class StatementGridParser(IReadOnlyDictionary<string, CsvLayout> layouts, bool acceptIsoDates = false)
 {
     public StatementParseResult Parse(string fileName, IReadOnlyList<string[]> grid)
     {
@@ -51,7 +56,7 @@ public sealed class StatementGridParser(IReadOnlyDictionary<string, CsvLayout> l
         for (var i = 0; i < dataRows.Count; i++)
         {
             var lineNo = i + 1;
-            if (TryParseRow(dataRows[i], lineNo, fileName, last4 ?? "", layout, columns, out var line, out var error))
+            if (TryParseRow(dataRows[i], lineNo, fileName, last4 ?? "", layout, columns, acceptIsoDates, out var line, out var error))
             {
                 rows.Add(line);
             }
@@ -102,14 +107,14 @@ public sealed class StatementGridParser(IReadOnlyDictionary<string, CsvLayout> l
     }
 
     private static bool TryParseRow(
-        string[] cells, int lineNo, string fileName, string last4, CsvLayout layout, Columns columns,
+        string[] cells, int lineNo, string fileName, string last4, CsvLayout layout, Columns columns, bool acceptIsoDates,
         out StatementLine line, out string error)
     {
         line = null!;
         error = "";
 
         var dateText = columns.Cell(cells, layout.DateColumn);
-        if (!TryParseDate(dateText, layout.DateFormat, out var date))
+        if (!TryParseDate(dateText, layout.DateFormat, acceptIsoDates, out var date))
         {
             error = $"bad date '{dateText}'";
             return false;
@@ -160,11 +165,21 @@ public sealed class StatementGridParser(IReadOnlyDictionary<string, CsvLayout> l
         return true;
     }
 
-    /// <summary>With a layout format the cell must match it exactly; otherwise invariant parsing (spec FR-3).</summary>
-    private static bool TryParseDate(string text, string? format, out DateOnly date) =>
-        format is null
-            ? DateOnly.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out date)
-            : DateOnly.TryParseExact(text, format, CultureInfo.InvariantCulture, DateTimeStyles.None, out date);
+    /// <summary>
+    /// With a layout format the cell must match it exactly (SPEC-GAP T-301: no invariant fallback, tracker Q-1/Q-23);
+    /// without one, invariant parsing (spec FR-3).
+    /// </summary>
+    private static bool TryParseDate(string text, string? format, bool acceptIsoDates, out DateOnly date)
+    {
+        if (format is null)
+        {
+            return DateOnly.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out date);
+        }
+
+        return DateOnly.TryParseExact(text, format, CultureInfo.InvariantCulture, DateTimeStyles.None, out date)
+               || (acceptIsoDates
+                   && DateOnly.TryParseExact(text, XlsxGrid.IsoDateFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out date));
+    }
 
     private static bool TryParseAmount(
         string[] cells, CsvLayout layout, Columns columns, out decimal amount, out Direction direction, out string error)

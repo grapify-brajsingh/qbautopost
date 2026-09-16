@@ -150,12 +150,45 @@ public sealed class JobPipelineTests : IDisposable
     [Fact]
     public async Task Should_HoldStatementAndKeepOthers_When_ExtensionHasNoExtractorYet()
     {
-        _job.WithFile(Path.Combine("statements", "chase-card-7788-extra.xlsx"));
+        _job.WithFile(Path.Combine("statements", "chase-card-7788-extra.pdf"));
+
+        var analysis = await Analyse();
+
+        var pdf = analysis.Statements.Single(s => s.File.EndsWith(".pdf", StringComparison.Ordinal));
+        Assert.Equal(HoldReasons.ExtractorNotAvailable, pdf.HoldReason);
+        Assert.Equal(8, analysis.ToPost.Count);
+    }
+
+    [Fact]
+    public async Task Should_PostSameLines_When_BankStatementIsAWorkbook()
+    {
+        var fromCsv = (await Analyse()).ToPost.Select(Postable).ToList();
+        File.Delete(_job.PathOf("statements", "chase-checking-4521.csv"));
+        _job.Copy(Fixtures.PathOf("statements", "chase-checking-4521.xlsx"), Path.Combine("statements", "chase-checking-4521.xlsx"));
+
+        var analysis = await Analyse();
+
+        var xlsx = analysis.Statements.Single(s => s.Last4 == "4521");
+        Assert.Null(xlsx.HoldReason);
+        Assert.Equal("chase-checking", xlsx.Layout);
+        Assert.True(xlsx.Reconcile!.Ok);
+        Assert.Equal(fromCsv, analysis.ToPost.Select(Postable));
+        Assert.True(File.Exists(_job.PathOf("output", "statements", "chase-checking-4521.xlsx.rows.json")));
+
+        static object Postable(MappedTxn m) =>
+            (m.Line.Date, m.Line.Amount, m.Line.Direction, m.Kind, m.Account, m.Payee, m.LineAccount, m.RefNumber);
+    }
+
+    [Fact]
+    public async Task Should_HoldStatementAndKeepOthers_When_WorkbookIsCorrupt()
+    {
+        _job.WithFile(Path.Combine("statements", "chase-card-7788-extra.xlsx"), "not a workbook");
 
         var analysis = await Analyse();
 
         var xlsx = analysis.Statements.Single(s => s.File.EndsWith(".xlsx", StringComparison.Ordinal));
-        Assert.Equal(HoldReasons.ExtractorNotAvailable, xlsx.HoldReason);
+        Assert.Equal(HoldReasons.UnreadableStatement, xlsx.HoldReason);
+        Assert.Equal("7788", xlsx.Last4);
         Assert.Equal(8, analysis.ToPost.Count);
     }
 
