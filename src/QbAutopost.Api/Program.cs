@@ -92,6 +92,11 @@ builder.Services.AddSingleton<JobPipeline>();
 builder.Services.AddSingleton<QbListSync>();
 builder.Services.AddSingleton<BatchUndo>();
 builder.Services.AddSingleton<QbHealth>();
+builder.Services.AddSingleton(sp =>
+{
+    var s = sp.GetRequiredService<IOptions<AppSettings>>().Value;
+    return new RulesEditor(s.Company.RulesFile, s.Paths.QbLists);
+});
 builder.Services.AddSingleton<IJobProcessor, JobRunner>();
 builder.Services.AddSingleton<JobAdmission>();
 builder.Services.AddSingleton<StartupRecovery>();
@@ -118,6 +123,7 @@ app.MapJobEndpoints();
 app.MapHealthEndpoints();
 app.MapQuickBooksEndpoints();
 app.MapBatchEndpoints();
+app.MapRulesEndpoints();
 
 app.Run();
 

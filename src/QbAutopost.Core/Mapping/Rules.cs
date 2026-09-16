@@ -1,4 +1,5 @@
 using System.Text.Json;
+using QbAutopost.Core.Store;
 using QbAutopost.Core.Text;
 
 namespace QbAutopost.Core.Mapping;
@@ -62,7 +63,8 @@ public sealed record Rules
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
-    public static Rules Load(string path) => Parse(File.ReadAllText(path));
+    /// <summary>Reads through <see cref="AtomicFile"/>: <see cref="RulesEditor"/> may be replacing the file at the same time.</summary>
+    public static Rules Load(string path) => Parse(AtomicFile.ReadAllText(path));
 
     public static Rules Parse(string json)
     {
