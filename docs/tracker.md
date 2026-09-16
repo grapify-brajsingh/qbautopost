@@ -1,6 +1,6 @@
 # QbAutopost.Api — Implementation Tracker
 
-Updated: 2026-09-15 · Owner: Braj · Executor: Claude Code
+Updated: 2026-09-16 · Owner: Braj · Executor: Claude Code
 Spec: `spec.md` · Plan: `plan.md`
 
 **How to update (Claude Code does this after every task):**
@@ -15,7 +15,7 @@ Status legend: `todo` · `doing` · `done` · `blocked` · `ready-for-human`
 
 | M | Name | Tasks | Done | Status |
 |---|---|---|---|---|
-| M0 | Bootstrap | 5 | 0 | todo |
+| M0 | Bootstrap | 5 | 5 | done (Windows; Linux run pending) |
 | M1 | API host, lifecycle, CSV dry run | 7 | 0 | todo |
 | M2 | Hermes client, T1, G2 | 5 | 0 | todo |
 | M3 | XLSX, PDF, T2, G1 | 5 | 0 | todo |
@@ -33,7 +33,7 @@ Status legend: `todo` · `doing` · `done` · `blocked` · `ready-for-human`
 | T-002 | Port POC into Core (Models, Text, Rules, Fuzzy, Mapper, Gates, QbXmlBuilder/Parser, Ledger, BatchEnterSheet, CsvStatementParser, RegexSpecParser) | §7, §9, §11, §13 | `src/QbAutopost.Core/{Models,Text,Mapping,Gates,QbXml,Store,Output,Extract}/*.cs` | build green; covered by T-004 tests | done | **POC unavailable → written from spec (ADR-0007).** Gaps marked `SPEC-GAP T-002`, listed in Questions Q-1…Q-9. Mapper covers tiers 1–2 only; lines needing tiers 3–4 are held `no-account-rule` until T-502. `CsvStatementParser` delegates to `StatementGridParser` (shared with T-301 XLSX) |
 | T-003 | Fixtures: samples/jobs/2026-08-tropicana, tests/fixtures/hermes/*.json, tests/fixtures/qbxml/*.golden.xml | §5, §9 | `samples/jobs/2026-08-tropicana/{requirement.txt,statements/*.csv,invoices/home-depot-88213.txt}`, `samples/rules.json`, `tests/fixtures/hermes/{spec,statement,invoice,account}.json`, `tests/fixtures/qbxml/{check,creditcard,deposit}.golden.xml`, `tests/fixtures/qbxml/add-response.xml`, `tests/fixtures/statements/*.csv` | files present; used by T-004 tests | done | All data synthetic (no POC samples). Bank CSV 7 rows (newest-first, balances reconcile 13195.87 → 10230.45), card CSV 4 rows. Invoice is a `.txt` stand-in for a text PDF (plan allows). Golden requestIDs computed independently with PowerShell SHA-256, not by the code under test |
 | T-004 | First tests: CSV parser, fingerprint, G1 both orientations, FR-6 routing table, qbXML golden | §8 FR-3/4/6/9 | `tests/QbAutopost.Core.Tests/{TestSupport,Text,Extract,Gates,Mapping,QbXml,Store,Output,Architecture}/*.cs`, `SampleJobTests.cs`; fix in `src/QbAutopost.Core/Text/TextNormalizer.cs` | `dotnet test` → Core 91 passed, Api 1 passed (Windows, SDK 8.0.420) | done | Covers: CSV 7/4 rows (FR-3 AC), fingerprint vs independent SHA-256, G1 file/reverse order + failure modes, all 7 FR-6 rows + holds, tier 2 history, qbXML 3 golden files, response parser, ledger atomic save, sheets, RegexSpecParser FR-2 AC, Core has no COM tokens. Tests found one bug: apostrophes in names ("Joe's") broke fuzzy matching — fixed. Tests written in the same session as T-002 rather than strictly first. Linux run still to be done (no Linux box here) |
-| T-005 | scripts/build.ps1, test.ps1, run-api.ps1; CLAUDE.md at repo root | plan §4 | | scripts run | todo | |
+| T-005 | scripts/build.ps1, test.ps1, run-api.ps1; CLAUDE.md at repo root | plan §4 | `scripts/{build,test,run-api}.ps1`, `CLAUDE.md` | build.ps1 → 0 errors; test.ps1 → 92 passed; run-api.ps1 → "Now listening on http://127.0.0.1:5080" | done | CLAUDE.md copied, not moved (see Decisions) |
 
 ## M1 — API host, lifecycle, CSV dry run
 
@@ -130,7 +130,18 @@ T-609 checklist (human):
 
 | # | Task | Question | Conservative choice taken | Answer (human) |
 |---|---|---|---|---|
-| | | | | |
+| Q-0 | T-002 | The POC (`poc/QbAutopost`) is not available. Will it be supplied? | Core written from the spec (ADR-0007); every item below is a guess to confirm | Owner: build from spec (2026-09-16) |
+| Q-1 | T-002 | What is the `rules.json.CsvLayouts` format, and what are the real bank/card CSV columns? | Layout = `HeaderContains[]` + column names + `DateFormat` + one signed `AmountColumn` (`PositiveIsDebit`) or `DebitColumn`/`CreditColumn`, plus optional check-number/balance/last-four columns. No layout or 2+ layouts match → statement held. A date that fails the layout format is a row error (no fallback). Sample layouts imitate Chase exports | |
+| Q-2 | T-002 | What does `Normalize(description)` do? | Trim, collapse whitespace, upper-case invariant; digits and punctuation kept. Fuzzy matching also drops apostrophes and turns other punctuation into spaces | |
+| Q-3 | T-002 | Fingerprint field spelling (kind, direction, missing check number)? | `bank`/`card`, `debit`/`credit`, missing check number = "" | |
+| Q-4 | T-002 | G1 "both orientations" — row order, balance sign, or both? | Row order only (file order or reversed). The sign is fixed by kind: bank credits raise the balance, card charges raise it. A partly filled balance column fails G1 | |
+| Q-5 | T-002 | Which columns do the paste-ready sheets have, and in what date format? | Checks: Bank, Date, Number, Payee, Account, Amount, Memo. Card: Card, Date, Number, Payee, Type, Account, Amount, Memo. Deposits: Date, Received From, From Account, Memo, Amount, Deposit To. ISO dates, UTF-8 BOM, CRLF; text cells starting with `= + - @` get a leading `'` | |
+| Q-6 | T-002 | What is the base `rules.json` schema, and what are the defaults? | Keys as in `Rules.cs`; `FuzzyThreshold` 0.85, `HistoryMinCount` 3. Missing `HoldingExpenseAccount` → numbered checks held; missing `DepositIncomeAccount` → deposits held. Pattern `Match` is a plain substring, not a regex | |
+| Q-7 | T-002 | What happens when a check number is over 11 characters, or several aliases / equal fuzzy scores match? | Line held (`refnumber-too-long` / `unknown-payee` with a note); never truncated or guessed. Memo over 4095 characters is truncated (no money impact) | |
+| Q-8 | T-001 | CLAUDE.md's NuGet list doesn't include the xUnit runtime packages (`Microsoft.NET.Test.Sdk`, `xunit`, `xunit.runner.visualstudio`) | Added — xUnit tests can't run without them | |
+| Q-9 | T-002 | File name with several 4-digit groups (e.g. `2026-chase-4521.csv`)? | No last-four taken from the name; fall back to the content, else hold `unknown-account` | |
+| Q-10 | T-002 | One unparseable row in a CSV: hold the row or the whole statement? | Whole statement held (`unparsable-rows`), because a missing row makes the statement incomplete | |
+| Q-11 | T-003 | How should `requirement.txt` state real last-four values? | Assumed as 4-digit groups on the account lines ("Bank Account=… 4521"). Please share a real example | |
 
 ## Decisions
 
@@ -139,6 +150,10 @@ T-609 checklist (human):
 | 2026-09-15 | Core is cross-platform; COM isolated in QbAutopost.QuickBooks | tests run anywhere; server only for M6/M8 |
 | 2026-09-15 | Invoices are evidence only (Q1 assumed) | avoids a second posting pipeline in v1 |
 | 2026-09-15 | Deposits post straight to income (Q2 assumed) | pending answer on open customer invoices |
+| 2026-09-16 | Build Core from the spec; POC unavailable (ADR-0007) | owner chose to proceed without the POC; gaps listed in Questions |
+| 2026-09-16 | ADRs live in `docs/adr/` (0001–0007) | architecture decisions recorded with their alternatives |
+| 2026-09-16 | `global.json` pins SDK 8.0.x (`rollForward: latestFeature`) | SDK 10 is installed on the dev box and would otherwise be used |
+| 2026-09-16 | Repo root is `D:\qb_post` (plan calls it `qb-autopost/`); `CLAUDE.md` copied to the root, `docs/CLAUDE.md` kept | plan T-005; copies must be kept in sync until one is removed |
 
 ## Blockers
 
@@ -150,4 +165,4 @@ T-609 checklist (human):
 
 | Date | Session | Tasks touched | Result |
 |---|---|---|---|
-| | | | |
+| 2026-09-16 | 1 | ADRs, T-001…T-005 | M0 done on Windows: build has 0 warnings; 92 tests pass (Core 91, Api 1); scripts run. Linux test run still open. Found and fixed a `.gitignore` rule that hid `Output/` sources |
