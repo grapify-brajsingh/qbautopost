@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Cross-platform. MUST NOT reference COM (CLAUDE.md hard rule 2, ADR-0001). -->
+  <PropertyGroup>
+    <RootNamespace>QbAutopost.Core</RootNamespace>
+  </PropertyGroup>
+
+</Project>

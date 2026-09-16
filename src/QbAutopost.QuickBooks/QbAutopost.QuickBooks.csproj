@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The only project allowed to touch the QuickBooks SDK COM object; Windows-only at runtime (ADR-0001).
+       PlatformTarget must match QuickBooks bitness on the server (x64 for 2022+, x86 older) — see T-609. -->
+  <PropertyGroup>
+    <RootNamespace>QbAutopost.QuickBooks</RootNamespace>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\QbAutopost.Core\QbAutopost.Core.csproj" />
+  </ItemGroup>
+
+</Project>

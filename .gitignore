@@ -1,0 +1,15 @@
+# Build
+bin/
+obj/
+TestResults/
+*.user
+*.suo
+.vs/
+.idea/
+
+# Runtime output — never commit job output, logs or secrets
+**/output/
+logs/
+*.tmp
+.env
+appsettings.*.local.json

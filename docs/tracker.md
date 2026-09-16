@@ -29,7 +29,7 @@ Status legend: `todo` · `doing` · `done` · `blocked` · `ready-for-human`
 
 | ID | Task | Spec | Files | Verified by | Status | Notes |
 |---|---|---|---|---|---|---|
-| T-001 | Solution + 3 src projects + 2 test projects, Directory.Build.props, .editorconfig, .gitignore | §4, plan §1 | | `dotnet build -warnaserror` | todo | CA1416 suppressed only in QbAutopost.QuickBooks |
+| T-001 | Solution + 3 src projects + 2 test projects, Directory.Build.props, .editorconfig, .gitignore | §4, plan §1 | `QbAutopost.sln`, `global.json`, `Directory.Build.props`, `.editorconfig`, `.gitignore`, `.gitattributes`, `src/*/*.csproj`, `src/QbAutopost.Api/Program.cs`, `tests/*/*.csproj`, `tests/QbAutopost.Api.Tests/HostSmokeTests.cs` | `dotnet build -warnaserror` (0 warnings); `HostSmokeTests` | done | CA1416 suppressed only in QbAutopost.QuickBooks. `global.json` pins SDK 8.0.x (SDK 10 also installed). Test packages added: Microsoft.NET.Test.Sdk 17.14.1, xunit 2.9.3, xunit.runner.visualstudio 3.1.5 (see Q-8) |
 | T-002 | Port POC into Core (Models, Text, Rules, Fuzzy, Mapper, Gates, QbXmlBuilder/Parser, Ledger, BatchEnterSheet, CsvStatementParser, RegexSpecParser) | §7, §9, §11, §13 | | build green | todo | source: `poc/QbAutopost` |
 | T-003 | Fixtures: samples/jobs/2026-08-tropicana, tests/fixtures/hermes/*.json, tests/fixtures/qbxml/*.golden.xml | §5, §9 | | files present | todo | |
 | T-004 | First tests: CSV parser, fingerprint, G1 both orientations, FR-6 routing table, qbXML golden | §8 FR-3/4/6/9 | | `dotnet test` | todo | |

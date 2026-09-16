@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>QbAutopost.Api</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\QbAutopost.Core\QbAutopost.Core.csproj" />
+    <ProjectReference Include="..\QbAutopost.QuickBooks\QbAutopost.QuickBooks.csproj" />
+  </ItemGroup>
+
+</Project>
