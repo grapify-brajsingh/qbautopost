@@ -107,7 +107,8 @@ T-609 checklist (human):
 - [ ] `-Step post -JobId <id> -ConfirmCopy` → `posted` or `partial` as expected; transactions visible in QuickBooks with the right account, payee, date, amount and memo
 - [ ] Posting sends `query-1…n.qbxml` first: check the `query-*.response.qbxml` files show status 0 or 1 (confirms `DepositQuery` accepts `AccountFilter`, Q-36)
 - [ ] `response.qbxml`: each `*AddRs` has `TxnID`, `EditSequence` and `Amount`/`DepositTotal` equal to the statement (G5, T-605)
-- [ ] Re-run the same folder with `force=true` and post again → every line skipped `already-posted`; then undo, re-run and post → lines already in QuickBooks are skipped `already-in-quickbooks` only if they were not undone (G4 live check)
+- [ ] Re-run the same folder with `force=true` and post again → every line skipped `already-posted` (G4 ledger check)
+- [ ] G4 live check: on the copy, enter one statement line by hand (same account, date, amount, payee), then dry run and post a folder that contains it → that line is skipped `already-in-quickbooks`; with the date moved by 1–3 days it is held `possible-duplicate`
 - [ ] `-Step undo -BatchId '<id>#<n>' -ConfirmCopy` → all deleted; `undo-*.response.qbxml` shows status 0 per `TxnDelRs`; transactions gone in QuickBooks
 - [ ] With QuickBooks closed: `-Step health` → 503 with a clear message, and a post ends `partial` "nothing posted"
 - [ ] COM constants confirmed (`OpenConnection2` local = 1, `BeginSession` DoNotCare = 2, `QbSession.cs`)
