@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="13.0"?>
+<QBXML>
+  <QBXMLMsgsRq onError="continueOnError">
+    <DepositAddRq requestID="0b79b4babdcbf7a4">
+      <DepositAdd>
+        <TxnDate>2026-08-08</TxnDate>
+        <DepositToAccountRef>
+          <FullName>Chase Checking 4521</FullName>
+        </DepositToAccountRef>
+        <Memo>DEPOSIT PALM COURT RENTALS</Memo>
+        <DepositLineAdd>
+          <EntityRef>
+            <FullName>Palm Court Rentals LLC</FullName>
+          </EntityRef>
+          <AccountRef>
+            <FullName>Rental Income</FullName>
+          </AccountRef>
+          <Memo>DEPOSIT PALM COURT RENTALS</Memo>
+          <Amount>2400.00</Amount>
+        </DepositLineAdd>
+      </DepositAdd>
+    </DepositAddRq>
+  </QBXMLMsgsRq>
+</QBXML>

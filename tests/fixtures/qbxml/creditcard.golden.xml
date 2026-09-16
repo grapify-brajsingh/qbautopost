@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="13.0"?>
+<QBXML>
+  <QBXMLMsgsRq onError="continueOnError">
+    <CreditCardChargeAddRq requestID="a115e997de486513">
+      <CreditCardChargeAdd>
+        <AccountRef>
+          <FullName>Chase Sapphire 7788</FullName>
+        </AccountRef>
+        <PayeeEntityRef>
+          <FullName>Amazon</FullName>
+        </PayeeEntityRef>
+        <TxnDate>2026-08-03</TxnDate>
+        <RefNumber>ACH</RefNumber>
+        <Memo>AMAZON.COM*RT4Y1 AMZN.COM/BILL</Memo>
+        <ExpenseLineAdd>
+          <AccountRef>
+            <FullName>Office Supplies</FullName>
+          </AccountRef>
+          <Amount>62.18</Amount>
+          <Memo>AMAZON.COM*RT4Y1 AMZN.COM/BILL</Memo>
+        </ExpenseLineAdd>
+      </CreditCardChargeAdd>
+    </CreditCardChargeAddRq>
+    <CreditCardCreditAddRq requestID="12e118defc774554">
+      <CreditCardCreditAdd>
+        <AccountRef>
+          <FullName>Chase Sapphire 7788</FullName>
+        </AccountRef>
+        <PayeeEntityRef>
+          <FullName>Amazon</FullName>
+        </PayeeEntityRef>
+        <TxnDate>2026-08-14</TxnDate>
+        <RefNumber>ACH</RefNumber>
+        <Memo>AMAZON.COM*RF8K2 AMZN.COM/BILL</Memo>
+        <ExpenseLineAdd>
+          <AccountRef>
+            <FullName>Office Supplies</FullName>
+          </AccountRef>
+          <Amount>15.99</Amount>
+          <Memo>AMAZON.COM*RF8K2 AMZN.COM/BILL</Memo>
+        </ExpenseLineAdd>
+      </CreditCardCreditAdd>
+    </CreditCardCreditAddRq>
+  </QBXMLMsgsRq>
+</QBXML>

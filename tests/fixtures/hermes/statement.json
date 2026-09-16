@@ -1,0 +1,18 @@
+{
+  "accountLast4": "4521",
+  "kind": "bank",
+  "periodStart": "2026-08-01",
+  "periodEnd": "2026-08-31",
+  "openingBalance": 13195.87,
+  "closingBalance": 10230.45,
+  "transactionCount": 7,
+  "rows": [
+    { "date": "2026-08-02", "description": "ONLINE TRANSFER TO CHASE CARD 7788", "direction": "debit", "amount": 1500.00, "checkNo": null, "balance": 11695.87 },
+    { "date": "2026-08-05", "description": "CHECK 1043", "direction": "debit", "amount": 420.00, "checkNo": "1043", "balance": 11275.87 },
+    { "date": "2026-08-08", "description": "DEPOSIT PALM COURT RENTALS", "direction": "credit", "amount": 2400.00, "checkNo": null, "balance": 13675.87 },
+    { "date": "2026-08-12", "description": "ACH DEBIT FPL ELECTRIC UTILITY", "direction": "debit", "amount": 311.40, "checkNo": null, "balance": 13364.47 },
+    { "date": "2026-08-15", "description": "ACH DEBIT UNKNOWN PLUMBER SVC", "direction": "debit", "amount": 3199.70, "checkNo": null, "balance": 10164.77 },
+    { "date": "2026-08-22", "description": "HOME DEPOT #4521 NOIDA", "direction": "debit", "amount": 184.32, "checkNo": null, "balance": 9980.45 },
+    { "date": "2026-08-28", "description": "DEPOSIT SUNRISE PROPERTY MGMT", "direction": "credit", "amount": 250.00, "checkNo": null, "balance": 10230.45 }
+  ]
+}

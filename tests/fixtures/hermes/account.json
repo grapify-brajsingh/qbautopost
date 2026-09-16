@@ -1,0 +1,6 @@
+{
+  "account": "Repairs and Maintenance",
+  "confidence": 0.82,
+  "reason": "Invoice lists plumbing fittings and a pipe wrench; vendor is a hardware store.",
+  "alternatives": ["Office Supplies", "Utilities"]
+}

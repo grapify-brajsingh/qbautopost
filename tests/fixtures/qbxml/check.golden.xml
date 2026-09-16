@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="13.0"?>
+<QBXML>
+  <QBXMLMsgsRq onError="continueOnError">
+    <CheckAddRq requestID="2bfd9134c296636c">
+      <CheckAdd>
+        <AccountRef>
+          <FullName>Chase Checking 4521</FullName>
+        </AccountRef>
+        <PayeeEntityRef>
+          <FullName>Florida Power &amp; Light</FullName>
+        </PayeeEntityRef>
+        <RefNumber>ACH</RefNumber>
+        <TxnDate>2026-08-12</TxnDate>
+        <Memo>ACH DEBIT FPL ELECTRIC UTILITY</Memo>
+        <IsToBePrinted>false</IsToBePrinted>
+        <ExpenseLineAdd>
+          <AccountRef>
+            <FullName>Utilities</FullName>
+          </AccountRef>
+          <Amount>311.40</Amount>
+          <Memo>ACH DEBIT FPL ELECTRIC UTILITY</Memo>
+        </ExpenseLineAdd>
+      </CheckAdd>
+    </CheckAddRq>
+    <CheckAddRq requestID="a74fe7e5317dc140">
+      <CheckAdd>
+        <AccountRef>
+          <FullName>Chase Checking 4521</FullName>
+        </AccountRef>
+        <RefNumber>1043</RefNumber>
+        <TxnDate>2026-08-05</TxnDate>
+        <Memo>CHECK 1043</Memo>
+        <IsToBePrinted>false</IsToBePrinted>
+        <ExpenseLineAdd>
+          <AccountRef>
+            <FullName>Ask My Accountant</FullName>
+          </AccountRef>
+          <Amount>420.00</Amount>
+          <Memo>CHECK 1043</Memo>
+        </ExpenseLineAdd>
+      </CheckAdd>
+    </CheckAddRq>
+  </QBXMLMsgsRq>
+</QBXML>

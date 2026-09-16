@@ -1,0 +1,28 @@
+<?xml version="1.0" ?>
+<QBXML>
+  <QBXMLMsgsRs>
+    <CheckAddRs requestID="2bfd9134c296636c" statusCode="0" statusSeverity="Info" statusMessage="Status OK">
+      <CheckRet>
+        <TxnID>1A2B-1787000001</TxnID>
+        <TimeCreated>2026-09-01T10:00:00-04:00</TimeCreated>
+        <EditSequence>1787000001</EditSequence>
+        <TxnNumber>101</TxnNumber>
+        <AccountRef>
+          <FullName>Chase Checking 4521</FullName>
+        </AccountRef>
+        <RefNumber>ACH</RefNumber>
+        <TxnDate>2026-08-12</TxnDate>
+        <Amount>311.40</Amount>
+      </CheckRet>
+    </CheckAddRs>
+    <CreditCardChargeAddRs requestID="a115e997de486513" statusCode="3140" statusSeverity="Error" statusMessage="There is an invalid reference to QuickBooks Account &quot;Office Supplies&quot; in the CreditCardCharge." />
+    <DepositAddRs requestID="0b79b4babdcbf7a4" statusCode="0" statusSeverity="Info" statusMessage="Status OK">
+      <DepositRet>
+        <TxnID>1A2D-1787000003</TxnID>
+        <EditSequence>1787000003</EditSequence>
+        <TxnDate>2026-08-08</TxnDate>
+        <DepositTotal>2400.00</DepositTotal>
+      </DepositRet>
+    </DepositAddRs>
+  </QBXMLMsgsRs>
+</QBXML>
