@@ -1,118 +1,91 @@
 # Session Handoff — QbAutopost
 
-Written: 2026-09-17 (session 8) · M0–M5 done · M6 done except T-609 (ready-for-human, server) · Next step: **M7** (rules, logging, hardening), starting with **T-701**
+Written: 2026-09-17 (session 9) · M0–M5 and M7 done · M6 done except T-609 (ready-for-human, server) · Next step: **M8** (deploy), starting with **T-801**
 
 ## 1. Start the next session with this prompt
 
 ```
 Read handoff.md, CLAUDE.md, docs/tracker.md and docs/adr/README.md.
-Check the tracker "Questions" table for owner answers (Q-1…Q-39) and apply any
-that change behaviour first. Then continue with the first todo task in M7 (T-701).
+Check the tracker "Questions" table for owner answers (Q-1…Q-41) and apply any
+that change behaviour first. Then continue with the first todo task in M8 (T-801).
 One task at a time, tests green, tracker updated, one commit per task.
+T-803 and T-804 are [server]: prepare them, set ready-for-human, never done.
 ```
 
 ## 2. Project in one paragraph
 
-QbAutopost is a single .NET 8 app. It takes a job folder (`requirement.txt` plus bank/card statements plus optional invoices) and turns it into QuickBooks Desktop transactions: Checks, credit-card charges and credits, and Deposits. Hermes, an OpenAI-compatible model API on `127.0.0.1:8642`, handles reading and judgment. Deterministic code handles all money. The contract is `docs/spec.md`, the milestones are in `docs/plan.md`, progress is in `docs/tracker.md`, and the agent rules are in `CLAUDE.md`.
+QbAutopost is a single .NET 8 app. It takes a job folder (`requirement.txt` plus bank/card statements plus optional invoices) and turns it into QuickBooks Desktop transactions: Checks, credit-card charges and credits, and Deposits. Hermes, an OpenAI-compatible model API on `127.0.0.1:8642`, handles reading and judgment. Deterministic code handles all money. The contract is `docs/spec.md`, the milestones are in `docs/plan.md`, progress is in `docs/tracker.md`, the operator guide is `docs/runbook.md`, and the agent rules are in `CLAUDE.md`.
 
 ## 3. State at handoff
 
 | Item | State |
 |---|---|
 | Repo | `D:\qb_post`, branch `main`, remote `origin` = https://github.com/grapify-brajsingh/qbautopost.git |
-| Push | Session 2–8 commits (T-101…T-609) are **local only**. Push when the owner agrees: `git push origin main` |
+| Push | Session 2–9 commits (T-101…T-705) are **local only**. Push when the owner agrees: `git push origin main` |
 | SDK | pinned to 8.0.x by `global.json` |
 | Build | `dotnet build -warnaserror` → 0 warnings, 0 errors |
-| Tests | 806 passing (Core 673, Api 133) on Windows, 3 consecutive green runs. **Not yet run on Linux.** |
-| Milestones | M0–M5 done; M6 done except **T-609 = ready-for-human** (needs the QuickBooks server); M7–M8 todo |
-| Packages | none added in M6 |
-| Manual check | `scripts/qb-server-check.ps1` was run against a local host with `QuickBooks:Fake=true` (health, sync, undo 404, post guard). The COM path has **never run**: there is no QuickBooks on the dev box |
+| Tests | 886 passing (Core 703, Api 183) on Windows, 2 consecutive green runs. **Not yet run on Linux.** |
+| Milestones | M0–M5, M7 done; M6 done except **T-609 = ready-for-human**; M8 todo (T-801, T-802 agent work; T-803, T-804 [server]) |
+| Packages | M7 added `Serilog.AspNetCore` 8.0.1 and `Serilog.Sinks.File` 5.0.0 (both on the allowed list) |
+| Manual check | `dotnet run` (Development, `QuickBooks:Fake=true`, a Hermes key in the environment) → console and `src/QbAutopost.Api/data/logs/qbautopost-yyyyMMdd.log` show `[jobId]`, and the key is masked. The COM path has **never run** (no QuickBooks on the dev box) |
 
-## 4. What M6 added (code map delta)
+## 4. What M7 added (code map delta)
 
 ```
-src/QbAutopost.QuickBooks/
-  QbSession.cs      late-bound QBXMLRP2 (OpenConnection2 "",AppName,1 → BeginSession file,2 → ProcessRequest → EndSession/
-                    CloseConnection); open failures → QuickBooksUnavailableException, ProcessRequest COM error →
-                    QuickBooksCallException; [SupportedOSPlatform("windows")]
-  QbGateway.cs      IQbGateway: one session per call on its own STA thread (QbGatewayOptions AppName, CompanyFile)
 src/QbAutopost.Core/
-  Abstractions/IQbGateway.cs      + QuickBooksBusyException, QuickBooksCallException(ErrorCode)
-  Gateway/ResilientQbGateway.cs   one call at a time (SemaphoreSlim), busy timeout (abandoned call keeps the lock),
-                                  one retry after RetryDelay only when repeating cannot double-post (Q-34, Q-37)
-  Gates/LiveDuplicateGate.cs      G4 vs QuickBooks while posting; writes output/query-<n>.qbxml + .response.qbxml
-  Gates/BackupGuard.cs            FR-11 backup age → "backup-too-old: …"
-  QbXml/QbMessageSet.cs           shared writer for query/delete message sets (same layout as QbXmlBuilder)
-  QbXml/QbListQuery.cs            Account/Vendor/Customer query (ActiveOnly) + parser → QbLists
-  QbXml/QbTxnQuery.cs             Check/CreditCardCharge/CreditCardCredit/Deposit query + parser → ExistingTxn
-  QbXml/QbTxnDelete.cs            TxnDelRq message set + parser (requestID = 1-based position)
-  QbXml/QbHostQuery.cs            HostQueryRq + parser
-  QbXml/QbStatus.cs               statusCode/statusMessage pair, QbStatusException (QuickBooks refused a read)
-  QbXml/QbXmlRequests.cs          IsReadOnly(qbxml): every request is *QueryRq
-  Pipeline/QbListSync.cs          FR-15 (writes qb-lists.json; audit in qb-audit/ next to it)
-  Pipeline/BatchUndo.cs           FR-13 (ledger entries/batch undone)
-  Pipeline/QbHealth.cs            FR-16
-  Pipeline/JobPipeline.cs         PostAsync: backup guard → G4 (rewrites analysis.json/request.qbxml/sheets) → add → G5
-  Pipeline/PipelineOptions.cs     + DuplicateWindowDays, BackupFolder, BackupMaxAgeHours
-  Jobs/JobStatus.cs               + posting → failed (backup guard only)
-  Mapping/Rules.cs                + AccountNames()
-  Models/HoldReasons.cs           + quickbooks-busy, backup-too-old, duplicate-check-failed
-  Output/OutputDocuments.cs       SkippedItem.Note (TxnID for already-in-quickbooks)
+  Mapping/RulesEditor.cs      FR-14: SetAlias(fragment, name, AliasKind) / SetVendorAccount(vendor, account) → RuleChange
+                              (Section, Key, Value, Previous). Edits rules.json through JsonNode under a process-wide lock,
+                              validates old + new content with Rules.Parse, writes with AtomicFile. Names checked against
+                              qb-lists.json (exact) only when the file exists; RuleValidationException → 400
+  Mapping/Rules.cs            Load now reads with AtomicFile.ReadAllText (share-safe with the editor)
 src/QbAutopost.Api/
-  QuickBooks/QbConnection.cs      DI switch: Sdk (Windows) / Simulated (QuickBooks:Fake, Development|Testing only) /
-                                  Unavailable; Program wraps QbConnection.Gateway in ResilientQbGateway
-  QuickBooks/SimulatedQuickBooks.cs  in-memory company answering adds, G4 queries, lists, HostQuery, TxnDel
-  QuickBooks/SimulatedQbGateway.cs   QuickBooks:Fake gateway (TxnIDs SIM-n)
-  Endpoints/QuickBooksEndpoints.cs   POST /qb/sync-lists; QuickBooksProblem(ex) → 503 (unavailable/busy/COM) or 502
-  Endpoints/BatchEndpoints.cs        POST /batches/{id}/undo (id has '#', send %23); job → undone
-  Endpoints/HealthEndpoints.cs       + GET /health/quickbooks
-  Jobs/JobQueue.cs, JobWorker.cs     JobAction.Exclusive + queue.RunExclusiveAsync(label, work, ct): undo and sync run
-                                     on the single worker; errors go back to the caller, never change a job's status
-  Configuration/AppSettings.cs       QuickBooks:Fake, QuickBooks:RetryDelaySeconds; BackupFolder resolved to absolute
-scripts/qb-server-check.ps1          T-609 helper (ASCII only: Windows PowerShell 5.1 misreads UTF-8 scripts)
-tests/  Core: Gateway/ResilientQbGatewayTests, Gates/{LiveDuplicateGate,BackupGuard}Tests, QbXml/{QbListQuery,QbTxnQuery,
-        QbTxnDelete,QbXmlRequests}Tests, Pipeline/{QbListSync,BatchUndo,QbHealth}Tests
-        Api: {QbConnection,SyncListsApi,DuplicateCheckApi,PostingSafetyApi,PostResultApi,UndoApi,QuickBooksHealthApi,
-        QuickBooksFlowApi}Tests; JobWorkerTests (+exclusive work)
-        fixtures/qbxml: list-query/txn-query-check/txn-query-deposit/txn-del/host-query *.golden.xml + response samples
+  Endpoints/RulesEndpoints.cs POST /rules/alias {fragment,name,kind}, POST /rules/account {vendor,account};
+                              400 validation, 500 when rules.json is missing/broken (file untouched)
+  Logging/LoggingSetup.cs     builder.AddQbAutopostLogging(): Serilog console + file Paths:Logs/qbautopost-.log (daily,
+                              31 kept, shared), levels from Serilog:MinimumLevel only; sinks fixed in code
+  Logging/SecretScrubber.cs   masks configured secret values, labelled values (X-Api-Key:, Bearer, apiKey=…), secret-named
+                              properties, and exception text (ScrubbedException)
+  Logging/ScrubbingSink.cs    wrapper sink (LoggerSinkConfiguration.Wrap)
+  Logging/JobIdEnricher.cs    jobId = worker scope, else {JobId} in the message, else "-"
+  Program.cs                  AddQbAutopostLogging, RulesEditor singleton, MapRulesEndpoints
+  appsettings.json            "Logging" section replaced by "Serilog": { "MinimumLevel": … }
+docs/runbook.md               operator guide (T-705)
+tests/  Core: Mapping/RulesEditorTests (26), Gates/BackupGuardTests (+4)
+        Api: RulesApiTests (13), LoggingApiTests (5), Logging/SecretScrubberTests (19), Configuration/AppSettingsTests (5),
+             PostingSafetyApiTests (+2), JobsApiTests (+3), RecoveryTests (+2), UndoApiTests (+1)
 ```
 
 ## 5. Things the next session must know
 
-1. **No owner answers yet.** Q-1…Q-39 all use the conservative choices. New in M6: Q-34 (fake/DI switch, gateway lock and busy timeout), Q-35 (sync-lists details), Q-36 (G4 details), Q-37 (retry only when it cannot double-post; `posting → failed` for the backup guard), Q-38 (undo details), Q-39 (health details). Q-27 (T2/T3/T4 run again at post time) is still open and matters before go-live.
-2. **Behaviour changes in M6:**
-   - Posting now sends one read-only query message set per (kind, account) **before** the add. Tests that counted `Gateway.Requests` now count `Gateway.Writes`. `Gateway.Queries` gives the read-only ones.
-   - `FakeQbGateway` is backed by `SimulatedQuickBooks` (`Company` property). `Throw`, `Hang`, `RejectLine` and `FailWritesTimes` apply to write message sets; `QueryThrow` and `QueryHang` apply to read-only ones; `CompanyFileThrow` applies to `CurrentCompanyFileAsync`. Seed data with `Company.Accounts/Vendors/Customers` or `Company.AddExisting(...)`.
-   - `ApiFactory` replaces `QbConnection`, not `IQbGateway`. The host always wraps the fake in `ResilientQbGateway`, and `QuickBooks:RetryDelaySeconds` is 0.01 in tests. `BusyTimeoutSeconds` is an int, so hang tests use `WithSetting("QuickBooks:BusyTimeoutSeconds", "1")`.
-   - A stale backup makes the job `failed` (`backup-too-old: …`) from `posting`, with nothing sent and no ledger record.
-   - A failed G4 check (gateway error) → `partial` "nothing posted: duplicate check (G4) failed", with no ledger record.
-3. **M7 hints:**
-   - **T-701** `POST /rules/alias`, `/rules/account`. `samples/rules.json` has `//` comments, which `JsonOptions` accepts on read, but a plain re-serialise drops them. Decide whether to keep comments (e.g. edit through `JsonNode` and accept the loss, or keep a comment-free file), and record a Q-row. Rules are already loaded fresh for each job (`Rules.Load` in `RunAnalysisAsync`), so "hot reload" is mostly done. Serialise writes with the worker (`queue.RunExclusiveAsync`) or a lock, and write atomically (`AtomicFile`). Validate `account` against `qb-lists.json` when lists exist (`QbListsStore`). `kind` is `vendor|customer` → `PayeeAliases` / `CustomerAliases`.
-   - **T-702** Serilog: `Serilog.AspNetCore` and `Serilog.Sinks.File` are on the allowed list, but no Serilog package is referenced yet. The `JobWorker` already opens a `jobId` scope, but console output does not show scopes. Scrub `X-Api-Key`, `Authorization` and `Hermes:ApiKey`. `Paths.Logs` already exists in settings.
-   - **T-703** The backup-age guard and `failed (backup-too-old)` were done in T-604 (`BackupGuard`, `PostingSafetyApiTests`). Confirm the config (`QuickBooks:BackupFolder`, `BackupMaxAgeHours`, relative path resolution) and close it.
-   - **T-704** `GET /jobs?status=` was done in T-104 (`JobsApiTests.Should_ListJobsAndFilterByStatus_When_Asked`). Confirm it (including `undone`) and close it.
-   - **T-705** `docs/runbook.md`: use `scripts/qb-server-check.ps1`, the T-609 checklist, the hold/skip codes in `HoldReasons.cs`, and the Q-rows for operator-facing behaviour (undo 3120 failures, "nothing posted" vs "run duplicates before re-post").
-4. **Test helpers:** `ScriptedHermes` (Core) validates like the real client. `TestStatementReader`, `TestInvoiceExtractor` and `TestAccountChooser` build the pipeline's readers. In `JobPipelineTests`, `_accountAnswer`, `_invoiceAnswer` and `_rulesFile` (via `UseRules`) script a run. `PostResultApiTests.UseRulesThatResolveEverything()` makes all 10 sample lines postable (the job ends `posted`). `QuickBooksFlowApiTests.SimulatedHostFactory` shows how to host without the test gateway.
+1. **No owner answers yet.** Q-1…Q-41 all use the conservative choices. New in M7: Q-40 (rules teaching: comments dropped on rewrite, names also checked against lists, 3-character fragments, 500 on a broken file, lock instead of the worker) and Q-41 (logging details). Q-27 (T2/T3/T4 run again at post time) is still open and matters before go-live.
+2. **Behaviour changes in M7:**
+   - Teaching a rule rewrites `rules.json` and **drops its `//` comments**. Tests must never teach against `Fixtures.SampleRules`: copy it into the factory's temp dir and use `WithSetting("Company:RulesFile", copy)` (see `RulesApiTests`).
+   - Logging is Serilog now. MS `Logging:LogLevel` settings are ignored; use `Serilog:MinimumLevel`. Every test host writes a log file under its temp `data/logs` (shared mode, so a parent and a `WithSetting` host can both write).
+   - T-703 and T-704 needed no production change (tests only).
+3. **M8 hints:**
+   - **T-801** `deploy/hermes/docker-compose.yml`, `.env.example`, `deploy/README-hermes.md`. Spec §4: port 8642 published on **127.0.0.1 only**, `API_SERVER_KEY` required, cloud provider key in the container (spec Q5). The spec never names the Hermes image: take it from an `.env` variable (e.g. `HERMES_IMAGE`) with no guessed default that could pull the wrong thing, and record a Q-row. `.env` is git-ignored; `.env.example` must hold placeholders only (rule 6). Docker 29.3 CLI is on the dev box, so `docker compose -f deploy/hermes/docker-compose.yml --env-file deploy/hermes/.env.example config` is the verification. Include the `.wslconfig` memory-cap note and the Windows 10/11 Docker Desktop alternative.
+   - **T-802** `deploy/start-all.ps1` (WSL/Docker up → compose up → wait for `/health/hermes` → start the API) and `deploy/install-task.ps1` (Task Scheduler at logon, interactive, never a service). Keep scripts **ASCII only** (Windows PowerShell 5.1 reads them as ANSI). Add a `-WhatIf`/dry-run switch so they can be exercised on the dev box; a real run needs the server, so the row may need `ready-for-human` for the server part (plan says "dry run on server"). Parse-check with `powershell -NoProfile -Command "[System.Management.Automation.Language.Parser]::ParseFile(...)"`. `docs/runbook.md` §2.4 already describes both scripts; keep it in sync.
+   - **T-803 / T-804 [server]**: add checklists to the tracker (shadow week: five real folders dry run, diff against manual entry, rules taught via `/rules/*`; go-live: `DryRunDefault=false` for one company, monitor a week). Set both `ready-for-human`.
+4. **Test helpers:** `ScriptedHermes` (Core) validates like the real client. `TestStatementReader`, `TestInvoiceExtractor` and `TestAccountChooser` build the pipeline's readers. `PostResultApiTests.UseRulesThatResolveEverything()` makes all 10 sample lines postable; `RulesApiTests.Should_UseTaughtRulesInNextJob_When_RulesChangeBetweenJobs` does the same through the teaching endpoints. `QuickBooksFlowApiTests.SimulatedHostFactory` shows how to host without the test gateway. `RecoveryTests.SeedJob` writes a job index + `status.json` as a previous host would.
 5. **Still true from earlier sessions:**
    - JSON enums are camelCase.
    - Read shared JSON with `AtomicFile.ReadAllText`.
-   - `ApiFactory.WithSetting(key, value)` is not chainable. Use `WithWebHostBuilder` when you need several keys.
-   - Console logs lack the `jobId` scope until T-702.
-   - Sample output and `src/QbAutopost.Api/data/` are git-ignored.
-   - `.gitattributes` marks binary files.
-   - A golden mismatch in `AnalysisGoldenTests` writes `sample-analysis.actual.json` next to the test assembly.
-6. **Running by hand:** `dotnet run` needs `ASPNETCORE_ENVIRONMENT=Development` (or a real `QBAUTOPOST__Api__ApiKey`). Add `QBAUTOPOST__QuickBooks__Fake=true` to simulate QuickBooks locally. A job still fails at T1 without a running Hermes (Q-22).
+   - `ApiFactory.WithSetting(key, value)` is not chainable. Use `WithWebHostBuilder` when you need several keys (see `PostingSafetyApiTests.Should_UseConfiguredMaxAge_When_BackupMaxAgeHoursIsSet`).
+   - `FakeQbGateway` is backed by `SimulatedQuickBooks`; `Gateway.Writes` / `Gateway.Queries` split add/delete from read-only message sets.
+   - Sample output and `src/QbAutopost.Api/data/` are git-ignored. `.gitattributes` marks binary files.
+6. **Running by hand:** `dotnet run --project src/QbAutopost.Api` needs `ASPNETCORE_ENVIRONMENT=Development` (or a real `QBAUTOPOST__Api__ApiKey`). Add `QBAUTOPOST__QuickBooks__Fake=true` to simulate QuickBooks, and `QBAUTOPOST__Api__Bind=http://127.0.0.1:5099` to avoid a port clash. A job still fails at T1 without a running Hermes (Q-22).
 7. **Tooling:**
-   - The GateGuard hook may block the first edit or creation of a file; retrying works.
-   - Windows PowerShell 5.1 reads `.ps1` files as ANSI. Keep scripts ASCII only, and edit `docs/tracker.md` with the Edit tool, not a PowerShell script.
+   - The GateGuard hook may block the first edit or creation of a file; state the facts and retry.
+   - Python is not installed. Edit `docs/tracker.md` with the Edit tool (or a bash heredoc append for the Session log), not a PowerShell script.
 
-## 6. Next milestone: M7 (rules, logging, hardening)
+## 6. Next milestone: M8 (deploy)
 
-See `docs/plan.md` T-701…T-705 and these spec sections: FR-14 (rules teaching), §14 (logging, secrets), FR-11 (backup guard), §6 (`GET /jobs`).
+See `docs/plan.md` T-801…T-804 and spec §4 (deployment context), §12 (configuration), §14 (security), plus `docs/runbook.md` §2.
 
 Open follow-ups:
 - **T-609 on the server** (human): run the checklist in `docs/tracker.md` and record the bitness. It also confirms the COM constants, `DepositQuery` with `AccountFilter`, and real `*AddRs` / `TxnDelRs` answers.
+- A person should read `docs/runbook.md` once on the server (plan §6 definition of done).
 - Run `dotnet test` on Linux (a CI workflow would cover this).
 - Decide whether `docs/CLAUDE.md` or the root `CLAUDE.md` is the single copy.
-- Push sessions 2–8.
+- Push sessions 2–9.
 - Get the owner's answer to Q-27 (re-running T2/T3/T4 at post time) before posting goes live.
