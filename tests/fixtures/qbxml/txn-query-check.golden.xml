@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="13.0"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <CheckQueryRq requestID="1">
+      <TxnDateRangeFilter>
+        <FromTxnDate>2026-07-30</FromTxnDate>
+        <ToTxnDate>2026-08-25</ToTxnDate>
+      </TxnDateRangeFilter>
+      <AccountFilter>
+        <FullName>Chase Checking 4521</FullName>
+      </AccountFilter>
+    </CheckQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>

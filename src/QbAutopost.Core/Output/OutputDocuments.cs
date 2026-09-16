@@ -180,7 +180,8 @@ public sealed record HeldItem(
         t.Reason, t.Note, t.Candidates);
 }
 
-public sealed record SkippedItem(string RequestId, string File, int LineNo, string? Reason)
+/// <summary><see cref="Note"/> names the QuickBooks TxnID for <c>already-in-quickbooks</c> (T-603).</summary>
+public sealed record SkippedItem(string RequestId, string File, int LineNo, string? Reason, string? Note = null)
 {
-    public static SkippedItem From(MappedTxn t) => new(t.RequestId, t.Line.SourceFile, t.Line.LineNo, t.Reason);
+    public static SkippedItem From(MappedTxn t) => new(t.RequestId, t.Line.SourceFile, t.Line.LineNo, t.Reason, t.Note);
 }

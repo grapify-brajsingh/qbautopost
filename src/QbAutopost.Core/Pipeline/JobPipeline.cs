@@ -114,6 +114,19 @@ public sealed class JobPipeline(
             return new PostOutcome { Status = JobStatus.Partial, Error = "nothing posted: " + failReason, Analysis = analysis };
         }
 
+        if (analysis.ToPost.Count > 0)
+        {
+            try
+            {
+                analysis = await CheckQuickBooksDuplicatesAsync(analysis, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Only queries were sent, so nothing changed in QuickBooks: no ledger record, the job can be re-run.
+                return NothingPosted(analysis, $"duplicate check (G4) failed: {ex.Message}", ex.Message);
+            }
+        }
+
         var toPost = analysis.ToPost;
         var analysisHeld = analysis.Lines.Count(l => l.Decision == Decision.Hold);
         if (toPost.Count == 0)
@@ -125,7 +138,7 @@ public sealed class JobPipeline(
         string? error = null;
         try
         {
-            // TODO(T-603, T-604): live duplicate query (G4), retry-once, busy timeout and backup-age guard arrive in M6.
+            // TODO(T-604): retry-once and backup-age guard.
             var response = await gateway.ProcessAsync(analysis.QbXml, ct);
             JobOutputWriter.WriteResponse(analysis.Input.OutputDir, response);
             verification = PostVerifier.Verify(toPost, QbXmlParser.ParseAddResponse(response));
@@ -133,13 +146,7 @@ public sealed class JobPipeline(
         catch (QuickBooksUnavailableException ex)
         {
             // Nothing reached QuickBooks: no ledger record, so the job can simply be re-run.
-            return new PostOutcome
-            {
-                Status = JobStatus.Partial,
-                Error = $"nothing posted: QuickBooks unavailable ({ex.Message})",
-                Analysis = analysis,
-                Rejected = toPost.Select(t => t with { Decision = Decision.Hold, Reason = HoldReasons.QuickBooksUnavailable, Note = ex.Message }).ToList(),
-            };
+            return NothingPosted(analysis, $"QuickBooks unavailable ({ex.Message})", ex.Message);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -169,6 +176,40 @@ public sealed class JobPipeline(
             Rejected = verification.Rejected,
         };
     }
+
+    /// <summary>
+    /// FR-8 G4 against QuickBooks (posting only). The analysis output (<c>analysis.json</c>, <c>request.qbxml</c>, sheets)
+    /// is rewritten so it shows what is actually sent.
+    /// </summary>
+    private async Task<AnalysisResult> CheckQuickBooksDuplicatesAsync(AnalysisResult analysis, CancellationToken ct)
+    {
+        var gate = new LiveDuplicateGate(gateway, options.QbXmlVersion, options.DuplicateWindowDays);
+        var lines = await gate.CheckAsync(analysis.Lines, analysis.Input.OutputDir, ct);
+        if (lines.SequenceEqual(analysis.Lines))
+        {
+            return analysis;
+        }
+
+        analysis = analysis with
+        {
+            Lines = lines,
+            QbXml = QbXmlBuilder.BuildAddRequest(lines.Where(m => m.Decision == Decision.Post).ToList(), options.QbXmlVersion),
+        };
+        JobOutputWriter.WriteRequestAndSheets(analysis.Input.OutputDir, analysis);
+        JobOutputWriter.WriteAnalysis(analysis.Input.OutputDir, analysis);
+        return analysis;
+    }
+
+    /// <summary>A post that sent no transaction: <c>partial</c> "nothing posted", every postable line held, no ledger record.</summary>
+    private static PostOutcome NothingPosted(AnalysisResult analysis, string why, string note) => new()
+    {
+        Status = JobStatus.Partial,
+        Error = "nothing posted: " + why,
+        Analysis = analysis,
+        Rejected = analysis.ToPost
+            .Select(t => t with { Decision = Decision.Hold, Reason = HoldReasons.QuickBooksUnavailable, Note = note })
+            .ToList(),
+    };
 
     private async Task<StatementSummary> ReadStatementAsync(JobFile file, Rules rules, JobSpec spec, string outputDir, CancellationToken ct)
     {

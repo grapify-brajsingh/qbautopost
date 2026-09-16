@@ -12,4 +12,7 @@ public sealed record PipelineOptions
     public required string LedgerFile { get; init; }
     public required string QbListsFile { get; init; }
     public string QbXmlVersion { get; init; } = QbXmlBuilder.DefaultVersion;
+
+    /// <summary>FR-8 <c>QuickBooks:DuplicateWindowDays</c> (W).</summary>
+    public int DuplicateWindowDays { get; init; } = 3;
 }

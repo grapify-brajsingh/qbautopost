@@ -1,0 +1,23 @@
+<?xml version="1.0" ?>
+<QBXML>
+  <QBXMLMsgsRs>
+    <DepositQueryRs requestID="1" statusCode="0" statusSeverity="Info" statusMessage="Status OK">
+      <DepositRet>
+        <TxnID>1A2D-1786000003</TxnID>
+        <EditSequence>1786000003</EditSequence>
+        <TxnDate>2026-08-08</TxnDate>
+        <DepositToAccountRef>
+          <FullName>Chase Checking 4521</FullName>
+        </DepositToAccountRef>
+        <DepositTotal>2400.00</DepositTotal>
+        <DepositLineRet>
+          <TxnLineID>1A2E-1786000003</TxnLineID>
+          <EntityRef>
+            <FullName>Palm Court Rentals LLC</FullName>
+          </EntityRef>
+          <Amount>2400.00</Amount>
+        </DepositLineRet>
+      </DepositRet>
+    </DepositQueryRs>
+  </QBXMLMsgsRs>
+</QBXML>

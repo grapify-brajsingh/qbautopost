@@ -83,6 +83,7 @@ builder.Services.AddSingleton(sp =>
         LedgerFile = s.Paths.Ledger,
         QbListsFile = s.Paths.QbLists,
         QbXmlVersion = s.QuickBooks.QbXmlVersion,
+        DuplicateWindowDays = s.QuickBooks.DuplicateWindowDays,
     };
 });
 builder.Services.AddSingleton<JobPipeline>();

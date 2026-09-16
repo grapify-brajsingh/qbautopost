@@ -35,6 +35,9 @@ public static class HoldReasons
     public const string QuickBooksUnavailable = "quickbooks-unavailable";
     public const string AmountMismatch = "amount-mismatch";
 
+    // SPEC-GAP T-603: QuickBooks refused or garbled the G4 duplicate query for the line's (kind, account).
+    public const string DuplicateCheckFailed = "duplicate-check-failed";
+
     // SPEC-GAP T-301: a statement file the extractor cannot open (corrupt or encrypted workbook) is held whole.
     public const string UnreadableStatement = "unreadable-statement";
 

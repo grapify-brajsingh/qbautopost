@@ -52,7 +52,7 @@ public sealed class PostingApiTests : IDisposable
         Assert.Equal(2, view.Counts.Held);
         Assert.Equal(view.Totals.ToPost, view.Totals.Posted);
         Assert.All(view.Posted, p => Assert.StartsWith("FAKE-", p.TxnId, StringComparison.Ordinal));
-        Assert.Single(_factory.Gateway.Requests);
+        Assert.Single(_factory.Gateway.Writes);
         Assert.True(File.Exists(Path.Combine(folder, "output", "response.qbxml")));
     }
 
@@ -101,7 +101,7 @@ public sealed class PostingApiTests : IDisposable
 
         var view = await Post();
         Assert.Equal("2026-08-tropicana#2", view.BatchId);
-        Assert.Single(_factory.Gateway.Requests); // nothing left to send the second time
+        Assert.Single(_factory.Gateway.Writes); // nothing left to send the second time
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public sealed class PostingApiTests : IDisposable
         Assert.Equal(JobStatus.Partial, view.Status);
         Assert.False(view.DryRun);
         Assert.Equal(8, view.Counts.Posted);
-        Assert.Single(_factory.Gateway.Requests);
+        Assert.Single(_factory.Gateway.Writes);
     }
 
     [Fact]

@@ -1,0 +1,30 @@
+<?xml version="1.0" ?>
+<QBXML>
+  <QBXMLMsgsRs>
+    <CheckQueryRs requestID="1" statusCode="0" statusSeverity="Info" statusMessage="Status OK">
+      <CheckRet>
+        <TxnID>1A2B-1786000001</TxnID>
+        <EditSequence>1786000001</EditSequence>
+        <AccountRef>
+          <FullName>Chase Checking 4521</FullName>
+        </AccountRef>
+        <PayeeEntityRef>
+          <FullName>Florida Power &amp; Light</FullName>
+        </PayeeEntityRef>
+        <RefNumber>ACH</RefNumber>
+        <TxnDate>2026-08-12</TxnDate>
+        <Amount>311.40</Amount>
+      </CheckRet>
+      <CheckRet>
+        <TxnID>1A2C-1786000002</TxnID>
+        <EditSequence>1786000002</EditSequence>
+        <AccountRef>
+          <FullName>Chase Checking 4521</FullName>
+        </AccountRef>
+        <RefNumber>1043</RefNumber>
+        <TxnDate>2026-08-05</TxnDate>
+        <Amount>420.00</Amount>
+      </CheckRet>
+    </CheckQueryRs>
+  </QBXMLMsgsRs>
+</QBXML>
