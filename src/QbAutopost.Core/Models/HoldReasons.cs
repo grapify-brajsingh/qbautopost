@@ -40,6 +40,10 @@ public static class HoldReasons
     public const string HermesFailed = "hermes-failed";
     public const string ExtractionConflict = "extraction-conflict";
 
+    // SPEC-GAP T-401: plan M4 names "unreadable" for an invoice image with OCR disabled; also used for an invoice that
+    // cannot be opened, OCR errors, no text, or text too long for one Hermes request.
+    public const string Unreadable = "unreadable";
+
     // TODO(T-502): replaced by Hermes T4 tiers 3–4; until then a line without a rule/history account is held.
     public const string NoAccountRule = "no-account-rule";
 }

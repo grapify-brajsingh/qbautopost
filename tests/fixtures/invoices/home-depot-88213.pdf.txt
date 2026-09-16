@@ -1,0 +1,17 @@
+SYNTHETIC TEST INVOICE (matches the 184.32 HOME DEPOT line in samples/jobs/2026-08-tropicana)
+THE HOME DEPOT INVOICE
+Store #4521, Noida
+
+Invoice #: 88213
+Invoice Date: 08/21/2026
+Bill To: Tropicana Properties LLC
+
+Qty Description Unit Line
+1 PEX plumbing fittings assortment 97.98 97.98
+1 Pipe wrench, 18 in 74.28 74.28
+
+Subtotal 172.26
+Sales tax 7% 12.06
+TOTAL 184.32
+
+Category: plumbing fittings, repair

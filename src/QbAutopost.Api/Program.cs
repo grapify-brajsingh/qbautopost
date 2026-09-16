@@ -48,7 +48,7 @@ builder.Services.AddHttpClient<IHermesClient, HermesClient>(http => http.Timeout
     .SetHandlerLifetime(Timeout.InfiniteTimeSpan);
 // Prompts load before the host starts: a missing required prompt stops startup (spec §9).
 builder.Services.AddSingleton(PromptLibrary.Load(
-    Path.Combine(AppContext.BaseDirectory, PromptLibrary.DefaultFolder), HermesTask.Spec, HermesTask.Statement));
+    Path.Combine(AppContext.BaseDirectory, PromptLibrary.DefaultFolder), HermesTask.Spec, HermesTask.Statement, HermesTask.Invoice));
 builder.Services.AddSingleton<ISpecReader, HermesSpecReader>();
 builder.Services.AddSingleton<IOcr>(sp =>
 {
@@ -57,6 +57,7 @@ builder.Services.AddSingleton<IOcr>(sp =>
 });
 builder.Services.AddSingleton<StatementLlmExtractor>();
 builder.Services.AddSingleton<StatementReader>();
+builder.Services.AddSingleton<InvoiceExtractor>();
 builder.Services.AddSingleton<IQbGateway, UnconfiguredQbGateway>(); // TODO(T-601): COM gateway / fake switch
 builder.Services.AddSingleton(sp =>
 {

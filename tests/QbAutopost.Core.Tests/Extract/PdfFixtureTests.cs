@@ -5,24 +5,25 @@ using QbAutopost.Core.Tests.TestSupport;
 namespace QbAutopost.Core.Tests.Extract;
 
 /// <summary>
-/// The committed PDF fixtures (<c>tests/fixtures/statements/*.pdf</c>, rendered from the matching <c>.pdf.txt</c>)
-/// read back through <see cref="PdfText"/> with every text line intact, so T2 tests start from real extraction.
+/// The committed PDF fixtures (<c>tests/fixtures/{statements,invoices}/*.pdf</c>, rendered from the matching <c>.pdf.txt</c>)
+/// read back through <see cref="PdfText"/> with every text line intact, so T2 and T3 tests start from real extraction.
 /// </summary>
 public sealed class PdfFixtureTests
 {
     [Theory]
-    [InlineData("chase-checking-4521", 2)]
-    [InlineData("chase-card-7788", 1)]
-    public async Task Should_ExtractEveryFixtureLine_When_CommittedPdfIsRead(string name, int pages)
+    [InlineData("statements", "chase-checking-4521", 2)]
+    [InlineData("statements", "chase-card-7788", 1)]
+    [InlineData("invoices", "home-depot-88213", 1)]
+    public async Task Should_ExtractEveryFixtureLine_When_CommittedPdfIsRead(string folder, string name, int pages)
     {
-        var expected = Fixtures.Read("statements", name + ".pdf.txt")
+        var expected = Fixtures.Read(folder, name + ".pdf.txt")
             .ReplaceLineEndings("\n")
             .Split('\n')
             .Where(line => line.Length > 0 && line != "<<PAGE>>")
             .Select(Squash)
             .ToList();
 
-        var result = await new PdfText(new DisabledOcr()).ReadAsync(Fixtures.PathOf("statements", name + ".pdf"), CancellationToken.None);
+        var result = await new PdfText(new DisabledOcr()).ReadAsync(Fixtures.PathOf(folder, name + ".pdf"), CancellationToken.None);
 
         Assert.False(result.IsHeld, string.Join("; ", result.Errors));
         Assert.Equal(pages, result.Pages.Count);
