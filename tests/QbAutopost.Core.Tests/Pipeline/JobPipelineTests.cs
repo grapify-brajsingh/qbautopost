@@ -24,7 +24,11 @@ public sealed class JobPipelineTests : IDisposable
     /// <summary>What Hermes T2 answers for every PDF statement (default: the sample bank statement).</summary>
     private string _statementAnswer = Fixtures.Read("hermes", "statement.json");
 
-    public JobPipelineTests() => _hermes = new ScriptedHermes(_ => _statementAnswer);
+    /// <summary>T2 answer for the card PDF (<c>chase-card-7788.pdf</c>).</summary>
+    private string _cardAnswer = Fixtures.Read("hermes", "statement-card-7788.json");
+
+    public JobPipelineTests() => _hermes = new ScriptedHermes(r =>
+        r.UserContent.Contains("chase-card-7788.pdf", StringComparison.Ordinal) ? _cardAnswer : _statementAnswer);
 
     public void Dispose() => _job.Dispose();
 
@@ -50,17 +54,14 @@ public sealed class JobPipelineTests : IDisposable
     private static string PostableKey(MappedTxn m) =>
         string.Join('|', m.RequestId, m.Kind, m.Account, m.Payee, m.LineAccount, m.RefNumber, m.Line.Amount, m.Line.Date);
 
-    /// <summary>Replaces the sample bank CSV with a text PDF of the same statement (fixture text, one line per text line).</summary>
-    private void UseBankPdf()
+    /// <summary>Replaces a sample CSV statement with the committed text PDF of the same statement.</summary>
+    private void UsePdf(string name = "chase-checking-4521")
     {
-        File.Delete(_job.PathOf("statements", "chase-checking-4521.csv"));
-        var pages = Fixtures.Read("statements", "chase-checking-4521.pdf.txt")
-            .ReplaceLineEndings("\n")
-            .Split("<<PAGE>>\n")
-            .Select(page => PdfPageSpec.Text(page.TrimEnd().Split('\n')))
-            .ToArray();
-        PdfBuilder.Write(_job.PathOf("statements", "chase-checking-4521.pdf"), pages);
+        File.Delete(_job.PathOf("statements", name + ".csv"));
+        _job.Copy(Fixtures.PathOf("statements", name + ".pdf"), Path.Combine("statements", name + ".pdf"));
     }
+
+    private void UseBankPdf() => UsePdf();
 
     private void EditRequirement(Func<string, string> edit)
     {
@@ -190,6 +191,36 @@ public sealed class JobPipelineTests : IDisposable
         var request = Assert.Single(_hermes.Requests);
         Assert.Equal(_job.PathOf("output", "hermes"), request.AuditDir);
         Assert.Contains("Home Depot #4521 Noida", request.UserContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Should_PostSameLines_When_BothStatementsAreTextPdfs()
+    {
+        var fromCsv = (await Analyse()).Lines.Select(l => (PostableKey(l), l.Decision, l.Reason)).Order().ToList();
+        UsePdf("chase-checking-4521");
+        UsePdf("chase-card-7788");
+
+        var analysis = await Analyse();
+
+        Assert.All(analysis.Statements, s => Assert.Null(s.HoldReason));
+        var card = analysis.Statements.Single(s => s.Last4 == "7788");
+        Assert.Equal(SourceKind.Card, card.Kind);
+        Assert.True(card.Reconcile!.Verified, card.Reconcile.Message);
+        Assert.Equal(fromCsv, analysis.Lines.Select(l => (PostableKey(l), l.Decision, l.Reason)).Order());
+    }
+
+    [Fact]
+    public async Task Should_HoldCardPdf_When_ItsTotalsOnlyReconcileWithTheBankSign()
+    {
+        UsePdf("chase-card-7788");
+        // 1500.00 − 62.18 − 48.75 + 15.99 + 1500.00 = 2905.06 is what a bank-sign reading would need.
+        _cardAnswer = _cardAnswer.Replace("\"closingBalance\": 94.94", "\"closingBalance\": 2905.06", StringComparison.Ordinal);
+
+        var analysis = await Analyse();
+
+        var card = analysis.Statements.Single(s => s.Last4 == "7788");
+        Assert.Equal(HoldReasons.ReconcileFailed, card.HoldReason);
+        Assert.All(analysis.Lines, l => Assert.Equal(SourceKind.Bank, l.Line.Kind));
     }
 
     [Fact]

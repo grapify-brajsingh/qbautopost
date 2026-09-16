@@ -49,10 +49,15 @@ public sealed class StatementGridParser(IReadOnlyDictionary<string, CsvLayout> l
         }
 
         var dataRows = grid.Skip(1).ToList();
-        var (last4, last4Error) = DetectLast4(fileName, layout, columns, dataRows);
+        var (last4, last4Error, last4Detail) = DetectLast4(fileName, layout, columns, dataRows);
 
         var rows = new List<StatementLine>();
         var errors = new List<string>();
+        if (last4Detail is not null)
+        {
+            errors.Add(last4Detail);
+        }
+
         for (var i = 0; i < dataRows.Count; i++)
         {
             var lineNo = i + 1;
@@ -82,14 +87,17 @@ public sealed class StatementGridParser(IReadOnlyDictionary<string, CsvLayout> l
         };
     }
 
-    /// <summary>Spec F5: file name first, else the layout's last-four column (all rows must agree).</summary>
-    private static (string? Last4, string? Error) DetectLast4(
+    /// <summary>
+    /// Spec F5: file name first, else the layout's last-four column (all rows must agree).
+    /// SPEC-GAP T-305: a column value that contradicts the file name holds the statement, as T2 does (Q-25).
+    /// </summary>
+    private static (string? Last4, string? Reason, string? Detail) DetectLast4(
         string fileName, CsvLayout layout, Columns columns, IReadOnlyList<string[]> dataRows)
     {
         var fromName = Last4Detector.FromFileName(fileName);
-        if (fromName is not null || layout.Last4Column is null)
+        if (layout.Last4Column is null)
         {
-            return (fromName, null);
+            return (fromName, null, null);
         }
 
         var values = dataRows
@@ -98,11 +106,19 @@ public sealed class StatementGridParser(IReadOnlyDictionary<string, CsvLayout> l
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
+        if (fromName is not null)
+        {
+            var others = values.Where(v => v != fromName).ToList();
+            return others.Count == 0
+                ? (fromName, null, null)
+                : (null, HoldReasons.ConflictingLast4, $"file name says {fromName}, account column says {string.Join(", ", others)}");
+        }
+
         return values.Count switch
         {
-            0 => (null, null),
-            1 => (values[0], null),
-            _ => (null, HoldReasons.ConflictingLast4),
+            0 => (null, null, null),
+            1 => (values[0], null, null),
+            _ => (null, HoldReasons.ConflictingLast4, $"account column has several last-fours: {string.Join(", ", values)}"),
         };
     }
 

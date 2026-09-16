@@ -1,9 +1,6 @@
 using QbAutopost.Api.Tests.TestSupport;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Jobs;
-using UglyToad.PdfPig.Core;
-using UglyToad.PdfPig.Fonts.Standard14Fonts;
-using UglyToad.PdfPig.Writer;
 
 namespace QbAutopost.Api.Tests.Api;
 
@@ -26,7 +23,7 @@ public sealed class PdfStatementApiTests : IDisposable
     {
         var folder = _factory.Dir.CopySampleJob();
         File.Delete(Path.Combine(folder, "statements", "chase-checking-4521.csv"));
-        WriteTextPdf(Path.Combine(folder, "statements", "chase-checking-4521.pdf"));
+        File.Copy(Fixtures.PathOf("statements", "chase-checking-4521.pdf"), Path.Combine(folder, "statements", "chase-checking-4521.pdf"));
 
         var view = await _client.RunToEndAsync(folder);
 
@@ -42,7 +39,7 @@ public sealed class PdfStatementApiTests : IDisposable
     {
         var folder = _factory.Dir.CopySampleJob();
         File.Delete(Path.Combine(folder, "statements", "chase-checking-4521.csv"));
-        WriteTextPdf(Path.Combine(folder, "statements", "chase-checking-4521.pdf"));
+        File.Copy(Fixtures.PathOf("statements", "chase-checking-4521.pdf"), Path.Combine(folder, "statements", "chase-checking-4521.pdf"));
         _factory.Hermes.Respond(r => r.Task == HermesTask.Statement
             ? throw new HermesUnavailableException(HermesTask.Statement, "HTTP 503")
             : null);
@@ -53,26 +50,5 @@ public sealed class PdfStatementApiTests : IDisposable
         var pdf = Assert.Single(view.Statements, s => s.File.EndsWith(".pdf", StringComparison.Ordinal));
         Assert.Equal("hermes-failed", pdf.HoldReason);
         Assert.Equal(3, view.Counts.ToPost);
-    }
-
-    private static void WriteTextPdf(string path)
-    {
-        var builder = new PdfDocumentBuilder();
-        var font = builder.AddStandard14Font(Standard14Font.Helvetica);
-        var pages = File.ReadAllText(Fixtures.PathOf("statements", "chase-checking-4521.pdf.txt"))
-            .ReplaceLineEndings("\n")
-            .Split("<<PAGE>>\n");
-        foreach (var text in pages)
-        {
-            var page = builder.AddPage(612, 792);
-            var y = 760d;
-            foreach (var line in text.TrimEnd().Split('\n'))
-            {
-                page.AddText(line, 9, new PdfPoint(30, y), font);
-                y -= 13;
-            }
-        }
-
-        File.WriteAllBytes(path, builder.Build());
     }
 }
