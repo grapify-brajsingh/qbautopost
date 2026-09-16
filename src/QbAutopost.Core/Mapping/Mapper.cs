@@ -27,13 +27,16 @@ public sealed class Mapper
         _payees = new PayeeResolver(rules, lists ?? QbLists.Empty, history);
         _tiers = new LineAccountTiers(rules, history);
 
-        // The matcher gives each line at most one invoice; should two arrive anyway, the line gets neither.
-        _invoices = (invoices ?? [])
+        _invoices = InvoicesByLine(invoices ?? []);
+    }
+
+    /// <summary>Matched invoices by request id. The matcher gives each line at most one; should two arrive anyway, the line gets neither.</summary>
+    public static Dictionary<string, InvoiceFacts> InvoicesByLine(IEnumerable<InvoiceFacts> invoices) =>
+        invoices
             .Where(i => i.MatchedRequestId is not null)
             .GroupBy(i => i.MatchedRequestId!, StringComparer.Ordinal)
             .Where(g => g.Count() == 1)
             .ToDictionary(g => g.Key, g => g.Single(), StringComparer.Ordinal);
-    }
 
     public IReadOnlyList<MappedTxn> MapAll(IEnumerable<StatementLine> lines) => lines.Select(Map).ToList();
 
@@ -151,7 +154,7 @@ public sealed class Mapper
         var withPayee = draft with { Payee = vendor.Name, Note = note ?? draft.Note };
         var tier = _tiers.Resolve(vendor.Name, description);
         return tier is null
-            ? Hold(withPayee, HoldReasons.NoAccountRule) // TODO(T-502): tiers 3–4 (invoice, Hermes T4)
+            ? Hold(withPayee, HoldReasons.NoAccountRule) // tiers 3–4 are async: ModelTiers resolves these in the pipeline
             : CheckRef(withPayee with { LineAccount = tier.Account, Confidence = tier.Confidence, Tier = tier.Tier });
     }
 

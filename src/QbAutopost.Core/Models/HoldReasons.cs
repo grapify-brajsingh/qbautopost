@@ -51,6 +51,11 @@ public static class HoldReasons
     // SPEC-GAP T-501: T4 has no accounts to choose from (qb-lists.json empty or not synced).
     public const string NoAccounts = "no-accounts";
 
-    // TODO(T-502): replaced by Hermes T4 tiers 3–4; until then a line without a rule/history account is held.
+    // SPEC-GAP T-502: gate G3 holds (FR-7 names none).
+    public const string LowConfidence = "low-confidence";
+    public const string NoPriorPosting = "no-prior-posting";
+
+    // No tier 1–2 account. The pipeline's ModelTiers pass replaces it (tiers 3–4); it stays only on lines that pass
+    // never reaches (e.g. Mapper used alone).
     public const string NoAccountRule = "no-account-rule";
 }

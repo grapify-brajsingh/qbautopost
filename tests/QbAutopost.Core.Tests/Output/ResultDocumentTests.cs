@@ -30,6 +30,7 @@ public sealed class ResultDocumentTests : IDisposable
             new RegexSpecReader(),
             TestStatementReader.Create(),
             TestInvoiceExtractor.Create(),
+            TestAccountChooser.Create(),
             null!,
             new SystemClock());
         var job = new JobRecord { JobId = "2026-08-tropicana", Folder = _job.Folder, Status = JobStatus.Ready, DryRun = true };

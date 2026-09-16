@@ -29,6 +29,7 @@ public sealed class AnalysisGoldenTests : IDisposable
             new RegexSpecReader(),
             TestStatementReader.Create(),
             TestInvoiceExtractor.Create(),
+            TestAccountChooser.Create(),
             null!,
             new SystemClock());
         var job = new JobRecord { JobId = "2026-08-tropicana", Folder = _job.Folder, Status = JobStatus.Analysing, DryRun = true };

@@ -30,8 +30,12 @@ public sealed class JobPipelineTests : IDisposable
     /// <summary>What Hermes T3 answers for every invoice (default: the sample Home Depot invoice).</summary>
     private string _invoiceAnswer = Fixtures.Read("hermes", "invoice.json");
 
+    /// <summary>What Hermes T4 answers for every line that needs tiers 3–4 (default: the fixture, Repairs and Maintenance at 0.82).</summary>
+    private string _accountAnswer = Fixtures.Read("hermes", "account.json");
+
     public JobPipelineTests() => _hermes = new ScriptedHermes(r =>
-        r.Task == HermesTask.Invoice ? _invoiceAnswer
+        r.Task == HermesTask.Account ? _accountAnswer
+        : r.Task == HermesTask.Invoice ? _invoiceAnswer
         : r.UserContent.Contains("chase-card-7788.pdf", StringComparison.Ordinal) ? _cardAnswer
         : _statementAnswer);
 
@@ -50,6 +54,7 @@ public sealed class JobPipelineTests : IDisposable
         new RegexSpecReader(),
         TestStatementReader.Create(_ocr, _hermes),
         TestInvoiceExtractor.Create(_ocr, _hermes),
+        TestAccountChooser.Create(_hermes),
         new UnusedGateway(),
         new SystemClock());
 
@@ -523,8 +528,150 @@ public sealed class JobPipelineTests : IDisposable
         Assert.Equal("Joe's Plumbing", plumber.Payee);
         Assert.Equal("home-depot-88213.pdf", plumber.InvoiceRef);
         Assert.Contains("payee from invoice", plumber.Note, StringComparison.Ordinal);
-        // No account rule for the new vendor yet: still held, now for the account instead of the payee (tiers 3–4 in M5).
-        Assert.Equal(HoldReasons.NoAccountRule, plumber.Reason);
+        // No account rule for the new vendor and no synced accounts: held for the account instead of the payee.
+        Assert.Equal(HoldReasons.NoAccounts, plumber.Reason);
+        Assert.DoesNotContain(_hermes.Requests, r => r.Task == HermesTask.Account);
+    }
+
+    [Fact]
+    public async Task Should_PostPlumberAtInvoiceTier_When_InvoiceHintedModelAnswerReachesThreshold()
+    {
+        UsePlumberInvoiceAndAccounts();
+
+        var analysis = await Analyse();
+
+        var plumber = Plumber(analysis);
+        Assert.Equal(Decision.Post, plumber.Decision);
+        Assert.Equal(Confidence.Invoice, plumber.Confidence);
+        Assert.Equal(3, plumber.Tier);
+        Assert.Equal("Repairs and Maintenance", plumber.LineAccount);
+        Assert.Equal(9, analysis.ToPost.Count);
+        Assert.Contains("<ExpenseLineAdd>", analysis.QbXml, StringComparison.Ordinal);
+        var request = Assert.Single(_hermes.Requests, r => r.Task == HermesTask.Account);
+        Assert.Contains("invoice hint: plumbing repair", request.UserContent, StringComparison.Ordinal);
+        Assert.Equal(_job.PathOf("output", "hermes"), request.AuditDir);
+    }
+
+    [Fact]
+    public async Task Should_HoldPlumberNoPriorPosting_When_InvoiceHasNoHintAndLedgerIsEmpty()
+    {
+        UsePlumberInvoiceAndAccounts(hint: null);
+
+        var analysis = await Analyse();
+
+        var plumber = Plumber(analysis);
+        Assert.Equal(HoldReasons.NoPriorPosting, plumber.Reason);
+        Assert.Equal(4, plumber.Tier);
+        Assert.Equal(["Repairs and Maintenance", "Office Supplies", "Utilities"], plumber.Candidates);
+        Assert.Equal(8, analysis.ToPost.Count);
+    }
+
+    [Fact]
+    public async Task Should_PostPlumberAtModelTier_When_LedgerHasAPriorPostingToTheChosenAccount()
+    {
+        UsePlumberInvoiceAndAccounts(hint: null);
+        new LedgerStore(LedgerFile).Save(new Ledger
+        {
+            Posted =
+            [
+                new LedgerEntry
+                {
+                    BatchId = "old#1", JobId = "old", Fingerprint = "fp-old", TxnId = "T-9", Kind = TxnKind.Check,
+                    Account = "Chase Checking", Payee = "Joe's Plumbing", LineAccount = "Repairs and Maintenance",
+                    Amount = 90m, Date = new DateOnly(2026, 7, 1), SourceFile = "old.csv",
+                },
+            ],
+        });
+
+        var analysis = await Analyse();
+
+        var plumber = Plumber(analysis);
+        Assert.Equal(Decision.Post, plumber.Decision);
+        Assert.Equal(Confidence.Model, plumber.Confidence);
+        Assert.Equal(4, plumber.Tier);
+    }
+
+    [Fact]
+    public async Task Should_HoldPlumberLowConfidence_When_ModelScoreIsBelowThreshold()
+    {
+        UsePlumberInvoiceAndAccounts();
+        _accountAnswer = """{ "account": "Repairs and Maintenance", "confidence": 0.6 }""";
+
+        var analysis = await Analyse();
+
+        Assert.Equal(HoldReasons.LowConfidence, Plumber(analysis).Reason);
+        Assert.Equal(8, analysis.ToPost.Count);
+    }
+
+    [Fact]
+    public async Task Should_HoldPlumberHermesFailed_When_ModelNamesAnUnlistedAccount()
+    {
+        UsePlumberInvoiceAndAccounts();
+        _accountAnswer = """{ "account": "Plumbing", "confidence": 0.99 }""";
+
+        var analysis = await Analyse();
+
+        Assert.Equal(HoldReasons.HermesFailed, Plumber(analysis).Reason);
+    }
+
+    [Fact]
+    public async Task Should_NotAskTheModel_When_LineKindIsNotRequested()
+    {
+        UsePlumberInvoiceAndAccounts();
+        EditRequirement(r =>
+            r[..r.IndexOf("Transactions Type => Checks", StringComparison.Ordinal)]
+            + r[r.IndexOf("Transactions Type => Credit Card", StringComparison.Ordinal)..]);
+
+        var analysis = await Analyse();
+
+        Assert.Equal(HoldReasons.KindNotRequested, Plumber(analysis).Reason);
+        Assert.DoesNotContain(_hermes.Requests, r => r.Task == HermesTask.Account);
+    }
+
+    [Fact]
+    public async Task Should_NotAskTheModel_When_LineIsAlreadyPosted()
+    {
+        UsePlumberInvoiceAndAccounts();
+        var plumber = Plumber(await Analyse());
+        _hermes.Requests.Clear();
+        new LedgerStore(LedgerFile).Save(new Ledger
+        {
+            Posted =
+            [
+                new LedgerEntry
+                {
+                    BatchId = "2026-08-tropicana#1", JobId = "2026-08-tropicana", Fingerprint = plumber.Line.Fingerprint,
+                    TxnId = "T-1", Kind = plumber.Kind, Account = plumber.Account!, Amount = plumber.Line.Amount,
+                    Date = plumber.Line.Date, SourceFile = plumber.Line.SourceFile,
+                },
+            ],
+        });
+
+        var second = await Analyse();
+
+        Assert.Equal(HoldReasons.AlreadyPosted, Plumber(second).Reason);
+        Assert.DoesNotContain(_hermes.Requests, r => r.Task == HermesTask.Account);
+    }
+
+    private static MappedTxn Plumber(AnalysisResult analysis) =>
+        Assert.Single(analysis.Lines, l => l.Line.Description.Contains("PLUMBER", StringComparison.Ordinal));
+
+    /// <summary>Joe's Plumbing is a known vendor with no account rule; the invoice names it and matches the 3199.70 line.</summary>
+    private void UsePlumberInvoiceAndAccounts(string? hint = "plumbing repair")
+    {
+        new QbListsStore(Path.Combine(_job.Root, "qb-lists.json")).Save(new QbLists
+        {
+            Vendors = ["Joe's Plumbing"],
+            Accounts =
+            [
+                new QbAccount { Name = "Chase Checking", Type = "Bank" },
+                new QbAccount { Name = "Repairs and Maintenance", Type = "Expense" },
+                new QbAccount { Name = "Office Supplies", Type = "Expense" },
+                new QbAccount { Name = "Utilities", Type = "Expense" },
+            ],
+        });
+        var hintJson = hint is null ? "null" : $"\"{hint}\"";
+        _invoiceAnswer = $$"""{ "party": "Joe's Plumbing", "role": "vendor", "number": "77", "date": "2026-08-14", "total": 3199.70, "categoryHint": {{hintJson}} }""";
     }
 
     [Fact]

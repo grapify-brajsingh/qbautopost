@@ -54,6 +54,14 @@ public sealed record Rules
     {
         var rules = JsonSerializer.Deserialize<Rules>(json, JsonOptions.Default)
             ?? throw new InvalidDataException("rules.json is empty.");
+
+        // SPEC-GAP T-502: G3 depends on this value; 0 or less would let any model answer through, over 1 nothing.
+        if (rules.ModelConfidenceThreshold is not (> 0 and <= 1))
+        {
+            throw new InvalidDataException(
+                $"rules.json ModelConfidenceThreshold is {rules.ModelConfidenceThreshold}; it must be greater than 0 and at most 1.");
+        }
+
         return rules.Normalized();
     }
 

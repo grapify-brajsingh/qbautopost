@@ -21,10 +21,11 @@ public sealed class JobPipeline(
     ISpecReader specReader,
     StatementReader statementReader,
     InvoiceExtractor invoiceExtractor,
+    AccountChooser accountChooser,
     IQbGateway gateway,
     IClock clock)
 {
-    /// <summary>Folder → spec → statements → G1/G2 → invoices → mapping → ledger duplicates → qbXML and sheets.</summary>
+    /// <summary>Folder → spec → statements → G1/G2 → invoices → mapping → job gates → tiers 3–4 + G3 → qbXML and sheets.</summary>
     public async Task<AnalysisResult> RunAnalysisAsync(JobRecord job, CancellationToken ct)
     {
         var input = FolderReader.Read(job.Folder);
@@ -60,8 +61,14 @@ public sealed class JobPipeline(
 
         var lines = statements.Where(s => !s.IsHeld).SelectMany(s => s.Lines).ToList();
         var invoices = await ReadInvoicesAsync(input, lines, rules, ct);
-        var matched = invoices.Where(i => i.Matched).Select(i => i.Facts!);
+        var matched = invoices.Where(i => i.Matched).Select(i => i.Facts!).ToList();
         var mapped = ApplyJobGates(new Mapper(rules, lists, ledger.Posted, matched).MapAll(lines), spec.Spec, ledger);
+
+        // Tiers 3–4 after the job gates, so duplicates, posted lines and unrequested kinds never reach Hermes.
+        mapped = await new ModelTiers(accountChooser).ResolveAsync(
+            mapped,
+            new ModelTierInput(rules.ModelConfidenceThreshold, lists, ledger.Posted, matched, Path.Combine(input.OutputDir, HermesSpecReader.HermesDir)),
+            ct);
         analysis = analysis with
         {
             Invoices = invoices,
@@ -267,7 +274,7 @@ public sealed class JobPipeline(
                 return m with { Decision = Decision.Skip, Reason = HoldReasons.AlreadyPosted };
             }
 
-            if (m.Decision == Decision.Post && !spec.Kinds.Contains(m.Kind))
+            if ((m.Decision == Decision.Post || ModelTiers.Needs(m)) && !spec.Kinds.Contains(m.Kind))
             {
                 // SPEC-GAP T-103: the requirement did not ask for this transaction type.
                 return Hold(m, HoldReasons.KindNotRequested, $"{m.Kind} is not in the requirement");

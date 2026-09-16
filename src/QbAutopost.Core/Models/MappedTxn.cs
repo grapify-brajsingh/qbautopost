@@ -23,6 +23,9 @@ public sealed record MappedTxn
     /// <summary>Account tier that decided <see cref="LineAccount"/> (1 rule, 2 history, 3 invoice, 4 model); null when not tiered.</summary>
     public int? Tier { get; init; }
 
+    /// <summary>Hermes T4 confidence (0…1) when tier 3 or 4 was asked; null otherwise.</summary>
+    public double? ModelConfidence { get; init; }
+
     public string? Note { get; init; }
     public IReadOnlyList<string> Candidates { get; init; } = [];
     public string? InvoiceRef { get; init; }

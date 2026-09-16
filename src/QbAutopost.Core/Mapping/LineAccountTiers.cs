@@ -7,7 +7,7 @@ public sealed record TierResult(string Account, Confidence Confidence, int Tier)
 
 /// <summary>
 /// Spec FR-6 line-account tiers 1 (rule) and 2 (ledger history).
-/// TODO(T-502): tiers 3 (invoice hint) and 4 (Hermes T4) are added in M5.
+/// Tiers 3 (invoice hint) and 4 (Hermes T4) are async and live in <see cref="ModelTiers"/>.
 /// </summary>
 public sealed class LineAccountTiers(Rules rules, IReadOnlyList<LedgerEntry> history)
 {
