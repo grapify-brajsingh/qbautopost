@@ -33,6 +33,8 @@ public sealed class JobPipelineTests : IDisposable
     /// <summary>What Hermes T4 answers for every line that needs tiers 3–4 (default: the fixture, Repairs and Maintenance at 0.82).</summary>
     private string _accountAnswer = Fixtures.Read("hermes", "account.json");
 
+    private string _rulesFile = Path.Combine(AppContext.BaseDirectory, "samples", "rules.json");
+
     public JobPipelineTests() => _hermes = new ScriptedHermes(r =>
         r.Task == HermesTask.Account ? _accountAnswer
         : r.Task == HermesTask.Invoice ? _invoiceAnswer
@@ -47,7 +49,7 @@ public sealed class JobPipelineTests : IDisposable
         new PipelineOptions
         {
             CompanyName = company,
-            RulesFile = Path.Combine(AppContext.BaseDirectory, "samples", "rules.json"),
+            RulesFile = _rulesFile,
             LedgerFile = LedgerFile,
             QbListsFile = Path.Combine(_job.Root, "qb-lists.json"),
         },
@@ -672,6 +674,69 @@ public sealed class JobPipelineTests : IDisposable
 
         Assert.Equal(HoldReasons.AlreadyPosted, Plumber(second).Reason);
         Assert.DoesNotContain(_hermes.Requests, r => r.Task == HermesTask.Account);
+    }
+
+    [Theory]
+    [InlineData("0.5", "post")]
+    [InlineData("0.61", "hold")]
+    public async Task Should_UseRulesThreshold_When_DecidingTheInvoiceTier(string threshold, string decision)
+    {
+        UseRules(r => r.Replace("\"ModelConfidenceThreshold\": 0.8", "\"ModelConfidenceThreshold\": " + threshold, StringComparison.Ordinal));
+        UsePlumberInvoiceAndAccounts();
+        _accountAnswer = """{ "account": "Repairs and Maintenance", "confidence": 0.6 }""";
+
+        var analysis = await Analyse();
+
+        Assert.Equal(decision, Plumber(analysis).Decision.ToString(), ignoreCase: true);
+    }
+
+    [Fact]
+    public async Task Should_KeepRuleTierAndNotAskTheModel_When_RuleLineHasAHintingInvoice()
+    {
+        // Accounts synced, but the invoice is the sample Home Depot one (hint "plumbing fittings, repair").
+        UsePlumberInvoiceAndAccounts();
+        _invoiceAnswer = Fixtures.Read("hermes", "invoice.json");
+
+        var analysis = await Analyse();
+
+        var homeDepot = Assert.Single(analysis.Lines, l => l.InvoiceRef == "home-depot-88213.pdf");
+        Assert.Equal(Confidence.Rule, homeDepot.Confidence);
+        Assert.Equal(1, homeDepot.Tier);
+        Assert.DoesNotContain(_hermes.Requests, r => r.Task == HermesTask.Account);
+    }
+
+    [Fact]
+    public async Task Should_KeepHistoryTierAndNotAskTheModel_When_PayeeHasDominantHistory()
+    {
+        UsePlumberInvoiceAndAccounts();
+        new LedgerStore(LedgerFile).Save(new Ledger
+        {
+            Posted = [.. Enumerable.Range(1, 3).Select(i => new LedgerEntry
+            {
+                BatchId = "old#1", JobId = "old", Fingerprint = $"fp-{i}", TxnId = $"T-{i}", Kind = TxnKind.Check,
+                Account = "Chase Checking 4521", Payee = "Joe's Plumbing", LineAccount = "Utilities",
+                Amount = 90m, Date = new DateOnly(2026, 7, i), SourceFile = "old.csv",
+            })],
+        });
+
+        var analysis = await Analyse();
+
+        var plumber = Plumber(analysis);
+        Assert.Equal(Decision.Post, plumber.Decision);
+        Assert.Equal(Confidence.History, plumber.Confidence);
+        Assert.Equal(2, plumber.Tier);
+        Assert.Equal("Utilities", plumber.LineAccount);
+        Assert.Null(plumber.ModelConfidence);
+        Assert.DoesNotContain(_hermes.Requests, r => r.Task == HermesTask.Account);
+    }
+
+    private void UseRules(Func<string, string> edit)
+    {
+        var text = File.ReadAllText(_rulesFile);
+        var edited = edit(text);
+        Assert.NotEqual(text, edited);
+        _rulesFile = Path.Combine(_job.Root, "rules.json");
+        File.WriteAllText(_rulesFile, edited);
     }
 
     private static MappedTxn Plumber(AnalysisResult analysis) =>

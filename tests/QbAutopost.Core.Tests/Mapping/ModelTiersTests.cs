@@ -112,6 +112,58 @@ public sealed class ModelTiersTests
         Assert.Equal(HoldReasons.LowConfidence, txn.Reason);
     }
 
+    /// <summary>
+    /// FR-7 matrix for lines that reach the model. Prior = the ledger has the payee posted to the chosen account.
+    /// Expected: decision, confidence, tier, reason (null when posted).
+    /// </summary>
+    [Theory]
+    // invoice hint (tier 3): threshold alone decides
+    [InlineData(true, 0.80, false, "post", "invoice", 3, null)]
+    [InlineData(true, 1.00, true, "post", "invoice", 3, null)]
+    [InlineData(true, 0.79, true, "hold", "hold", 4, "low-confidence")]
+    [InlineData(true, 0.00, false, "hold", "hold", 4, "low-confidence")]
+    // no hint (tier 4): threshold and a prior posting
+    [InlineData(false, 0.80, true, "post", "model", 4, null)]
+    [InlineData(false, 1.00, true, "post", "model", 4, null)]
+    [InlineData(false, 0.80, false, "hold", "hold", 4, "no-prior-posting")]
+    [InlineData(false, 1.00, false, "hold", "hold", 4, "no-prior-posting")]
+    [InlineData(false, 0.79, true, "hold", "hold", 4, "low-confidence")]
+    [InlineData(false, 0.79, false, "hold", "hold", 4, "low-confidence")]
+    public async Task Should_FollowTheG3Matrix_When_ModelAnswers(
+        bool hint, double score, bool prior, string decision, string confidence, int tier, string? reason)
+    {
+        _answer = Answer(Repairs, score);
+
+        var txn = await ResolveOne(
+            invoices: hint ? [Invoice("plumbing parts")] : [],
+            history: prior ? [Posted(Plumber, Repairs)] : [Posted(Plumber, "Utilities")]);
+
+        Assert.Equal(decision, txn.Decision.ToString(), ignoreCase: true);
+        Assert.Equal(confidence, txn.Confidence.ToString(), ignoreCase: true);
+        Assert.Equal(tier, txn.Tier);
+        Assert.Equal(reason, txn.Reason);
+        Assert.Equal(score, txn.ModelConfidence);
+        Assert.Equal(decision == "post" ? Repairs : null, txn.LineAccount);
+        Assert.Single(_hermes.Requests);
+    }
+
+    [Theory]
+    [InlineData(0.5, 0.5, "post")]
+    [InlineData(0.5, 0.49, "hold")]
+    [InlineData(1.0, 0.99, "hold")]
+    [InlineData(1.0, 1.0, "post")]
+    public async Task Should_UseTheGivenThreshold_When_DecidingTheInvoiceTier(double threshold, double score, string decision)
+    {
+        _answer = Answer(Repairs, score);
+
+        var resolved = await new ModelTiers(TestAccountChooser.Create(_hermes)).ResolveAsync(
+            [Held()],
+            new ModelTierInput(threshold, Lists, [], [Invoice("plumbing parts")], "audit"),
+            CancellationToken.None);
+
+        Assert.Equal(decision, Assert.Single(resolved).Decision.ToString(), ignoreCase: true);
+    }
+
     [Fact]
     public async Task Should_NoteTheModelChoice_When_LineIsHeld()
     {
