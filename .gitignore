@@ -17,4 +17,5 @@ tests/fixtures/jobs/*/output/
 src/QbAutopost.Api/data/
 *.tmp
 .env
+deploy/hermes/provider.env
 appsettings.*.local.json

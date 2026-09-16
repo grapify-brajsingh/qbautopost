@@ -1,0 +1,46 @@
+# Hermes for QbAutopost (spec section 4, section 14, T-801).
+#
+#   cd deploy/hermes
+#   copy .env.example .env        # then fill in the real values; .env is git-ignored
+#   docker compose up -d
+#   docker compose config         # check what will run (prints secrets: do not paste it anywhere)
+#
+# Rules this file enforces:
+#   - the API is published on 127.0.0.1 only (never 0.0.0.0): no inbound port beyond the QbAutopost API;
+#   - API_SERVER_KEY must be set, otherwise compose refuses to start;
+#   - the image is not guessed: HERMES_IMAGE must be set (SPEC-GAP T-801, tracker Q-42);
+#   - the cloud provider key lives in the container only (spec Q5), never in QbAutopost's configuration.
+# QbAutopost uses API_SERVER_KEY as its Hermes:ApiKey (QBAUTOPOST__Hermes__ApiKey).
+
+name: qbautopost-hermes
+
+services:
+  hermes:
+    image: "${HERMES_IMAGE:?set HERMES_IMAGE in deploy/hermes/.env (see README-hermes.md)}"
+    container_name: qbautopost-hermes
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8642:${HERMES_CONTAINER_PORT:?set HERMES_CONTAINER_PORT in deploy/hermes/.env}"
+    environment:
+      # OpenAI-compatible API server inside the container. It listens on all container interfaces;
+      # the host side is still loopback only because of the ports entry above.
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: "0.0.0.0"
+      API_SERVER_PORT: "${HERMES_CONTAINER_PORT:?set HERMES_CONTAINER_PORT in deploy/hermes/.env}"
+      API_SERVER_KEY: "${API_SERVER_KEY:?set API_SERVER_KEY in deploy/hermes/.env}"
+    env_file:
+      # The cloud provider key and model settings (spec Q5). Variable names depend on the provider and
+      # the Hermes image, so they are kept in their own file; see provider.env.example.
+      - path: ./provider.env
+        required: false
+    volumes:
+      - hermes-data:${HERMES_DATA_PATH:?set HERMES_DATA_PATH in deploy/hermes/.env}
+    mem_limit: "${HERMES_MEMORY_LIMIT:-4g}"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  hermes-data:
