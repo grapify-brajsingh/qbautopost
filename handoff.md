@@ -1,13 +1,13 @@
 # Session Handoff — QbAutopost
 
-Written: 2026-09-17 (session 5) · M0–M4 done · Next step: **M5** (tiers 3–4 with Hermes T4, gate G3)
+Written: 2026-09-17 (session 7) · M0–M5 done · Next step: **M6** (QuickBooks gateway, post, undo), starting with **T-601**
 
 ## 1. Start the next session with this prompt
 
 ```
 Read handoff.md, CLAUDE.md, docs/tracker.md and docs/adr/README.md.
-Check the tracker "Questions" table for owner answers (Q-1…Q-30) and apply any
-that change behaviour first. Then continue with the first todo task in M5 (T-501).
+Check the tracker "Questions" table for owner answers (Q-1…Q-33) and apply any
+that change behaviour first. Then continue with the first todo task in M6 (T-601).
 One task at a time, tests green, tracker updated, one commit per task.
 ```
 
@@ -20,51 +20,67 @@ QbAutopost is a single .NET 8 app. It takes a job folder (`requirement.txt` plus
 | Item | State |
 |---|---|
 | Repo | `D:\qb_post`, branch `main`, remote `origin` = https://github.com/grapify-brajsingh/qbautopost.git |
-| Push | Session 2–5 commits (T-101…T-404) are **local only** — push when the owner agrees: `git push origin main` |
+| Push | Session 2–7 commits (T-101…T-504) are **local only**. Push when the owner agrees: `git push origin main` |
 | SDK | pinned to 8.0.x by `global.json` |
 | Build | `dotnet build -warnaserror` → 0 warnings, 0 errors |
-| Tests | 554 passing (Core 476, Api 78) on Windows, 3 consecutive green runs. **Not yet run on Linux.** |
-| Milestones | M0–M4 done; M5–M8 todo |
-| Packages | none added in M4 |
-| Manual check | None this session (no Hermes on the dev box, so a real job still fails at T1, Q-22) |
+| Tests | 664 passing (Core 583, Api 81) on Windows. **Not yet run on Linux.** |
+| Milestones | M0–M5 done; M6–M8 todo |
+| Packages | none added in M5 |
+| Manual check | None this session. There is no Hermes on the dev box, so a real job still fails at T1 (Q-22) |
 
-## 4. What M4 added (code map delta)
+## 4. What M5 added (code map delta)
 
 ```
 src/QbAutopost.Core/
-  Hermes/InvoiceAnswer.cs, Hermes/prompts/invoice.md   T3 DTO + validation (party, role, ISO date, total > 0), prompt
-  Extract/InvoiceExtractor.cs     InvoiceReadResult; pdf → PdfText, png/jpg → IOcr (off → unreadable); no chunking (> 60 000 chars → unreadable); HermesException → hermes-failed
-  Mapping/InvoiceMatcher.cs       InvoiceMatch; FR-5 amount ±0.005 / date ±InvoiceMatchDays → direction → Fuzzy(description, party) ≥ threshold; ties / shared line → ambiguous
-  Mapping/Mapper.cs               optional invoices arg: InvoiceRef = invoice file; payee from a fitting invoice when the description names none (known names only)
-  Pipeline/AnalysisResult.cs      InvoiceSummary, AnalysisResult.Invoices
-  Pipeline/JobPipeline.cs         takes InvoiceExtractor; invoices read after G2, before mapping; output/invoices/<file>.json
-  Output/OutputDocuments.cs       result.json unmatchedInvoices = InvoiceSummary[] (unreadable invoices included)
-  Models/HoldReasons.cs           unreadable, no-matching-line, no-invoice-date
-src/QbAutopost.Api/
-  Program.cs                      invoice.md required at startup; InvoiceExtractor registered
-  Endpoints/JobView.cs            + unmatchedInvoices (addition to spec §6)
-tests/  TestSupport/TestInvoiceExtractor.cs; Mapping/{InvoiceMatcherTests,MapperInvoiceTests}.cs; Extract/InvoiceExtractorTests.cs;
-        Hermes/InvoiceAnswerTests.cs; Api/InvoiceApiTests.cs
-        fixtures/invoices/home-depot-88213.pdf(.txt); samples/…/invoices/home-depot-88213.pdf (replaces the .txt stand-in)
+  Hermes/AccountAnswer.cs, Hermes/prompts/account.md   T4 DTO (account non-blank, 0 ≤ confidence ≤ 1), prompt
+  Abstractions/IHermesClient.cs   HermesRequest.Check: caller-supplied validation run inside the client's one retry
+  Mapping/AccountChooser.cs       AccountQuestion/AccountChoice/AccountChoiceResult; §9.4 type filter (ChoosableAccounts),
+                                  account ∈ list (ordinal), top-3 listed candidates; holds no-accounts / hermes-failed
+  Mapping/ModelTiers.cs           async pass after the job gates over lines held no-account-rule: tier 3 (vendor invoice
+                                  with hint, score ≥ threshold → Invoice) else tier 4 with the same answer → G3
+  Gates/ConfidenceGate.cs         G3: Model posts only with score ≥ threshold AND a live ledger entry payee+lineAccount
+  Models/MappedTxn.cs             + ModelConfidence (T4 score)
+  Models/HoldReasons.cs           no-accounts, low-confidence, no-prior-posting
+  Mapping/Rules.cs                ModelConfidenceThreshold must be in (0, 1] (else the job fails)
+  Output/OutputDocuments.cs       AnalysisLine.ModelConfidence (analysis.json "modelConfidence")
+  Pipeline/JobPipeline.cs         new AccountChooser ctor argument; ModelTiers after ApplyJobGates
+src/QbAutopost.Api/Program.cs     account.md required at startup; AccountChooser registered
+tests/  Hermes/AccountAnswerTests, Mapping/{AccountChooserTests,ModelTiersTests}, Gates/ConfidenceGateTests,
+        Output/AnalysisLineTests, TestSupport/TestAccountChooser; JobPipelineTests (+tier cases, _rulesFile/UseRules);
+        Api/AccountTierApiTests (qb-lists seeded in the factory's data dir)
+        fixtures/output/sample-analysis.golden.json gains "modelConfidence": null per line
 ```
 
 ## 5. Things the next session must know
 
-1. **No owner answers yet.** Q-1…Q-30 all carry conservative choices. New this session: Q-28 (invoice hold codes, no chunking, "Our company" in the T3 message), Q-29 (matching details: no date, no preferred direction, similarity = description vs party, shared line, where unreadable invoices are reported), Q-30 (`InvoiceRef` = file name; invoice payee only when known and the role fits). **Q-27 now also covers invoices** (posting re-runs T3).
-2. **Behaviour changes this session:** the sample job makes a T3 call (tests that count Hermes calls filter by task); the sample invoice is a PDF and matches the Home Depot line; `result.json.unmatchedInvoices` is a list of objects, not strings; the analysis golden has `invoiceRef` on the Home Depot line. Line decisions on the sample are unchanged (8/2/1).
-3. **M5 hints:**
-   - T4 (`HermesTask.Account`, spec §9.4): add `Hermes/prompts/account.md` and an `AccountAnswer : IValidatable`. Its validation needs the allowed `accounts[]` (case-sensitive exact), but `IValidatable.Validate()` takes no arguments: either carry the list inside the answer after deserialising, or validate in the caller and treat a violation like a failed answer (the client's retry only covers `Validate()`). `tests/fixtures/hermes/account.json` exists.
-   - `Mapper` is synchronous; T4 is async. Lines needing tiers 3–4 are currently held `no-account-rule` (`HoldReasons.NoAccountRule`, `TODO(T-502)` in `Mapper.WithVendorAndTiers`). A clean option: keep `Mapper` sync, then run an async tier-3/4 pass in the pipeline over lines held `no-account-rule`.
-   - Tier 3 input is ready: `Mapper` holds the matched invoices by request id; `InvoiceFacts.CategoryHint` is the hint; `MappedTxn.InvoiceRef` names the file.
-   - `QbLists.Accounts` have an optional `Type` for the §9.4 filter; `Rules.ModelConfidenceThreshold` (0.8) exists; `Confidence.Invoice` / `Confidence.Model` exist in `Models/Enums.cs`.
-   - G3 (FR-7): `Model` posts only with confidence ≥ threshold **and** a prior posting of the payee to the same account (ledger); held lines carry top-3 account `candidates`.
-4. **Test helpers:** `ScriptedHermes` (Core) validates like the real client; `TestStatementReader.Create(ocr, hermes)` and `TestInvoiceExtractor.Create(ocr, hermes)` build the pipeline's readers; `JobPipelineTests` scripts T2 via `_statementAnswer` / `_cardAnswer` and T3 via `_invoiceAnswer`; in Api tests use `FakeHermesClient.Respond(r => r.Task == … ? json : null)`.
-5. **Already true from earlier sessions:** JSON enums are camelCase; read shared JSON with `AtomicFile.ReadAllText`; `ApiFactory.WithSetting(key, value)` (not chainable — use `WithWebHostBuilder` for several keys); console logs lack the `jobId` scope until T-702; sample output and `src/QbAutopost.Api/data/` are git-ignored; `.gitattributes` marks `*.pdf *.xlsx *.png *.jpg` binary; PDF fixtures are rendered from their `.pdf.txt` by a throw-away PdfPig program (one text line per PDF line, Helvetica 10 pt).
-6. **Running by hand:** `dotnet run` needs `ASPNETCORE_ENVIRONMENT=Development` (or a real `QBAUTOPOST__Api__ApiKey`). With `Ocr:Enabled=true`, set `Ocr:TessDataPath` to a folder holding `eng.traineddata`.
-7. **GateGuard hook** blocks the first edit/creation of every file until facts are stated (retry works); `ECC_GATEGUARD=off` disables it.
+1. **No owner answers yet.** Q-1…Q-33 all use the conservative choices. New in M5: Q-31 (T4 list filter, unlisted alternatives dropped, no accounts → `no-accounts`), Q-32 (tier-3 answer below the threshold falls to tier 4 without a second call; only vendor invoices with a hint count; G3 hold codes; payee/account compared ignoring case; threshold range), Q-33 (`confidence` stays the category, the score is `modelConfidence`). **Q-27 now also covers T4:** posting re-runs the analysis, so T4 is called again at post time and may answer differently from the reviewed dry run. Ask the owner before M6 posting work if possible.
+2. **Behaviour changes in M5:** lines that tiers 1–2 leave open are no longer held `no-account-rule` when `qb-lists.json` has accounts. They go to Hermes T4. Without synced accounts they are held `no-accounts` and Hermes is not called. The kind gate (`kind-not-requested`), duplicates and `already-posted` run **before** T4, so those lines never reach Hermes. The sample job is unchanged: no qb-lists means no T4 call, and the decisions are still 8 post, 2 hold, 1 skip. Tests that count Hermes calls filter by task.
+3. **M6 hints:**
+   - `src/QbAutopost.QuickBooks` holds only a `.csproj` so far (CA1416 is suppressed there only). The POC is not available (ADR-0007), so write `QbSession` from spec FR-11: late-bound `QBXMLRP2.RequestProcessor`, `OpenConnection2("", AppName, 1)`, `BeginSession(file, 2)`, `ProcessRequest`, `EndSession`, `CloseConnection`. Put `[SupportedOSPlatform("windows")]` on it. `CoreIsolationTests` forbids COM types in Core.
+   - `Program.cs:63` registers `UnconfiguredQbGateway` (`TODO(T-601)`). T-601 adds the DI switch: the fake gateway when `QuickBooks:Fake=true` or when not on Windows. `FakeQbGateway` exists only in `Api.Tests/TestSupport`. The Api project would need its own fake, or the switch keeps `UnconfiguredQbGateway` for non-Windows. Decide, then record the choice as a Q-row.
+   - `JobPipeline.PostAsync` already posts, verifies (G5 `PostVerifier`), writes `response.qbxml` and records the ledger (Q-18 covers failure handling). `TODO(T-603, T-604)` in that method marks where the live G4 query, retry-once, busy timeout and backup-age guard go. T-605 is partly done. Confirm it against FR-12/§13 and close it.
+   - `FakeQbGateway` already supports `RejectLine`, `Throw` and `Hang`. `PostingApiTests` covers the basic post path.
+   - `QbXmlBuilder`/`QbXmlParser` exist (FR-9 golden files). Query and delete (`TxnDelRq`) builders and parsers are new work, so add golden files for them.
+   - T-602 sync-lists writes `qb-lists.json` through `QbListsStore`. Keep the `QbAccount.Type` values because `AccountChooser` filters on them.
+   - T-609 is **[server]**: prepare the checklist and set the row to `ready-for-human`, never `done`.
+4. **Test helpers:** `ScriptedHermes` (Core) validates like the real client and applies `Check`. `TestStatementReader`, `TestInvoiceExtractor` and `TestAccountChooser` build the pipeline's readers. In `JobPipelineTests`, `_accountAnswer`, `_invoiceAnswer` and `_rulesFile` (via `UseRules`) script a run, and `UsePlumberInvoiceAndAccounts()` gives the 3199.70 line a known payee plus synced accounts. In Api tests, use `FakeHermesClient.Respond(r => r.Task == … ? json : null)` and seed `_factory.Dir.Combine("data", "qb-lists.json")` before the host starts.
+5. **Still true from earlier sessions:**
+   - JSON enums are camelCase.
+   - Read shared JSON with `AtomicFile.ReadAllText`.
+   - `ApiFactory.WithSetting(key, value)` is not chainable. Use `WithWebHostBuilder` when you need several keys.
+   - Console logs lack the `jobId` scope until T-702.
+   - Sample output and `src/QbAutopost.Api/data/` are git-ignored.
+   - `.gitattributes` marks `*.pdf *.xlsx *.png *.jpg` as binary.
+   - A golden mismatch writes `sample-analysis.actual.json` next to the test assembly. Diff it, then copy it over the golden file.
+6. **Running by hand:** `dotnet run` needs `ASPNETCORE_ENVIRONMENT=Development` or a real `QBAUTOPOST__Api__ApiKey`. With `Ocr:Enabled=true`, set `Ocr:TessDataPath` to a folder that holds `eng.traineddata`.
+7. **GateGuard hook:** it may block the first edit or creation of a file until you state the facts. Retrying works.
 
-## 6. Next milestone — M5 (tiers 3–4, G3)
+## 6. Next milestone: M6 (QuickBooks gateway, post, undo)
 
-See `docs/plan.md` T-501…T-504 and spec FR-6 (tiers), FR-7 (G3), §9.4 (T4 schema and validation), §10 (`analysis.json` tier, confidence, candidates, decision).
+See `docs/plan.md` T-601…T-609 and these spec sections: FR-8 (G4 live query), FR-11 (session, retry, busy, backup guard), FR-12/§13 (G5, ledger), FR-13 (undo), FR-15 (sync-lists), FR-16 (health), FR-17 (query audit files).
 
-Open follow-ups: run `dotnet test` on Linux (a CI workflow would do); decide whether `docs/CLAUDE.md` or the root `CLAUDE.md` is the single copy; push sessions 2–5; answer Q-27 before M6.
+Open follow-ups:
+- Run `dotnet test` on Linux (a CI workflow would cover this).
+- Decide whether `docs/CLAUDE.md` or the root `CLAUDE.md` is the single copy.
+- Push sessions 2–7.
+- Get the owner's answer to Q-27 (re-running T2/T3/T4 at post time) before posting goes live.
