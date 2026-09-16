@@ -27,6 +27,7 @@ public sealed class AnalysisGoldenTests : IDisposable
                 QbListsFile = Path.Combine(_job.Root, "qb-lists.json"),
             },
             new RegexSpecReader(),
+            new DisabledOcr(),
             null!,
             new SystemClock());
         var job = new JobRecord { JobId = "2026-08-tropicana", Folder = _job.Folder, Status = JobStatus.Analysing, DryRun = true };

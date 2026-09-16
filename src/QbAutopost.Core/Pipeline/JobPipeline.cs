@@ -16,7 +16,7 @@ namespace QbAutopost.Core.Pipeline;
 /// Status transitions belong to the caller (the job runner); this class only computes and writes output files.
 /// Amounts are never computed here — they flow from the parsed statement rows (CLAUDE.md rule 3).
 /// </summary>
-public sealed class JobPipeline(PipelineOptions options, ISpecReader specReader, IQbGateway gateway, IClock clock)
+public sealed class JobPipeline(PipelineOptions options, ISpecReader specReader, IOcr ocr, IQbGateway gateway, IClock clock)
 {
     private const string CsvExtension = ".csv";
     private const string XlsxExtension = ".xlsx";
@@ -30,9 +30,12 @@ public sealed class JobPipeline(PipelineOptions options, ISpecReader specReader,
         var lists = new QbListsStore(options.QbListsFile).Load();
 
         var spec = await specReader.ReadAsync(input, ct);
-        var statements = input.Statements
-            .Select(file => ReadStatement(file, rules, spec.Spec))
-            .ToList();
+        var statements = new List<StatementSummary>();
+        foreach (var file in input.Statements)
+        {
+            statements.Add(await ReadStatementAsync(file, rules, spec.Spec, ct));
+        }
+
         foreach (var statement in statements)
         {
             JobOutputWriter.WriteRows(input.OutputDir, statement);
@@ -148,7 +151,7 @@ public sealed class JobPipeline(PipelineOptions options, ISpecReader specReader,
         };
     }
 
-    private StatementSummary ReadStatement(JobFile file, Rules rules, JobSpec spec)
+    private async Task<StatementSummary> ReadStatementAsync(JobFile file, Rules rules, JobSpec spec, CancellationToken ct)
     {
         var extension = Path.GetExtension(file.FileName);
         StatementParseResult parsed;
@@ -162,13 +165,15 @@ public sealed class JobPipeline(PipelineOptions options, ISpecReader specReader,
         }
         else
         {
-            // TODO(T-302, T-303): PDF extraction arrives later in M3; until then the statement is held.
+            var text = await new PdfText(ocr).ReadAsync(file.Path, ct);
+
+            // TODO(T-303): readable PDF text goes to Hermes T2; until then the statement is held.
             return new StatementSummary
             {
                 File = file.FileName,
                 Last4 = file.Last4FromName,
-                HoldReason = HoldReasons.ExtractorNotAvailable,
-                Errors = ["pdf statements are not supported yet"],
+                HoldReason = text.HoldReason ?? HoldReasons.ExtractorNotAvailable,
+                Errors = text.IsHeld ? text.Errors : ["pdf statement rows are not extracted yet (T2)"],
             };
         }
 

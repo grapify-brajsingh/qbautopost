@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Endpoints;
 using QbAutopost.Api.Jobs;
+using QbAutopost.Api.Ocr;
 using QbAutopost.Api.QuickBooks;
 using QbAutopost.Api.Security;
 using QbAutopost.Core.Abstractions;
@@ -48,6 +49,11 @@ builder.Services.AddHttpClient<IHermesClient, HermesClient>(http => http.Timeout
 builder.Services.AddSingleton(PromptLibrary.Load(
     Path.Combine(AppContext.BaseDirectory, PromptLibrary.DefaultFolder), HermesTask.Spec));
 builder.Services.AddSingleton<ISpecReader, HermesSpecReader>();
+builder.Services.AddSingleton<IOcr>(sp =>
+{
+    var ocr = sp.GetRequiredService<IOptions<AppSettings>>().Value.Ocr;
+    return ocr.Enabled ? new TesseractOcr(ocr.TessDataPath) : new DisabledOcr();
+});
 builder.Services.AddSingleton<IQbGateway, UnconfiguredQbGateway>(); // TODO(T-601): COM gateway / fake switch
 builder.Services.AddSingleton(sp =>
 {
@@ -70,6 +76,9 @@ builder.Services.AddHostedService<JobWorker>();
 var app = builder.Build();
 
 RequireApiKey(app);
+
+// With Ocr:Enabled the engine loads now, so missing language data stops startup rather than failing a job.
+app.Services.GetRequiredService<IOcr>();
 
 // Spec §6: before the worker starts (hosted services start in app.Run), no job may remain active.
 app.Services.GetRequiredService<StartupRecovery>().Run();

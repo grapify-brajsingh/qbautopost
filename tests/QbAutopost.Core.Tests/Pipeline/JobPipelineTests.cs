@@ -16,6 +16,8 @@ public sealed class JobPipelineTests : IDisposable
 
     private readonly TempJobFolder _job = TempJobFolder.FromSample();
 
+    private IOcr _ocr = new DisabledOcr();
+
     public void Dispose() => _job.Dispose();
 
     private string LedgerFile => Path.Combine(_job.Root, "ledger.json");
@@ -29,6 +31,7 @@ public sealed class JobPipelineTests : IDisposable
             QbListsFile = Path.Combine(_job.Root, "qb-lists.json"),
         },
         new RegexSpecReader(),
+        _ocr,
         new UnusedGateway(),
         new SystemClock());
 
@@ -148,14 +151,53 @@ public sealed class JobPipelineTests : IDisposable
     }
 
     [Fact]
-    public async Task Should_HoldStatementAndKeepOthers_When_ExtensionHasNoExtractorYet()
+    public async Task Should_HoldTextPdfAndKeepOthers_When_RowExtractionIsNotAvailableYet()
     {
-        _job.WithFile(Path.Combine("statements", "chase-card-7788-extra.pdf"));
+        PdfBuilder.Write(_job.PathOf("statements", "chase-card-7788-extra.pdf"), PdfPageSpec.Text("08/09/2026 SHELL OIL 57442 -48.75 CARD ENDING 7788"));
 
         var analysis = await Analyse();
 
         var pdf = analysis.Statements.Single(s => s.File.EndsWith(".pdf", StringComparison.Ordinal));
         Assert.Equal(HoldReasons.ExtractorNotAvailable, pdf.HoldReason);
+        Assert.Equal("7788", pdf.Last4);
+        Assert.Equal(8, analysis.ToPost.Count);
+    }
+
+    [Fact]
+    public async Task Should_HoldScannedPdfAndKeepOthers_When_OcrIsDisabled()
+    {
+        PdfBuilder.Write(_job.PathOf("statements", "chase-card-7788-extra.pdf"), PdfPageSpec.Scan(TestImage.Png()));
+
+        var analysis = await Analyse();
+
+        var pdf = analysis.Statements.Single(s => s.File.EndsWith(".pdf", StringComparison.Ordinal));
+        Assert.Equal(HoldReasons.ScannedPdfOcrDisabled, pdf.HoldReason);
+        Assert.Equal(8, analysis.ToPost.Count);
+    }
+
+    [Fact]
+    public async Task Should_OcrScannedPdf_When_OcrIsEnabled()
+    {
+        var ocr = new FakeOcr();
+        _ocr = ocr;
+        PdfBuilder.Write(_job.PathOf("statements", "chase-card-7788-extra.pdf"), PdfPageSpec.Scan(TestImage.Png()));
+
+        var analysis = await Analyse();
+
+        var pdf = analysis.Statements.Single(s => s.File.EndsWith(".pdf", StringComparison.Ordinal));
+        Assert.Equal(HoldReasons.ExtractorNotAvailable, pdf.HoldReason);
+        Assert.Single(ocr.Images);
+    }
+
+    [Fact]
+    public async Task Should_HoldDamagedPdfAndKeepOthers_When_PdfCannotBeOpened()
+    {
+        _job.WithFile(Path.Combine("statements", "chase-card-7788-extra.pdf"), "not a pdf");
+
+        var analysis = await Analyse();
+
+        var pdf = analysis.Statements.Single(s => s.File.EndsWith(".pdf", StringComparison.Ordinal));
+        Assert.Equal(HoldReasons.UnreadableStatement, pdf.HoldReason);
         Assert.Equal(8, analysis.ToPost.Count);
     }
 
