@@ -23,6 +23,16 @@ public static class HoldReasons
     public const string NoDepositIncomeAccount = "no-deposit-income-account";
     public const string SubfolderIgnored = "subfolder-ignored";
 
+    // SPEC-GAP T-103: pipeline codes (statement and line level), each holding instead of guessing.
+    public const string ReconcileFailed = "reconcile-failed";
+    public const string ExtractorNotAvailable = "extractor-not-available";
+    public const string KindMismatch = "kind-mismatch";
+    public const string KindNotRequested = "kind-not-requested";
+    public const string DuplicateLine = "duplicate-line";
+    public const string QuickBooksRejected = "quickbooks-rejected";
+    public const string QuickBooksNoResponse = "quickbooks-no-response";
+    public const string AmountMismatch = "amount-mismatch";
+
     // TODO(T-502): replaced by Hermes T4 tiers 3–4; until then a line without a rule/history account is held.
     public const string NoAccountRule = "no-account-rule";
 }
