@@ -25,7 +25,6 @@ public static class HoldReasons
 
     // SPEC-GAP T-103: pipeline codes (statement and line level), each holding instead of guessing.
     public const string ReconcileFailed = "reconcile-failed";
-    public const string ExtractorNotAvailable = "extractor-not-available";
     public const string KindMismatch = "kind-mismatch";
     public const string KindNotRequested = "kind-not-requested";
     public const string DuplicateLine = "duplicate-line";

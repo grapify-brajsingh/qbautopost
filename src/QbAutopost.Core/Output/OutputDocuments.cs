@@ -1,3 +1,4 @@
+using QbAutopost.Core.Extract;
 using QbAutopost.Core.Gates;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Models;
@@ -17,6 +18,9 @@ public sealed record RowsDocument
     public string? Layout { get; init; }
     public IReadOnlyList<StatementLine> Rows { get; init; } = [];
     public ReconcileResult? Reconcile { get; init; }
+
+    /// <summary>Printed statement totals (T2 only).</summary>
+    public StatementTotals? Totals { get; init; }
     public string? HoldReason { get; init; }
     public IReadOnlyList<string> Errors { get; init; } = [];
 
@@ -28,6 +32,7 @@ public sealed record RowsDocument
         Layout = s.Layout,
         Rows = s.Lines,
         Reconcile = s.Reconcile,
+        Totals = s.Totals,
         HoldReason = s.HoldReason,
         Errors = s.Errors,
     };

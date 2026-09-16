@@ -1,5 +1,6 @@
 using System.Text.Json;
 using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Extract;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Models;
 using QbAutopost.Core.Output;
@@ -9,14 +10,21 @@ using QbAutopost.Core.Tests.TestSupport;
 
 namespace QbAutopost.Core.Tests.Pipeline;
 
-/// <summary>FR-1…FR-9 on the sample job (M1: regex spec reader, CSV only, no QuickBooks call).</summary>
+/// <summary>FR-1…FR-9 on the sample job (regex spec reader, scripted Hermes T2, no QuickBooks call).</summary>
 public sealed class JobPipelineTests : IDisposable
 {
     private const string Company = "Tropicana Properties LLC";
 
     private readonly TempJobFolder _job = TempJobFolder.FromSample();
 
+    private readonly ScriptedHermes _hermes;
+
     private IOcr _ocr = new DisabledOcr();
+
+    /// <summary>What Hermes T2 answers for every PDF statement (default: the sample bank statement).</summary>
+    private string _statementAnswer = Fixtures.Read("hermes", "statement.json");
+
+    public JobPipelineTests() => _hermes = new ScriptedHermes(_ => _statementAnswer);
 
     public void Dispose() => _job.Dispose();
 
@@ -31,13 +39,28 @@ public sealed class JobPipelineTests : IDisposable
             QbListsFile = Path.Combine(_job.Root, "qb-lists.json"),
         },
         new RegexSpecReader(),
-        _ocr,
+        TestStatementReader.Create(_ocr, _hermes),
         new UnusedGateway(),
         new SystemClock());
 
     private JobRecord Job() => new() { JobId = "2026-08-tropicana", Folder = _job.Folder, Status = JobStatus.Analysing, DryRun = true };
 
     private Task<AnalysisResult> Analyse(string company = Company) => Pipeline(company).RunAnalysisAsync(Job(), CancellationToken.None);
+
+    private static string PostableKey(MappedTxn m) =>
+        string.Join('|', m.RequestId, m.Kind, m.Account, m.Payee, m.LineAccount, m.RefNumber, m.Line.Amount, m.Line.Date);
+
+    /// <summary>Replaces the sample bank CSV with a text PDF of the same statement (fixture text, one line per text line).</summary>
+    private void UseBankPdf()
+    {
+        File.Delete(_job.PathOf("statements", "chase-checking-4521.csv"));
+        var pages = Fixtures.Read("statements", "chase-checking-4521.pdf.txt")
+            .ReplaceLineEndings("\n")
+            .Split("<<PAGE>>\n")
+            .Select(page => PdfPageSpec.Text(page.TrimEnd().Split('\n')))
+            .ToArray();
+        PdfBuilder.Write(_job.PathOf("statements", "chase-checking-4521.pdf"), pages);
+    }
 
     private void EditRequirement(Func<string, string> edit)
     {
@@ -151,16 +174,100 @@ public sealed class JobPipelineTests : IDisposable
     }
 
     [Fact]
-    public async Task Should_HoldTextPdfAndKeepOthers_When_RowExtractionIsNotAvailableYet()
+    public async Task Should_PostSameLines_When_BankStatementIsATextPdf()
     {
-        PdfBuilder.Write(_job.PathOf("statements", "chase-card-7788-extra.pdf"), PdfPageSpec.Text("08/09/2026 SHELL OIL 57442 -48.75 CARD ENDING 7788"));
+        var fromCsv = (await Analyse()).ToPost.Select(PostableKey).Order().ToList();
+        UseBankPdf();
+
+        var analysis = await Analyse();
+
+        var pdf = analysis.Statements.Single(s => s.Last4 == "4521");
+        Assert.Null(pdf.HoldReason);
+        Assert.Equal(StatementLlmExtractor.Layout, pdf.Layout);
+        Assert.True(pdf.Reconcile!.Ok, pdf.Reconcile.Message);
+        Assert.True(pdf.Reconcile.Verified);
+        Assert.Equal(fromCsv, analysis.ToPost.Select(PostableKey).Order());
+        var request = Assert.Single(_hermes.Requests);
+        Assert.Equal(_job.PathOf("output", "hermes"), request.AuditDir);
+        Assert.Contains("Home Depot #4521 Noida", request.UserContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Should_WriteT2RowsFileWithLayoutTotalsAndVerifiedReconcile_When_PdfIsExtracted()
+    {
+        UseBankPdf();
+
+        await Analyse();
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(_job.PathOf("output", "statements", "chase-checking-4521.pdf.rows.json")));
+        var root = doc.RootElement;
+        Assert.Equal("hermes-t2", root.GetProperty("layout").GetString());
+        Assert.Equal("4521", root.GetProperty("last4").GetString());
+        Assert.Equal("bank", root.GetProperty("kind").GetString());
+        Assert.Equal(7, root.GetProperty("rows").GetArrayLength());
+        Assert.True(root.GetProperty("reconcile").GetProperty("ok").GetBoolean());
+        Assert.True(root.GetProperty("reconcile").GetProperty("verified").GetBoolean());
+        Assert.Equal(13195.87m, root.GetProperty("totals").GetProperty("openingBalance").GetDecimal());
+        Assert.Equal(7, root.GetProperty("totals").GetProperty("transactionCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task Should_HoldPdfAndKeepOthers_When_T2TotalsDoNotReconcile()
+    {
+        UseBankPdf();
+        _statementAnswer = _statementAnswer.Replace("\"closingBalance\": 10230.45", "\"closingBalance\": 10230.55", StringComparison.Ordinal);
+
+        var analysis = await Analyse();
+
+        var pdf = analysis.Statements.Single(s => s.Last4 == "4521");
+        Assert.Equal(HoldReasons.ReconcileFailed, pdf.HoldReason);
+        Assert.Contains("closing is 10230.55", pdf.Reconcile!.Message, StringComparison.Ordinal);
+        Assert.All(analysis.Lines, l => Assert.Equal(SourceKind.Card, l.Line.Kind));
+        Assert.Equal(3, analysis.ToPost.Count);
+    }
+
+    [Fact]
+    public async Task Should_HoldPdfAsNotVerifiable_When_T2AnswerHasNoOpeningOrClosingBalance()
+    {
+        UseBankPdf();
+        _statementAnswer = _statementAnswer
+            .Replace("\"openingBalance\": 13195.87", "\"openingBalance\": null", StringComparison.Ordinal)
+            .Replace("\"closingBalance\": 10230.45", "\"closingBalance\": null", StringComparison.Ordinal);
+
+        var analysis = await Analyse();
+
+        var pdf = analysis.Statements.Single(s => s.Last4 == "4521");
+        Assert.Equal(HoldReasons.ReconcileFailed, pdf.HoldReason);
+        Assert.False(pdf.Reconcile!.Verified);
+        Assert.StartsWith("not-verifiable", pdf.Reconcile.Message, StringComparison.Ordinal);
+        Assert.Equal(3, analysis.ToPost.Count);
+    }
+
+    [Fact]
+    public async Task Should_HoldPdfAndKeepOthers_When_HermesGivesNoValidAnswer()
+    {
+        UseBankPdf();
+        _statementAnswer = "I could not read this statement.";
 
         var analysis = await Analyse();
 
         var pdf = analysis.Statements.Single(s => s.File.EndsWith(".pdf", StringComparison.Ordinal));
-        Assert.Equal(HoldReasons.ExtractorNotAvailable, pdf.HoldReason);
-        Assert.Equal("7788", pdf.Last4);
-        Assert.Equal(8, analysis.ToPost.Count);
+        Assert.Equal(HoldReasons.HermesFailed, pdf.HoldReason);
+        Assert.Equal("4521", pdf.Last4);
+        Assert.Equal(3, analysis.ToPost.Count);
+    }
+
+    [Fact]
+    public async Task Should_HoldPdf_When_ItsKindContradictsTheRequirement()
+    {
+        UseBankPdf();
+        _statementAnswer = _statementAnswer.Replace("\"kind\": \"bank\"", "\"kind\": \"card\"", StringComparison.Ordinal);
+
+        var analysis = await Analyse();
+
+        var pdf = analysis.Statements.Single(s => s.Last4 == "4521");
+        Assert.NotNull(pdf.HoldReason);
+        Assert.Equal(3, analysis.ToPost.Count);
     }
 
     [Fact]
@@ -176,17 +283,20 @@ public sealed class JobPipelineTests : IDisposable
     }
 
     [Fact]
-    public async Task Should_OcrScannedPdf_When_OcrIsEnabled()
+    public async Task Should_SendOcrTextToHermesAndPost_When_ScannedPdfIsReadWithOcr()
     {
-        var ocr = new FakeOcr();
+        var ocr = new FakeOcr().Respond(_ => Fixtures.Read("statements", "chase-checking-4521.pdf.txt"));
         _ocr = ocr;
-        PdfBuilder.Write(_job.PathOf("statements", "chase-card-7788-extra.pdf"), PdfPageSpec.Scan(TestImage.Png()));
+        File.Delete(_job.PathOf("statements", "chase-checking-4521.csv"));
+        PdfBuilder.Write(_job.PathOf("statements", "chase-checking-4521.pdf"), PdfPageSpec.Scan(TestImage.Png()));
 
         var analysis = await Analyse();
 
-        var pdf = analysis.Statements.Single(s => s.File.EndsWith(".pdf", StringComparison.Ordinal));
-        Assert.Equal(HoldReasons.ExtractorNotAvailable, pdf.HoldReason);
+        var pdf = analysis.Statements.Single(s => s.Last4 == "4521");
+        Assert.Null(pdf.HoldReason);
         Assert.Single(ocr.Images);
+        Assert.Contains("Home Depot #4521 Noida", Assert.Single(_hermes.Requests).UserContent, StringComparison.Ordinal);
+        Assert.Equal(8, analysis.ToPost.Count);
     }
 
     [Fact]

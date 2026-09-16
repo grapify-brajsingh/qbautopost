@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using QbAutopost.Core.Extract;
 using QbAutopost.Core.Gates;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Models;
@@ -14,6 +15,9 @@ public sealed record StatementSummary
     public string? Layout { get; init; }
     public int Rows { get; init; }
     public ReconcileResult? Reconcile { get; init; }
+
+    /// <summary>Printed statement totals (T2 only).</summary>
+    public StatementTotals? Totals { get; init; }
     public string? HoldReason { get; init; }
     public IReadOnlyList<string> Errors { get; init; } = [];
 

@@ -16,11 +16,9 @@ namespace QbAutopost.Core.Pipeline;
 /// Status transitions belong to the caller (the job runner); this class only computes and writes output files.
 /// Amounts are never computed here — they flow from the parsed statement rows (CLAUDE.md rule 3).
 /// </summary>
-public sealed class JobPipeline(PipelineOptions options, ISpecReader specReader, IOcr ocr, IQbGateway gateway, IClock clock)
+public sealed class JobPipeline(
+    PipelineOptions options, ISpecReader specReader, StatementReader statementReader, IQbGateway gateway, IClock clock)
 {
-    private const string CsvExtension = ".csv";
-    private const string XlsxExtension = ".xlsx";
-
     /// <summary>Folder → spec → statements → G1/G2 → mapping → ledger duplicates → qbXML and sheets.</summary>
     public async Task<AnalysisResult> RunAnalysisAsync(JobRecord job, CancellationToken ct)
     {
@@ -33,7 +31,7 @@ public sealed class JobPipeline(PipelineOptions options, ISpecReader specReader,
         var statements = new List<StatementSummary>();
         foreach (var file in input.Statements)
         {
-            statements.Add(await ReadStatementAsync(file, rules, spec.Spec, ct));
+            statements.Add(await ReadStatementAsync(file, rules, spec.Spec, input.OutputDir, ct));
         }
 
         foreach (var statement in statements)
@@ -151,32 +149,9 @@ public sealed class JobPipeline(PipelineOptions options, ISpecReader specReader,
         };
     }
 
-    private async Task<StatementSummary> ReadStatementAsync(JobFile file, Rules rules, JobSpec spec, CancellationToken ct)
+    private async Task<StatementSummary> ReadStatementAsync(JobFile file, Rules rules, JobSpec spec, string outputDir, CancellationToken ct)
     {
-        var extension = Path.GetExtension(file.FileName);
-        StatementParseResult parsed;
-        if (string.Equals(extension, CsvExtension, StringComparison.OrdinalIgnoreCase))
-        {
-            parsed = new CsvStatementParser(rules.CsvLayouts).Parse(file.Path);
-        }
-        else if (string.Equals(extension, XlsxExtension, StringComparison.OrdinalIgnoreCase))
-        {
-            parsed = new XlsxStatementParser(rules.CsvLayouts).Parse(file.Path);
-        }
-        else
-        {
-            var text = await new PdfText(ocr).ReadAsync(file.Path, ct);
-
-            // TODO(T-303): readable PDF text goes to Hermes T2; until then the statement is held.
-            return new StatementSummary
-            {
-                File = file.FileName,
-                Last4 = file.Last4FromName,
-                HoldReason = text.HoldReason ?? HoldReasons.ExtractorNotAvailable,
-                Errors = text.IsHeld ? text.Errors : ["pdf statement rows are not extracted yet (T2)"],
-            };
-        }
-
+        var parsed = await statementReader.ReadAsync(file, rules, Path.Combine(outputDir, HermesSpecReader.HermesDir), ct);
         var summary = new StatementSummary
         {
             File = parsed.File,
@@ -185,6 +160,7 @@ public sealed class JobPipeline(PipelineOptions options, ISpecReader specReader,
             Layout = parsed.Layout,
             Rows = parsed.Rows.Count,
             Lines = parsed.Rows,
+            Totals = parsed.Totals,
             HoldReason = parsed.HoldReason,
             Errors = parsed.Errors,
         };
@@ -193,7 +169,10 @@ public sealed class JobPipeline(PipelineOptions options, ISpecReader specReader,
             return summary;
         }
 
-        var reconcile = ReconcileGate.CheckBalanceChain(parsed.Rows);
+        // FR-4: T2 output is checked against the statement's own totals; CSV/XLSX against the balance column.
+        var reconcile = parsed.Totals is { } totals
+            ? ReconcileGate.CheckExtraction(parsed.Kind!.Value, parsed.Rows, totals)
+            : ReconcileGate.CheckBalanceChain(parsed.Rows);
         summary = summary with { Reconcile = reconcile };
         if (!reconcile.Ok)
         {

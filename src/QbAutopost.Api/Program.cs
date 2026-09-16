@@ -8,6 +8,7 @@ using QbAutopost.Api.Ocr;
 using QbAutopost.Api.QuickBooks;
 using QbAutopost.Api.Security;
 using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Extract;
 using QbAutopost.Core.Hermes;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Pipeline;
@@ -54,6 +55,8 @@ builder.Services.AddSingleton<IOcr>(sp =>
     var ocr = sp.GetRequiredService<IOptions<AppSettings>>().Value.Ocr;
     return ocr.Enabled ? new TesseractOcr(ocr.TessDataPath) : new DisabledOcr();
 });
+builder.Services.AddSingleton<StatementLlmExtractor>();
+builder.Services.AddSingleton<StatementReader>();
 builder.Services.AddSingleton<IQbGateway, UnconfiguredQbGateway>(); // TODO(T-601): COM gateway / fake switch
 builder.Services.AddSingleton(sp =>
 {
