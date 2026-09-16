@@ -60,7 +60,8 @@ public sealed class JobPipeline(
 
         var lines = statements.Where(s => !s.IsHeld).SelectMany(s => s.Lines).ToList();
         var invoices = await ReadInvoicesAsync(input, lines, rules, ct);
-        var mapped = ApplyJobGates(new Mapper(rules, lists, ledger.Posted).MapAll(lines), spec.Spec, ledger);
+        var matched = invoices.Where(i => i.Matched).Select(i => i.Facts!);
+        var mapped = ApplyJobGates(new Mapper(rules, lists, ledger.Posted, matched).MapAll(lines), spec.Spec, ledger);
         analysis = analysis with
         {
             Invoices = invoices,

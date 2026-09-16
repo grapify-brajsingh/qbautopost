@@ -16,19 +16,33 @@ public sealed class Mapper
     private readonly Rules _rules;
     private readonly PayeeResolver _payees;
     private readonly LineAccountTiers _tiers;
+    private readonly Dictionary<string, InvoiceFacts> _invoices;
 
-    public Mapper(Rules rules, QbLists? lists = null, IReadOnlyList<LedgerEntry>? history = null)
+    /// <param name="invoices">FR-5 invoices; only those with a <see cref="InvoiceFacts.MatchedRequestId"/> are used.</param>
+    public Mapper(
+        Rules rules, QbLists? lists = null, IReadOnlyList<LedgerEntry>? history = null, IEnumerable<InvoiceFacts>? invoices = null)
     {
         _rules = rules;
         history ??= [];
         _payees = new PayeeResolver(rules, lists ?? QbLists.Empty, history);
         _tiers = new LineAccountTiers(rules, history);
+
+        // The matcher gives each line at most one invoice; should two arrive anyway, the line gets neither.
+        _invoices = (invoices ?? [])
+            .Where(i => i.MatchedRequestId is not null)
+            .GroupBy(i => i.MatchedRequestId!, StringComparer.Ordinal)
+            .Where(g => g.Count() == 1)
+            .ToDictionary(g => g.Key, g => g.Single(), StringComparer.Ordinal);
     }
 
     public IReadOnlyList<MappedTxn> MapAll(IEnumerable<StatementLine> lines) => lines.Select(Map).ToList();
 
-    public MappedTxn Map(StatementLine line) =>
-        line.Kind == SourceKind.Card ? MapCard(line) : MapBank(line);
+    /// <summary>FR-6 routing; a matched invoice's file name is recorded as <see cref="MappedTxn.InvoiceRef"/> whatever the decision.</summary>
+    public MappedTxn Map(StatementLine line)
+    {
+        var txn = line.Kind == SourceKind.Card ? MapCard(line) : MapBank(line);
+        return _invoices.TryGetValue(line.RequestId, out var invoice) ? txn with { InvoiceRef = invoice.File } : txn;
+    }
 
     private MappedTxn MapCard(StatementLine line)
     {
@@ -100,13 +114,13 @@ public sealed class Mapper
 
     private MappedTxn MapDeposit(MappedTxn draft)
     {
-        var customer = _payees.ResolveCustomer(draft.Line.Description);
+        var (customer, note) = ResolvePayee(draft.Line, PartyRole.Customer, _payees.ResolveCustomer, "customer");
         if (customer.Name is null)
         {
             return Hold(draft, HoldReasons.UnknownPayee, customer.Candidates, customer.Note);
         }
 
-        var withPayee = draft with { Payee = customer.Name };
+        var withPayee = draft with { Payee = customer.Name, Note = note ?? draft.Note };
         return string.IsNullOrWhiteSpace(_rules.DepositIncomeAccount)
             ? Hold(withPayee, HoldReasons.NoDepositIncomeAccount) // SPEC-GAP T-002
             : withPayee with { LineAccount = _rules.DepositIncomeAccount };
@@ -128,17 +142,44 @@ public sealed class Mapper
 
     private MappedTxn WithVendorAndTiers(MappedTxn draft, string description)
     {
-        var vendor = _payees.ResolveVendor(draft.Line.Description);
+        var (vendor, note) = ResolvePayee(draft.Line, PartyRole.Vendor, _payees.ResolveVendor, "vendor");
         if (vendor.Name is null)
         {
             return Hold(draft, HoldReasons.UnknownPayee, vendor.Candidates, vendor.Note);
         }
 
-        var withPayee = draft with { Payee = vendor.Name };
+        var withPayee = draft with { Payee = vendor.Name, Note = note ?? draft.Note };
         var tier = _tiers.Resolve(vendor.Name, description);
         return tier is null
             ? Hold(withPayee, HoldReasons.NoAccountRule) // TODO(T-502): tiers 3–4 (invoice, Hermes T4)
             : CheckRef(withPayee with { LineAccount = tier.Account, Confidence = tier.Confidence, Tier = tier.Tier });
+    }
+
+    /// <summary>
+    /// FR-6 payee from the description; when that finds none, FR-5 lets a matched invoice supply it.
+    /// SPEC-GAP T-403: the invoice must have the role that fits the line (vendor for charges and ACH debits, customer for
+    /// deposits) and its party must resolve to a known name by the same alias/fuzzy rules, so a name QuickBooks does not
+    /// know is never posted. The returned note says where the payee came from.
+    /// </summary>
+    private (PayeeResolution Payee, string? Note) ResolvePayee(
+        StatementLine line, PartyRole role, Func<string, PayeeResolution> resolve, string noun)
+    {
+        var fromLine = resolve(line.Description);
+        if (fromLine.Name is not null
+            || !_invoices.TryGetValue(line.RequestId, out var invoice)
+            || invoice.Role != role)
+        {
+            return (fromLine, null);
+        }
+
+        var fromInvoice = resolve(invoice.Party);
+        if (fromInvoice.Name is not null)
+        {
+            return (fromInvoice, $"payee from invoice {invoice.File}");
+        }
+
+        var note = $"invoice {invoice.File} names \"{invoice.Party}\", which is not a known {noun}";
+        return (fromLine with { Note = fromLine.Note is null ? note : $"{fromLine.Note}; {note}" }, null);
     }
 
     /// <summary>qbXML RefNumber is at most 11 characters; a longer check number is held, never truncated (SPEC-GAP T-002).</summary>

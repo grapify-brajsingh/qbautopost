@@ -501,6 +501,33 @@ public sealed class JobPipelineTests : IDisposable
     }
 
     [Fact]
+    public async Task Should_SetInvoiceRefOnHomeDepotLine_When_SampleJobIsAnalysed()
+    {
+        var analysis = await Analyse();
+
+        var homeDepot = Assert.Single(analysis.Lines, l => l.InvoiceRef is not null);
+        Assert.Equal("home-depot-88213.pdf", homeDepot.InvoiceRef);
+        Assert.Equal("Home Depot", homeDepot.Payee);
+        Assert.Equal(8, analysis.ToPost.Count);
+    }
+
+    [Fact]
+    public async Task Should_SupplyPayeeFromInvoice_When_LineDescriptionNamesNoVendor()
+    {
+        new QbListsStore(Path.Combine(_job.Root, "qb-lists.json")).Save(new QbLists { Vendors = ["Joe's Plumbing"] });
+        _invoiceAnswer = """{ "party": "Joe's Plumbing", "role": "vendor", "number": "77", "date": "2026-08-14", "total": 3199.70 }""";
+
+        var analysis = await Analyse();
+
+        var plumber = Assert.Single(analysis.Lines, l => l.Line.Description.Contains("PLUMBER", StringComparison.Ordinal));
+        Assert.Equal("Joe's Plumbing", plumber.Payee);
+        Assert.Equal("home-depot-88213.pdf", plumber.InvoiceRef);
+        Assert.Contains("payee from invoice", plumber.Note, StringComparison.Ordinal);
+        // No account rule for the new vendor yet: still held, now for the account instead of the payee (tiers 3–4 in M5).
+        Assert.Equal(HoldReasons.NoAccountRule, plumber.Reason);
+    }
+
+    [Fact]
     public async Task Should_SendInvoiceWithCompanyAndAuditFolder_When_SampleJobIsAnalysed()
     {
         await Analyse();
