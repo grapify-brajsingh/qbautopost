@@ -29,7 +29,7 @@ public sealed class PdfStatementApiTests : IDisposable
 
         Assert.Equal(JobStatus.Ready, view.Status);
         Assert.Equal((8, 2, 1), (view.Counts.ToPost, view.Counts.Held, view.Counts.Skipped));
-        Assert.Equal([HermesTask.Spec, HermesTask.Statement], _factory.Hermes.Calls.Select(c => c.Task));
+        Assert.Equal([HermesTask.Spec, HermesTask.Statement, HermesTask.Invoice], _factory.Hermes.Calls.Select(c => c.Task));
         Assert.Equal(Path.Combine(folder, "output", "hermes"), _factory.Hermes.Calls[1].AuditDir);
         Assert.True(File.Exists(Path.Combine(folder, "output", "statements", "chase-checking-4521.pdf.rows.json")));
     }

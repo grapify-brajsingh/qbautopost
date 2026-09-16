@@ -89,8 +89,7 @@ public sealed class JobsApiTests : IDisposable
         var view = await _client.RunToEndAsync(folder);
 
         Assert.Equal(JobStatus.Ready, view.Status);
-        // The sample's invoices/home-depot-88213.txt stand-in is reported too (invoices accept pdf/png/jpg only).
-        var unreadable = Assert.Single(view.Unreadable, u => u.File.StartsWith("statements/", StringComparison.Ordinal));
+        var unreadable = Assert.Single(view.Unreadable);
         Assert.Equal("statements/readme.txt", unreadable.File);
         Assert.Equal(HoldReasons.UnsupportedExtension, unreadable.Reason);
     }

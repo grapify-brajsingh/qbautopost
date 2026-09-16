@@ -14,6 +14,7 @@ public static class JobOutputWriter
     public const string RequestFile = "request.qbxml";
     public const string ResponseFile = "response.qbxml";
     public const string StatementsDir = "statements";
+    public const string InvoicesDir = "invoices";
 
     public static void WriteSpec(string outputDir, AnalysisResult analysis) =>
         AtomicFile.WriteJson(
@@ -25,6 +26,12 @@ public static class JobOutputWriter
 
     public static string RowsPath(string outputDir, string statementFile) =>
         Path.Combine(outputDir, StatementsDir, statementFile + ".rows.json");
+
+    public static void WriteInvoice(string outputDir, InvoiceSummary invoice) =>
+        AtomicFile.WriteJson(InvoicePath(outputDir, invoice.File), invoice);
+
+    public static string InvoicePath(string outputDir, string invoiceFile) =>
+        Path.Combine(outputDir, InvoicesDir, invoiceFile + ".json");
 
     public static void WriteAnalysis(string outputDir, AnalysisResult analysis) =>
         AtomicFile.WriteJson(

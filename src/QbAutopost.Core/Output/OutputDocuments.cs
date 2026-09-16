@@ -103,8 +103,11 @@ public sealed record ResultDocument
     public IReadOnlyList<SkippedItem> Skipped { get; init; } = [];
     public IReadOnlyList<UnreadableFile> Unreadable { get; init; } = [];
 
-    /// <summary>TODO(T-402): invoice matching arrives in M4; always empty until then.</summary>
-    public IReadOnlyList<string> UnmatchedInvoices { get; init; } = [];
+    /// <summary>
+    /// FR-5: invoices that matched no line, including files that could not be read (SPEC-GAP T-402: reported here,
+    /// with their hold code as <c>reason</c>, rather than in <see cref="Unreadable"/>, which lists skipped folder entries).
+    /// </summary>
+    public IReadOnlyList<InvoiceSummary> UnmatchedInvoices { get; init; } = [];
 
     public IReadOnlyList<StatementSummary> Reconcile { get; init; } = [];
     public DateTime StartedUtc { get; init; }
@@ -139,6 +142,7 @@ public sealed record ResultDocument
             Held = held.Select(HeldItem.From).ToList(),
             Skipped = skipped.Select(SkippedItem.From).ToList(),
             Unreadable = analysis?.Input.Unreadable ?? [],
+            UnmatchedInvoices = analysis?.Invoices.Where(i => !i.Matched).ToList() ?? [],
             Reconcile = analysis?.Statements ?? [],
             StartedUtc = startedUtc,
             FinishedUtc = finishedUtc,

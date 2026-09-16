@@ -27,7 +27,7 @@ public sealed class SpecGateApiTests : IDisposable
         var view = await _client.RunToEndAsync(folder);
 
         Assert.Equal(JobStatus.Ready, view.Status);
-        Assert.Equal(HermesTask.Spec, Assert.Single(_factory.Hermes.Calls).Task);
+        Assert.Equal([HermesTask.Spec, HermesTask.Invoice], _factory.Hermes.Calls.Select(c => c.Task));
         var actual = File.ReadAllText(Path.Combine(folder, "output", "spec.json")).ReplaceLineEndings("\n");
         var goldenPath = Fixtures.PathOf("output", "sample-spec.golden.json");
         var expected = File.Exists(goldenPath) ? File.ReadAllText(goldenPath).ReplaceLineEndings("\n") : "";

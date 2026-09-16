@@ -27,8 +27,13 @@ public sealed class JobPipelineTests : IDisposable
     /// <summary>T2 answer for the card PDF (<c>chase-card-7788.pdf</c>).</summary>
     private string _cardAnswer = Fixtures.Read("hermes", "statement-card-7788.json");
 
+    /// <summary>What Hermes T3 answers for every invoice (default: the sample Home Depot invoice).</summary>
+    private string _invoiceAnswer = Fixtures.Read("hermes", "invoice.json");
+
     public JobPipelineTests() => _hermes = new ScriptedHermes(r =>
-        r.UserContent.Contains("chase-card-7788.pdf", StringComparison.Ordinal) ? _cardAnswer : _statementAnswer);
+        r.Task == HermesTask.Invoice ? _invoiceAnswer
+        : r.UserContent.Contains("chase-card-7788.pdf", StringComparison.Ordinal) ? _cardAnswer
+        : _statementAnswer);
 
     public void Dispose() => _job.Dispose();
 
@@ -44,6 +49,7 @@ public sealed class JobPipelineTests : IDisposable
         },
         new RegexSpecReader(),
         TestStatementReader.Create(_ocr, _hermes),
+        TestInvoiceExtractor.Create(_ocr, _hermes),
         new UnusedGateway(),
         new SystemClock());
 
@@ -188,7 +194,7 @@ public sealed class JobPipelineTests : IDisposable
         Assert.True(pdf.Reconcile!.Ok, pdf.Reconcile.Message);
         Assert.True(pdf.Reconcile.Verified);
         Assert.Equal(fromCsv, analysis.ToPost.Select(PostableKey).Order());
-        var request = Assert.Single(_hermes.Requests);
+        var request = Assert.Single(_hermes.Requests, r => r.Task == HermesTask.Statement);
         Assert.Equal(_job.PathOf("output", "hermes"), request.AuditDir);
         Assert.Contains("Home Depot #4521 Noida", request.UserContent, StringComparison.Ordinal);
     }
@@ -326,7 +332,7 @@ public sealed class JobPipelineTests : IDisposable
         var pdf = analysis.Statements.Single(s => s.Last4 == "4521");
         Assert.Null(pdf.HoldReason);
         Assert.Single(ocr.Images);
-        Assert.Contains("Home Depot #4521 Noida", Assert.Single(_hermes.Requests).UserContent, StringComparison.Ordinal);
+        Assert.Contains("Home Depot #4521 Noida", Assert.Single(_hermes.Requests, r => r.Task == HermesTask.Statement).UserContent, StringComparison.Ordinal);
         Assert.Equal(8, analysis.ToPost.Count);
     }
 
@@ -479,6 +485,135 @@ public sealed class JobPipelineTests : IDisposable
         Assert.Equal(JobStatus.Posting, posting.Status);
         Assert.Equal(2, posting.Attempt);
         Assert.Equal("2026-08-tropicana#2", posting.BatchId);
+    }
+
+    [Fact]
+    public async Task Should_MatchSampleInvoiceToHomeDepotLine_When_SampleJobIsAnalysed()
+    {
+        var analysis = await Analyse();
+
+        var invoice = Assert.Single(analysis.Invoices);
+        var homeDepot = Assert.Single(analysis.Lines, l => l.Line.Description.StartsWith("HOME DEPOT", StringComparison.Ordinal));
+        Assert.True(invoice.Matched);
+        Assert.Equal(homeDepot.RequestId, invoice.Facts!.MatchedRequestId);
+        Assert.Equal("home-depot-88213.pdf", invoice.File);
+        Assert.Null(invoice.Reason);
+    }
+
+    [Fact]
+    public async Task Should_SendInvoiceWithCompanyAndAuditFolder_When_SampleJobIsAnalysed()
+    {
+        await Analyse();
+
+        var request = Assert.Single(_hermes.Requests, r => r.Task == HermesTask.Invoice);
+        Assert.Contains("Our company: " + Company, request.UserContent, StringComparison.Ordinal);
+        Assert.Contains("TOTAL 184.32", request.UserContent, StringComparison.Ordinal);
+        Assert.Equal(_job.PathOf("output", "hermes"), request.AuditDir);
+    }
+
+    [Fact]
+    public async Task Should_WriteInvoiceJson_When_InvoiceIsRead()
+    {
+        var analysis = await Analyse();
+
+        var path = _job.PathOf("output", "invoices", "home-depot-88213.pdf.json");
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        var root = doc.RootElement;
+        Assert.Equal("home-depot-88213.pdf", root.GetProperty("file").GetString());
+        var facts = root.GetProperty("facts");
+        Assert.Equal("Home Depot", facts.GetProperty("party").GetString());
+        Assert.Equal("vendor", facts.GetProperty("role").GetString());
+        Assert.Equal("2026-08-21", facts.GetProperty("date").GetString());
+        Assert.Equal(184.32m, facts.GetProperty("total").GetDecimal());
+        Assert.Equal(analysis.Invoices[0].Facts!.MatchedRequestId, facts.GetProperty("matchedRequestId").GetString());
+        Assert.Single(root.GetProperty("candidates").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task Should_ReportUnmatchedInvoiceAndKeepDecisions_When_NoLineHasItsTotal()
+    {
+        _invoiceAnswer = _invoiceAnswer.Replace("184.32", "999.99", StringComparison.Ordinal);
+
+        var analysis = await Analyse();
+        var result = ResultDocument.Build(Job(), analysis, null, DateTime.UnixEpoch, DateTime.UnixEpoch);
+
+        var unmatched = Assert.Single(result.UnmatchedInvoices);
+        Assert.Equal("home-depot-88213.pdf", unmatched.File);
+        Assert.Equal(HoldReasons.NoMatchingLine, unmatched.Reason);
+        Assert.Null(unmatched.Facts!.MatchedRequestId);
+        Assert.Equal((8, 2, 1), (analysis.ToPost.Count, result.Counts.Held, result.Counts.Skipped));
+    }
+
+    [Fact]
+    public async Task Should_ReportNoUnmatchedInvoices_When_SampleInvoiceMatches()
+    {
+        var analysis = await Analyse();
+
+        Assert.Empty(ResultDocument.Build(Job(), analysis, null, DateTime.UnixEpoch, DateTime.UnixEpoch).UnmatchedInvoices);
+    }
+
+    [Fact]
+    public async Task Should_ReportInvoiceHermesFailedAndStillAnalyse_When_T3AnswerIsInvalid()
+    {
+        _invoiceAnswer = """{ "party": "Home Depot", "role": "supplier", "total": 184.32 }""";
+
+        var analysis = await Analyse();
+        var result = ResultDocument.Build(Job(), analysis, null, DateTime.UnixEpoch, DateTime.UnixEpoch);
+
+        var unmatched = Assert.Single(result.UnmatchedInvoices);
+        Assert.Equal(HoldReasons.HermesFailed, unmatched.Reason);
+        Assert.Null(unmatched.Facts);
+        Assert.NotEmpty(unmatched.Errors);
+        Assert.Equal(8, analysis.ToPost.Count);
+        Assert.True(File.Exists(_job.PathOf("output", "invoices", "home-depot-88213.pdf.json")));
+    }
+
+    [Fact]
+    public async Task Should_ReportUnreadable_When_InvoiceIsAnImageAndOcrIsDisabled()
+    {
+        _job.Copy(Fixtures.PathOf("invoices", "home-depot-88213.pdf"), Path.Combine("invoices", "receipt.png"));
+
+        var analysis = await Analyse();
+
+        var image = Assert.Single(analysis.Invoices, i => i.File == "receipt.png");
+        Assert.Equal(HoldReasons.Unreadable, image.Reason);
+        Assert.True(Assert.Single(analysis.Invoices, i => i.File == "home-depot-88213.pdf").Matched);
+        Assert.Single(_hermes.Requests, r => r.Task == HermesTask.Invoice);
+    }
+
+    [Fact]
+    public async Task Should_NotMatchLinesOfHeldStatements_When_BankStatementFailsExtraction()
+    {
+        UseBankPdf();
+        _statementAnswer = "not json";
+
+        var analysis = await Analyse();
+
+        Assert.True(Assert.Single(analysis.Statements, s => s.File == "chase-checking-4521.pdf").IsHeld);
+        var invoice = Assert.Single(analysis.Invoices);
+        Assert.Equal(HoldReasons.NoMatchingLine, invoice.Reason);
+    }
+
+    [Fact]
+    public async Task Should_NotReadInvoices_When_RequirementCheckFails()
+    {
+        var analysis = await Analyse(company: "Another Company Inc");
+
+        Assert.False(analysis.Gate.Ok);
+        Assert.Empty(analysis.Invoices);
+        Assert.DoesNotContain(_hermes.Requests, r => r.Task == HermesTask.Invoice);
+        Assert.False(Directory.Exists(_job.PathOf("output", "invoices")));
+    }
+
+    [Fact]
+    public async Task Should_ReadNoInvoices_When_FolderHasNone()
+    {
+        Directory.Delete(_job.PathOf("invoices"), recursive: true);
+
+        var analysis = await Analyse();
+
+        Assert.Empty(analysis.Invoices);
+        Assert.Equal(8, analysis.ToPost.Count);
     }
 
     /// <summary>Analysis never talks to QuickBooks.</summary>

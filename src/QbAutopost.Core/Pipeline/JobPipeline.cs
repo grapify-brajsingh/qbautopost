@@ -17,9 +17,14 @@ namespace QbAutopost.Core.Pipeline;
 /// Amounts are never computed here — they flow from the parsed statement rows (CLAUDE.md rule 3).
 /// </summary>
 public sealed class JobPipeline(
-    PipelineOptions options, ISpecReader specReader, StatementReader statementReader, IQbGateway gateway, IClock clock)
+    PipelineOptions options,
+    ISpecReader specReader,
+    StatementReader statementReader,
+    InvoiceExtractor invoiceExtractor,
+    IQbGateway gateway,
+    IClock clock)
 {
-    /// <summary>Folder → spec → statements → G1/G2 → mapping → ledger duplicates → qbXML and sheets.</summary>
+    /// <summary>Folder → spec → statements → G1/G2 → invoices → mapping → ledger duplicates → qbXML and sheets.</summary>
     public async Task<AnalysisResult> RunAnalysisAsync(JobRecord job, CancellationToken ct)
     {
         var input = FolderReader.Read(job.Folder);
@@ -54,9 +59,11 @@ public sealed class JobPipeline(
         }
 
         var lines = statements.Where(s => !s.IsHeld).SelectMany(s => s.Lines).ToList();
+        var invoices = await ReadInvoicesAsync(input, lines, rules, ct);
         var mapped = ApplyJobGates(new Mapper(rules, lists, ledger.Posted).MapAll(lines), spec.Spec, ledger);
         analysis = analysis with
         {
+            Invoices = invoices,
             Lines = mapped,
             QbXml = QbXmlBuilder.BuildAddRequest(mapped.Where(m => m.Decision == Decision.Post).ToList(), options.QbXmlVersion),
         };
@@ -187,6 +194,48 @@ public sealed class JobPipeline(
         return contradicts
             ? summary with { HoldReason = HoldReasons.KindMismatch, Errors = [$"layout says {summary.Kind}, requirement says otherwise"] }
             : summary;
+    }
+
+    /// <summary>
+    /// FR-5: every invoice file → T3 → matched against the lines of statements that passed G1. Each result is written to
+    /// <c>output/invoices/&lt;file&gt;.json</c>. An unreadable invoice is reported, never fatal.
+    /// </summary>
+    private async Task<IReadOnlyList<InvoiceSummary>> ReadInvoicesAsync(
+        JobInput input, IReadOnlyList<StatementLine> lines, Rules rules, CancellationToken ct)
+    {
+        var auditDir = Path.Combine(input.OutputDir, HermesSpecReader.HermesDir);
+        var read = new List<InvoiceReadResult>();
+        foreach (var file in input.Invoices)
+        {
+            read.Add(await invoiceExtractor.ReadAsync(file, options.CompanyName, auditDir, ct));
+        }
+
+        var matches = new Queue<InvoiceMatch>(InvoiceMatcher.Match(
+            read.Where(r => r.Facts is not null).Select(r => r.Facts!).ToList(), lines, rules));
+        var summaries = read.Select(r =>
+        {
+            if (r.Facts is null)
+            {
+                return new InvoiceSummary { File = r.File, Reason = r.HoldReason, Errors = r.Errors };
+            }
+
+            var match = matches.Dequeue();
+            return new InvoiceSummary
+            {
+                File = r.File,
+                Facts = match.Invoice,
+                Reason = match.Reason,
+                Note = match.Note,
+                Candidates = match.Candidates,
+            };
+        }).ToList();
+
+        foreach (var summary in summaries)
+        {
+            JobOutputWriter.WriteInvoice(input.OutputDir, summary);
+        }
+
+        return summaries;
     }
 
     /// <summary>

@@ -44,6 +44,10 @@ public static class HoldReasons
     // cannot be opened, OCR errors, no text, or text too long for one Hermes request.
     public const string Unreadable = "unreadable";
 
+    // SPEC-GAP T-402: why an invoice was not matched (besides the spec's "ambiguous").
+    public const string NoMatchingLine = "no-matching-line";
+    public const string NoInvoiceDate = "no-invoice-date";
+
     // TODO(T-502): replaced by Hermes T4 tiers 3–4; until then a line without a rule/history account is held.
     public const string NoAccountRule = "no-account-rule";
 }

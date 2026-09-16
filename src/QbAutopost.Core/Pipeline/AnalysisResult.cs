@@ -28,6 +28,26 @@ public sealed record StatementSummary
     public bool IsHeld => HoldReason is not null;
 }
 
+/// <summary>
+/// One invoice file after T3 and matching (spec FR-5), written to <c>output/invoices/&lt;file&gt;.json</c>. Without
+/// <see cref="Facts"/> the file could not be read and <see cref="Reason"/> is the hold code; otherwise
+/// <see cref="Reason"/> says why it matched no line. Invoices are evidence only: none of this holds a line.
+/// </summary>
+public sealed record InvoiceSummary
+{
+    public required string File { get; init; }
+    public InvoiceFacts? Facts { get; init; }
+    public string? Reason { get; init; }
+    public string? Note { get; init; }
+    public IReadOnlyList<string> Errors { get; init; } = [];
+
+    /// <summary>Request ids of the lines within amount and date range.</summary>
+    public IReadOnlyList<string> Candidates { get; init; } = [];
+
+    [JsonIgnore]
+    public bool Matched => Facts?.MatchedRequestId is not null;
+}
+
 /// <summary>FR-1…FR-9 for one job. <see cref="FailReason"/> set → the job fails (G2) and nothing is mapped.</summary>
 public sealed record AnalysisResult
 {
@@ -36,6 +56,7 @@ public sealed record AnalysisResult
     public required SpecReadResult Spec { get; init; }
     public required SpecGateResult Gate { get; init; }
     public IReadOnlyList<StatementSummary> Statements { get; init; } = [];
+    public IReadOnlyList<InvoiceSummary> Invoices { get; init; } = [];
     public IReadOnlyList<MappedTxn> Lines { get; init; } = [];
     public string QbXml { get; init; } = "";
 
