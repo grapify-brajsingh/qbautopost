@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="13.0"?>
+<QBXML>
+  <QBXMLMsgsRq onError="continueOnError">
+    <TxnDelRq requestID="1">
+      <TxnDelType>Check</TxnDelType>
+      <TxnID>1A2B-1787000001</TxnID>
+    </TxnDelRq>
+    <TxnDelRq requestID="2">
+      <TxnDelType>CreditCardCharge</TxnDelType>
+      <TxnID>1A2C-1787000002</TxnID>
+    </TxnDelRq>
+    <TxnDelRq requestID="3">
+      <TxnDelType>CreditCardCredit</TxnDelType>
+      <TxnID>1A2D-1787000003</TxnID>
+    </TxnDelRq>
+    <TxnDelRq requestID="4">
+      <TxnDelType>Deposit</TxnDelType>
+      <TxnID>1A2E-1787000004</TxnID>
+    </TxnDelRq>
+  </QBXMLMsgsRq>
+</QBXML>
