@@ -1,13 +1,13 @@
 # Session Handoff — QbAutopost
 
-Written: 2026-09-16 (session 2) · M0 and M1 done · Next step: **M2** (after the owner checks in on M1 and the tracker Questions)
+Written: 2026-09-16 (session 3) · M0, M1, M2 done · Next step: **M3** (XLSX, PDF text, T2 rows, G1 extended)
 
 ## 1. Start the next session with this prompt
 
 ```
 Read handoff.md, CLAUDE.md, docs/tracker.md and docs/adr/README.md.
-Check the tracker "Questions" table for owner answers (Q-1…Q-20) and apply any
-that change behaviour first. Then continue with the first todo task in M2 (T-201).
+Check the tracker "Questions" table for owner answers (Q-1…Q-22) and apply any
+that change behaviour first. Then continue with the first todo task in M3 (T-301).
 One task at a time, tests green, tracker updated, one commit per task.
 ```
 
@@ -20,55 +20,48 @@ QbAutopost is a single .NET 8 app. It takes a job folder (`requirement.txt` plus
 | Item | State |
 |---|---|
 | Repo | `D:\qb_post`, branch `main`, remote `origin` = https://github.com/grapify-brajsingh/qbautopost.git |
-| Push | Session 2 commits (T-101…T-107) are **local only** — push when the owner agrees: `git push origin main` |
+| Push | Session 2 and 3 commits (T-101…T-205) are **local only** — push when the owner agrees: `git push origin main` |
 | SDK | pinned to 8.0.x by `global.json` |
 | Build | `dotnet build -warnaserror` → 0 warnings, 0 errors |
-| Tests | 235 passing (Core 181, Api 54); 8 consecutive green runs on Windows. **Not yet run on Linux.** |
-| Milestones | M0 done, M1 done; M2–M8 todo |
-| Manual check | Development host: sample job → `ready` (8 post / 2 held / 1 skipped, total 4942.64); post → `partial` "nothing posted" (no gateway until M6) |
+| Tests | 331 passing (Core 263, Api 68); 6 consecutive green runs on Windows. **Not yet run on Linux.** |
+| Milestones | M0, M1, M2 done; M3–M8 todo |
+| Manual check | Development host, **no Hermes running**: `/health/hermes` → 503 (connection refused); sample job → `failed` "Hermes Spec call failed" (Q-22). With Hermes up, expect `ready` 8 post / 2 held / 1 skipped, total 4942.64 (unchanged mapping) |
 
-## 4. What M1 added (code map delta)
+## 4. What M2 added (code map delta)
 
 ```
 src/QbAutopost.Core/
-  Abstractions/  IClock (+SystemClock), IQbGateway (+QuickBooksUnavailableException), IHermesClient (+HermesTask, IValidatable)
-  Jobs/          FolderReader (F1/F2/F4/F5), JobInput, JobStatus (+JobStatusRules), JobRecord (MoveTo), IJobStore
-  Pipeline/      JobPipeline (RunAnalysisAsync, BeginPosting, RunPostAsync, PostAsync), PipelineOptions,
-                 ISpecReader (+RegexSpecReader, SpecSources), AnalysisResult / StatementSummary / PostOutcome
-  Gates/         SpecGate (G2), PostVerifier (G5)
-  Output/        JobOutputWriter (spec/rows/analysis/request+sheets/response/result), OutputDocuments
-  Store/         AtomicFile (shared read + retry), QbListsStore
+  Abstractions/IHermesClient.cs  HermesRequest(task, systemPrompt, userContent, auditDir, schemaHint), PingAsync/HermesPing,
+                                 HermesException ← HermesValidationException (two invalid answers) | HermesUnavailableException (transport)
+  Hermes/        HermesClient (retry-with-errors, per-call timeout, audit), HermesOptions, HermesAudit (<task>-<n>.request/response.json),
+                 JsonReply (fence strip + parse + Validate), PromptTemplate ({{name}}), PromptLibrary (loads Hermes/prompts/*.md at startup),
+                 SpecAnswer (T1 DTO → JobSpec), prompts/spec.md (copied to <app>/Hermes/prompts)
+  Pipeline/      HermesSpecReader (T1 → regex-fallback on HermesValidationException); SpecReadResult.Note → spec.json.note
 src/QbAutopost.Api/
-  Program.cs     DI, options (+path resolution), problem details, API-key middleware, recovery, routes
-  Configuration/ AppSettings (spec §12 + Paths.JobIndex)
-  Jobs/          JobStore (status.json + jobs.json index), JobQueue, JobWorker, JobRunner, JobAdmission, StartupRecovery
-  Endpoints/     JobEndpoints (POST/GET /jobs, GET /jobs/{id}, POST /jobs/{id}/post), JobView, JobSummary
-  Security/      ApiKeyMiddleware        QuickBooks/ UnconfiguredQbGateway (TODO T-601)
-tests/QbAutopost.Api.Tests/TestSupport/  ApiFactory, FakeQbGateway, FakeHermesClient, TempDir, Fixtures, FixedClock
-tests/fixtures/output/sample-analysis.golden.json   (reviewed by hand)
+  Program.cs     HermesOptions, typed HttpClient (infinite HttpClient timeout, infinite handler lifetime), PromptLibrary, HermesSpecReader
+  Endpoints/HealthEndpoints.cs   GET /health/hermes ({ ok, model, latencyMs, message }; 503 when not ok)
+tests/  Core.Tests/TestSupport/StubHttpHandler (in-memory HTTP), Core.Tests/Hermes/*, Pipeline/HermesSpecReaderTests,
+        Api.Tests/Api/{SpecGateApiTests,HealthApiTests}, fixtures/output/sample-spec.golden.json (reviewed by hand)
 ```
 
 ## 5. Things the next session must know
 
-1. **No owner answers yet.** Q-1…Q-11 (from M0) and Q-12…Q-20 (from M1) all carry conservative choices. The most important: Q-1 (real CSV columns), Q-5 (sheet columns), Q-11 (last-four in requirement), Q-15 (company name must match `Company.Name`), Q-18 (what a failed QuickBooks call does).
-2. **G2 already exists** (`SpecGate`, T-103). M2's T-203 only has to wire it to the Hermes T1 path and add the explanation in `spec.json` for Hermes output. `ISpecReader` is the seam: add a Hermes reader with regex fallback (`SpecSources.RegexFallback`) and register it in `Program.cs` in place of `RegexSpecReader`.
-3. **Hermes T1 fixture** `tests/fixtures/hermes/spec.json` uses kinds `Check`, `CreditCard`, `Deposit` (spec §9.1). `CreditCard` must map to `CcCharge` + `CcCredit` — `TxnKind` has no `CreditCard` member.
-4. **Posting path exists already** (G5 + ledger, T-103). M6 adds the COM gateway, live G4 query, retry-once, busy timeout, backup guard and undo. `UnconfiguredQbGateway` throws `QuickBooksUnavailableException` → job `partial`, nothing recorded.
-5. **JSON enums are camelCase** (`"ready"`, `"ccCharge"`) and read case-insensitively (tracker Decisions).
-6. **Windows file sharing:** always read shared JSON through `AtomicFile.ReadAllText` (a polling reader can otherwise break the atomic replace).
-7. **Test factory:** `ApiFactory.WithSetting(key, value)` overrides one setting; the host starts on first client, so files can be seeded into `factory.Dir` before that (see `RecoveryTests`).
-8. **GateGuard hook** blocks the first write of every new file path and asks for facts; retrying succeeds. `ECC_GATEGUARD=off` avoids it (owner's choice).
-9. **Console logging** does not print the `jobId` scope yet; Serilog with the correlation id is T-702.
-10. **Sample output** goes to `samples/jobs/2026-08-tropicana/output/` and dev data to `src/QbAutopost.Api/data/`; both are git-ignored.
+1. **No owner answers yet.** Q-1…Q-22 all carry conservative choices. New this session: Q-21 (transport failures are not retried; empty key → no `Authorization` header), Q-22 (Hermes unreachable → the job fails; no regex fallback).
+2. **Using Hermes for a new task (T2–T4):** add `Hermes/prompts/<task>.md`, a `record … : IValidatable` answer DTO, then call `IHermesClient.CompleteJsonAsync<T>(new HermesRequest(task, prompts.Render(task, values), content, Path.Combine(input.OutputDir, "hermes")), ct)`. Add the task to the `PromptLibrary.Load(..., required)` list in `Program.cs` once its prompt exists. T2–T4 **hold** on `HermesException` (spec §9); only T1 falls back.
+3. **FakeHermesClient** (Api tests) serves `tests/fixtures/hermes/<task>.json`, runs `Validate()`, and takes `Respond(req => json | null | throw)`; `Ping` sets the health answer. Core tests use `StubHttpHandler` with the real `HermesClient` (`ReplyContent`, `ReplyRaw`, `Hang`, `Throw`).
+4. **Api tests script T1 answers.** Any Api test that writes its own `requirement.txt` must also `_factory.Hermes.Respond(...)`, otherwise the fixture spec (4521/7788) is used. The test host points Hermes at `http://hermes.invalid:8642`.
+5. **M3 hints from the spec:** FR-3 says a date that fails the layout format falls back to invariant `DateOnly.TryParse`, but the T-002 choice (Q-1) was "row error, no fallback" — decide in T-301 and record it. FR-4's T2 formula `opening + Σcredits − Σdebits = closing` fits bank statements; for card statements the sign is reversed (charges raise the balance, as in `ReconcileGate`) — treat it as a SPEC-GAP. T2 chunking threshold is 60 000 characters (§9.2). XLSX/PDF statements are currently held `extractor-not-available` in `JobPipeline.ReadStatement`.
+6. **Already true from earlier sessions:** JSON enums are camelCase; read shared JSON with `AtomicFile.ReadAllText`; `ApiFactory.WithSetting(key, value)`; GateGuard hook blocks the first write of every file (retry works; `ECC_GATEGUARD=off` disables); console logs lack the `jobId` scope until T-702; sample output and `src/QbAutopost.Api/data/` are git-ignored.
+7. **Running by hand:** `dotnet run` needs `ASPNETCORE_ENVIRONMENT=Development` (or a real `QBAUTOPOST__Api__ApiKey`), otherwise startup stops on the `change-me` key (Q-19).
 
-## 6. Next milestone — M2 (Hermes client, T1, G2)
+## 6. Next milestone — M3 (XLSX, PDF text, T2, G1 extended)
 
 | Task | Notes |
 |---|---|
-| T-201 HermesClient | `HttpClient` + `HttpMessageHandler` fake in tests; `Authorization: Bearer`, `temperature: 0`, timeout, strip code fences, one retry with validation errors appended, then `HermesValidationException`; audit copies to `output/hermes/<task>-<n>.request/response.json` **without the key**. |
-| T-202 Prompt + T1 | `Hermes/prompts/spec.md` loaded at startup; `{{placeholders}}`; T1 DTO → `JobSpec` (company placeholder → null); fallback to `RegexSpecParser` after two failures. |
-| T-203 G2 | Already implemented — wire and test with the Hermes path. |
-| T-204 `/health/hermes` | No API key needed (middleware already exempts `/health`); 503 when not ok. |
-| T-205 Tests | `FakeHermesClient` exists; add malformed-then-valid, fallback, G2 negatives via Hermes. |
+| T-301 XlsxStatementParser | ClosedXML (approved package) → string grid → `StatementGridParser` (shared with CSV). First worksheet only. |
+| T-302 PdfText | PdfPig per page; < 40 chars on a page → scanned → `Ocr` when `Ocr.Enabled`, else held `scanned-pdf-ocr-disabled`. Tesseract optional. |
+| T-303 StatementLlmExtractor (T2) | Prompt `statement.md`, schema §9.2, amounts > 0, ISO dates, chunk > 60 000 chars and merge by row order; hold on `HermesException`. |
+| T-304 G1 extended + rows.json | opening/closing/count/period checks; `rows.json` `layout` = `"hermes-t2"` for PDF; `not-verifiable` → `reconcile.verified = false`. |
+| T-305 Tests | fixture PDF text → expected rows; chunk merge; every G1 failure mode; XLSX layout detection. |
 
-Open follow-ups: run `dotnet test` on Linux (a CI workflow would do); decide whether `docs/CLAUDE.md` or the root `CLAUDE.md` is the single copy; push session-2 commits.
+Open follow-ups: run `dotnet test` on Linux (a CI workflow would do); decide whether `docs/CLAUDE.md` or the root `CLAUDE.md` is the single copy; push sessions 2–3.
