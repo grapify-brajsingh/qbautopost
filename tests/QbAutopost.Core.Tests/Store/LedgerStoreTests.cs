@@ -87,6 +87,24 @@ public sealed class LedgerStoreTests : IDisposable
     }
 
     [Fact]
+    public void Should_UseSpecFieldNames_When_Saved()
+    {
+        var path = Path.Combine(_dir, "ledger.json");
+
+        new LedgerStore(path).Save(SampleLedger());
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+
+        // Spec §13, in order.
+        Assert.Equal(["jobs", "posted"], doc.RootElement.EnumerateObject().Select(p => p.Name));
+        Assert.Equal(
+            ["jobId", "batchId", "postedUtc", "posted", "held", "skipped", "txnIds", "undone"],
+            doc.RootElement.GetProperty("jobs")[0].EnumerateObject().Select(p => p.Name));
+        Assert.Equal(
+            ["batchId", "jobId", "fingerprint", "txnId", "editSequence", "kind", "account", "payee", "lineAccount", "amount", "date", "refNumber", "memo", "sourceFile", "lineNo", "undone"],
+            doc.RootElement.GetProperty("posted")[0].EnumerateObject().Select(p => p.Name));
+    }
+
+    [Fact]
     public void Should_NotCountUndoneEntry_When_CheckingIsPosted()
     {
         var ledger = SampleLedger() with { Posted = [SampleLedger().Posted[0] with { Undone = true }] };
