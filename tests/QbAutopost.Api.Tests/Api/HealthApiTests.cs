@@ -81,6 +81,17 @@ public sealed class HealthApiTests : IDisposable
         Assert.DoesNotContain("sk-configured-key-0001", text, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Should_NeverTargetLocalHermes_When_TestHostUsesDefaults()
+    {
+        using var scope = _factory.Services.CreateScope();
+
+        var options = scope.ServiceProvider.GetRequiredService<HermesOptions>();
+
+        Assert.Equal("hermes.invalid", options.CompletionsUri.Host);
+        Assert.IsType<FakeHermesClient>(scope.ServiceProvider.GetRequiredService<IHermesClient>());
+    }
+
     /// <summary>The host's own <see cref="HermesClient"/> registration and settings, with the network replaced by <paramref name="handler"/>.</summary>
     private WebApplicationFactory<Program> WithRealClient(RecordingHandler handler) =>
         _factory.WithWebHostBuilder(b =>

@@ -62,6 +62,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             ["Paths:QbLists"] = Dir.Combine("data", "qb-lists.json"),
             ["Paths:Logs"] = Dir.Combine("data", "logs"),
             ["Paths:JobIndex"] = JobIndexFile,
+            // Rule 1: even a real HermesClient built by mistake cannot reach a Hermes on this machine (.invalid never resolves).
+            ["Hermes:BaseUrl"] = "http://hermes.invalid:8642",
+            ["Hermes:ApiKey"] = "",
         }));
         builder.ConfigureTestServices(services =>
         {
