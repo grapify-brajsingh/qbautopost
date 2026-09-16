@@ -66,8 +66,9 @@ Copy `rules.json` (start from `samples/rules.json`) to `C:\qb-autopost\rules.jso
 ### 2.4 Start at logon
 
 1. Start Hermes and check it: `deploy/README-hermes.md`.
-2. `deploy/start-all.ps1` starts WSL/Docker, the Hermes container, waits for `/health/hermes`, then starts the API.
-3. `deploy/install-task.ps1` registers a Task Scheduler task that runs `start-all.ps1` at logon of the auto-logon account.
+2. `deploy/start-all.ps1` starts Docker (`-DockerMode Wsl` on Windows Server, the default, with `-WslDistro Ubuntu`; `-DockerMode Desktop` on Windows 10/11), runs `docker compose up -d` in `deploy\hermes`, waits until Hermes accepts connections on `127.0.0.1:8642`, starts `C:\qb-autopost\app\QbAutopost.Api.exe` (`-AppExe`) unless it already runs, then waits for `GET /health/hermes` = 200. If Hermes stays down, the API is still started (undo and `/health/quickbooks` work; new jobs fail at T1) and the script exits 2. Exit 1 = Docker, compose or the API could not be started. It writes `C:\qb-autopost\logs\start-all-yyyyMMdd.log` and never reads a key.
+3. `deploy/install-task.ps1` (run once as the auto-logon account, in an elevated PowerShell) registers the task `QbAutopost`: at logon of that account, 60 s delay, **interactive** session, limited rights, no password stored, no time limit, a second start ignored. Pass start-all options with `-StartAllArguments '-DockerMode Desktop'`; remove it with `-Unregister`.
+4. Both scripts accept `-WhatIf` (prints what would happen, changes nothing). Test the task with `Start-ScheduledTask -TaskName QbAutopost`, then sign out and in once.
 
 ## 3. Configure
 
