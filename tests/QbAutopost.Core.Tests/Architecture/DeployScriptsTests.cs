@@ -12,11 +12,12 @@ public sealed class DeployScriptsTests
     private static readonly string DeployDir = Path.Combine(RepoRoot.Find(), "deploy");
 
     [Theory]
-    [InlineData("start-all.ps1")]
-    [InlineData("install-task.ps1")]
-    public void Should_BeAsciiOnly_When_ReadingDeployScript(string file)
+    [InlineData("deploy/start-all.ps1")]
+    [InlineData("deploy/install-task.ps1")]
+    [InlineData("scripts/shadow-diff.ps1")]
+    public void Should_BeAsciiOnly_When_ReadingOperatorScript(string file)
     {
-        var bytes = File.ReadAllBytes(Path.Combine(DeployDir, file));
+        var bytes = File.ReadAllBytes(Path.Combine(RepoRoot.Find(), file));
 
         Assert.All(bytes, b => Assert.True(b < 0x80, $"{file} contains a non-ASCII byte 0x{b:X2}"));
     }
@@ -81,6 +82,17 @@ public sealed class DeployScriptsTests
 
         Assert.Contains("127.0.0.1", script, StringComparison.Ordinal);
         Assert.DoesNotContain("0.0.0.0", script, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Invoke-RestMethod")]
+    [InlineData("Invoke-WebRequest")]
+    [InlineData("ApiKey")]
+    public void Should_StayOffline_When_ReadingShadowDiff(string forbidden)
+    {
+        var script = File.ReadAllText(Path.Combine(RepoRoot.Find(), "scripts", "shadow-diff.ps1"));
+
+        Assert.DoesNotContain(forbidden, script, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string Script(string file) => File.ReadAllText(Path.Combine(DeployDir, file));

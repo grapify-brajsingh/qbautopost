@@ -23,7 +23,7 @@ Status legend: `todo` · `doing` · `done` · `blocked` · `ready-for-human`
 | M5 | Tiers 3–4, G3 | 4 | 4 | done (Windows; Linux run pending) |
 | M6 | QuickBooks gateway, post, undo | 9 | 8 | done on Windows except T-609 (ready-for-human, server); Linux run pending |
 | M7 | Rules, logging, hardening | 5 | 5 | done (Windows; Linux run pending) |
-| M8 | Deploy, shadow, go-live | 4 | 1 | doing: T-801 done; T-802 ready-for-human (server dry run) |
+| M8 | Deploy, shadow, go-live | 4 | 1 | agent work done: T-801 done; T-802, T-803 ready-for-human (server) |
 
 ## M0 — Bootstrap
 
@@ -130,7 +130,7 @@ T-609 checklist (human):
 |---|---|---|---|---|---|---|
 | T-801 | deploy/hermes docker-compose.yml, .env.example, README-hermes.md (WSL 2 + Docker Engine; Docker Desktop alt) | §4 | `deploy/hermes/docker-compose.yml` (published `127.0.0.1:8642` only; `HERMES_IMAGE`, `HERMES_CONTAINER_PORT`, `HERMES_DATA_PATH`, `API_SERVER_KEY` required with `:?`; optional `provider.env`; `mem_limit`; log rotation), `deploy/hermes/.env.example`, `deploy/hermes/provider.env.example` (placeholders only), `deploy/README-hermes.md` (WSL 2 + Docker Engine on Server, Docker Desktop on 10/11, `.wslconfig` cap, key hand-over, checks), `.gitignore` (+`deploy/hermes/provider.env`); tests `Core.Tests/Architecture/DeployFilesTests.cs` (10), `Core.Tests/TestSupport/RepoRoot.cs` | compose config valid: `docker compose -f deploy/hermes/docker-compose.yml --env-file deploy/hermes/.env.example config` → exit 0, port `host_ip: 127.0.0.1`, published 8642; with an empty env file → refused "required variable … is missing". `dotnet build -warnaserror` 0 warnings; `dotnet test` → Core 713, Api 183 | done | The spec never names the Hermes image, its in-container port/variable names or data folder: all required from `.env`, no guessed defaults (new gap Q-42). Never started a container (no image known) |
 | T-802 | deploy/start-all.ps1, install-task.ps1 | §4 | `deploy/start-all.ps1` (Docker up in WSL or Docker Desktop → `docker compose up -d` → wait for TCP `127.0.0.1:8642` → start the API once → wait for `GET /health/hermes` 200; exit 0/1/2; log `Paths:Logs`-style `start-all-yyyyMMdd.log`; loopback-only `-ApiBaseUrl`; `-WhatIf`), `deploy/install-task.ps1` (logon trigger + 60 s delay, `-LogonType Interactive`, `-RunLevel Limited`, no password, no time limit, `IgnoreNew`, `-Unregister`, `-WhatIf`), `docs/runbook.md` §2.4; tests `Core.Tests/Architecture/DeployScriptsTests.cs` (13: ASCII only, `-WhatIf`, no keys, interactive logon task, never a service, Hermes checked before the API, loopback only) | Prepared on the dev box: both scripts parse with 0 errors (`Parser::ParseFile`); `start-all.ps1 -WhatIf` → exit 0 with the planned steps; `-ApiBaseUrl http://10.0.0.5:5080` → exit 1; `install-task.ps1 -WhatIf` → prints the task, registers nothing; `-Unregister` of a missing task → exit 0. `dotnet build -warnaserror` 0 warnings; `dotnet test` → Core 726, Api 183. **Dry run on server pending** (checklist below) | ready-for-human | Plan verification is "dry run on server". `/health/hermes` is served by the API itself, so "wait for Hermes before the API" waits for the Hermes port, and `/health/hermes` is checked after the API starts. New gap Q-43 |
-| T-803 | **[server]** Shadow week: 5 real folders dry run, diff vs manual, rules added | plan M8 | | log below | todo | |
+| T-803 | **[server]** Shadow week: 5 real folders dry run, diff vs manual, rules added | plan M8 | `scripts/shadow-diff.ps1` (read-only: `analysis.json` vs a hand-made CSV `Date,Amount,Payee,Account[,Source]`; statuses agree / account-differs / payee-differs / not-in-manual / skipped-but-entered / held / held-not-entered / manual-only; writes `output/shadow-diff.csv`; exit 0 none, 3 disagreements, 1 bad input); tests `Core.Tests/Architecture/DeployScriptsTests.cs` (+4: ASCII, offline, no key) | Prepared against the golden sample (`tests/fixtures/output/sample-analysis.golden.json`) on the dev box: a matching CSV (mixed date formats, `$`, thousands separator, case/space differences) → 9 agree, 1 held, 1 held-not-entered, exit 0; a CSV with a different account, payee, an entered card payment, missing and extra rows → each status reported, exit 3; missing file → exit 1. `dotnet test` → Core 730, Api 183. Shadow run itself pending (checklist and log below) | ready-for-human | Needs real folders and the person who enters them by hand. The CSV layout is this helper's own choice (spec/plan name none); matching is date + exact amount, payee breaks ties |
 | T-804 | **[server]** Go-live one company, then all | plan M8 | | log below | todo | |
 
 T-802 checklist (human, on the server, as the auto-logon account):
@@ -143,6 +143,37 @@ T-802 checklist (human, on the server, as the auto-logon account):
 - [ ] `.\deploy\install-task.ps1` (elevated) → Task Scheduler shows `QbAutopost`: "Run only when user is logged on", at logon of the account, delay 1 minute, not "highest privileges"
 - [ ] Sign out and in (or reboot with auto-logon) → the API and Hermes come up without anyone touching the server; `/health/quickbooks` ok with QuickBooks open
 - [ ] The API window is in the same session as QuickBooks (a COM call works: `scripts\qb-server-check.ps1 -Step health`)
+
+T-803 checklist (human, shadow week; `DryRunDefault=true`, nothing is posted):
+- [ ] T-609 and T-802 done on the server; `/health/quickbooks` and `/health/hermes` ok; `POST /qb/sync-lists` run, `missingInRules` empty
+- [ ] Pick five real job folders (different banks/cards, at least one PDF statement and one with invoices) that a person is entering by hand as usual
+- [ ] For each: `scripts\qb-server-check.ps1 -Step dryrun -Folder <folder>` → `ready` (or `failed` with a reason worth a rule/fix)
+- [ ] After the manual entry: export the same period's transactions from QuickBooks to a CSV with `Date,Amount,Payee,Account[,Source]` and run `scripts\shadow-diff.ps1 -Analysis <folder>\output\analysis.json -Manual <csv>`
+- [ ] For each disagreement decide: tool wrong → teach a rule (`POST /rules/alias`, `POST /rules/account`) or log a defect; person wrong → note it; held line → teach a rule if the answer is clear
+- [ ] After teaching, run the dry run again (same `-Step dryrun`; `force=true` is only needed once a job is in the ledger) and re-diff
+- [ ] Record each run in the log below; the week ends after **two consecutive runs with zero disagreements** (plan §6)
+- [ ] Check `output\hermes\` and the logs of one job hold no keys
+
+T-803 shadow log (human):
+
+| Date | Folder | Lines | Agree | Held | Disagreements | Rules taught / defects | By |
+|---|---|---|---|---|---|---|---|
+| | | | | | | | |
+
+T-804 checklist (human, go-live; only after T-803 shows two clean runs):
+- [ ] Owner answers to the questions that matter before posting are recorded (at least Q-27 re-running T2/T3/T4 at post time, Q-37 COM retry/backup, Q-42 Hermes image)
+- [ ] A fresh QuickBooks backup exists in `QuickBooks:BackupFolder` (younger than `BackupMaxAgeHours`); the ledger and `rules.json` are backed up (runbook §9)
+- [ ] For the first company only: `DryRunDefault=false` in its `appsettings.json`, API restarted; other companies stay on `true`
+- [ ] First real folder: dry run → review `analysis.json` → post → check every transaction in QuickBooks; keep the batch id for undo
+- [ ] Undo drill on one real batch if the owner agrees (`POST /batches/{id}/undo`), then re-post
+- [ ] Monitor a week: every job `posted` or `partial` with understood holds; no `failed` without a reason; no duplicates in QuickBooks (G4); logs clean
+- [ ] Then switch the remaining companies one at a time and record each below
+
+T-804 go-live log (human):
+
+| Date | Company | Jobs | Posted lines | Held | Problems | By |
+|---|---|---|---|---|---|---|
+| | | | | | | |
 
 ## Questions raised during implementation
 
@@ -244,3 +275,4 @@ T-802 checklist (human, on the server, as the auto-logon account):
 | 2026-09-17 | 9 (cont.) | T-705 | `docs/runbook.md` written (install, configure, first run, daily operation, hold codes, rules teaching, undo, troubleshooting, logs, state backup) and checked against the code and Q-rows. **M7 done on Windows: Core 703, Api 183.** No owner answers yet (Q-1…Q-41). Linux test run still open |
 | 2026-09-17 | 10 | T-801 | Owner answers checked: none yet (Q-1…Q-41). `deploy/hermes/docker-compose.yml` (loopback-only 8642, required key/image/port/data path, optional git-ignored `provider.env`), `.env.example`/`provider.env.example` placeholders, `deploy/README-hermes.md`; `docker compose config` valid with the example env → Core 713, Api 183. New gap Q-42 |
 | 2026-09-17 | 10 (cont.) | T-802 | `deploy/start-all.ps1` (Docker in WSL or Desktop → compose up → wait for the Hermes port → start the API once → wait for `/health/hermes`; exit 0/1/2; `-WhatIf`) and `deploy/install-task.ps1` (interactive logon task, limited rights, `-Unregister`, `-WhatIf`), runbook §2.4 synced; parse-checked and dry-run on the dev box → Core 726, Api 183. Set **ready-for-human** (server dry run, checklist added). New gap Q-43 |
+| 2026-09-17 | 10 (cont.) | T-803 | Shadow week prepared: `scripts/shadow-diff.ps1` (read-only dry run vs manual CSV, exit 0/3/1) checked against the golden sample; T-803 checklist and shadow log, T-804 checklist and go-live log added → Core 730, Api 183. Set **ready-for-human** |
