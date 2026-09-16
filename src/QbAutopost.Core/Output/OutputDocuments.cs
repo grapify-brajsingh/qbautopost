@@ -57,6 +57,14 @@ public sealed record AnalysisLine
     public string? RefNumber { get; init; }
     public int? Tier { get; init; }
     public Confidence Confidence { get; init; }
+
+    /// <summary>
+    /// Hermes T4 score (0…1) when tier 3 or 4 asked the model, else null.
+    /// SPEC-GAP T-503: §10 names one <c>confidence</c> field; it keeps the FR-6 category (rule, history, invoice,
+    /// model, holding, hold) and the score is written next to it, so G3 decisions can be reviewed.
+    /// </summary>
+    public double? ModelConfidence { get; init; }
+
     public string? Reason { get; init; }
     public string? Note { get; init; }
     public IReadOnlyList<string> Candidates { get; init; } = [];
@@ -79,6 +87,7 @@ public sealed record AnalysisLine
         RefNumber = t.RefNumber,
         Tier = t.Tier,
         Confidence = t.Confidence,
+        ModelConfidence = t.ModelConfidence,
         Reason = t.Reason,
         Note = t.Note,
         Candidates = t.Candidates,

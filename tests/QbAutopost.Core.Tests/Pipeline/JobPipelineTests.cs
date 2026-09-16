@@ -604,6 +604,27 @@ public sealed class JobPipelineTests : IDisposable
     }
 
     [Fact]
+    public async Task Should_WriteTierScoreAndCandidatesToAnalysisJson_When_G3HoldsTheLine()
+    {
+        UsePlumberInvoiceAndAccounts();
+        _accountAnswer = """{ "account": "Repairs and Maintenance", "confidence": 0.6, "alternatives": ["Utilities"] }""";
+        var requestId = Plumber(await Analyse()).RequestId;
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(_job.PathOf("output", "analysis.json")));
+        var line = Assert.Single(
+            doc.RootElement.GetProperty("lines").EnumerateArray(),
+            l => l.GetProperty("requestId").GetString() == requestId);
+        Assert.Equal(4, line.GetProperty("tier").GetInt32());
+        Assert.Equal(0.6, line.GetProperty("modelConfidence").GetDouble());
+        Assert.Equal("low-confidence", line.GetProperty("reason").GetString());
+        Assert.Equal("hold", line.GetProperty("decision").GetString());
+        Assert.Equal(
+            ["Repairs and Maintenance", "Utilities"],
+            line.GetProperty("candidates").EnumerateArray().Select(c => c.GetString()));
+        Assert.Equal("home-depot-88213.pdf", line.GetProperty("invoiceRef").GetString());
+    }
+
+    [Fact]
     public async Task Should_HoldPlumberHermesFailed_When_ModelNamesAnUnlistedAccount()
     {
         UsePlumberInvoiceAndAccounts();
