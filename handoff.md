@@ -11,7 +11,7 @@ that change behaviour first (tests first, one commit per change, tracker updated
 Every plan task is done or ready-for-human; do not mark a [server] or
 ready-for-human row done. If the owner has recorded server results in the
 T-609/T-802/T-803/T-804 checklists or logs, fix what they found, one task at a time.
-Otherwise work the open follow-ups in section 6 (Linux test run / CI) only if asked.
+Otherwise work the open follow-ups in section 6 only if asked.
 ```
 
 ## 2. Project in one paragraph
@@ -26,7 +26,7 @@ QbAutopost is a single .NET 8 app. It takes a job folder (`requirement.txt` plus
 | Push | Session 2–10 commits (T-101…T-804) are **local only**. Push when the owner agrees: `git push origin main` |
 | SDK | pinned to 8.0.x by `global.json` |
 | Build | `dotnet build -warnaserror` → 0 warnings, 0 errors |
-| Tests | 917 passing (Core 730, Api 187) on Windows, 2 consecutive green runs. **Not yet run on Linux.** |
+| Tests | 917 passing (Core 730, Api 187) on Windows and on Linux (`mcr.microsoft.com/dotnet/sdk:8.0` container, 2026-09-17). CI: `.github/workflows/ci.yml` (Linux + Windows), active once pushed |
 | Milestones | M0–M7 done (M6's T-609 ready-for-human); M8: T-801 done, T-802/T-803/T-804 **ready-for-human** |
 | Packages | none added in M8 |
 | Manual checks | `docker compose -f deploy/hermes/docker-compose.yml --env-file deploy/hermes/.env.example config` → valid, loopback-only port. `deploy/start-all.ps1 -WhatIf` and `deploy/install-task.ps1 -WhatIf` → exit 0, nothing changed. `scripts/shadow-diff.ps1` run on the golden sample. No container has been started (no image known), no task registered, the COM path has **never run** |
@@ -113,6 +113,6 @@ Open follow-ups:
   - Q-27, Q-37: needed before posting.
   - Q-44: how several companies should run.
 - A person should read `docs/runbook.md` and `deploy/README-hermes.md` once on the server (plan §6).
-- Run `dotnet test` on Linux; a CI workflow would cover this. Plan §6 requires green on Linux and Windows.
+- Linux: done (container run, 2026-09-17); `.github/workflows/ci.yml` keeps both platforms green after the push.
 - Decide whether `docs/CLAUDE.md` or the root `CLAUDE.md` is the single copy.
 - Push sessions 2–10.

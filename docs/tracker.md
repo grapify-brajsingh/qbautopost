@@ -15,14 +15,14 @@ Status legend: `todo` · `doing` · `done` · `blocked` · `ready-for-human`
 
 | M | Name | Tasks | Done | Status |
 |---|---|---|---|---|
-| M0 | Bootstrap | 5 | 5 | done (Windows; Linux run pending) |
-| M1 | API host, lifecycle, CSV dry run | 7 | 7 | done (Windows; Linux run pending) |
-| M2 | Hermes client, T1, G2 | 5 | 5 | done (Windows; Linux run pending) |
-| M3 | XLSX, PDF, T2, G1 | 5 | 5 | done (Windows; Linux run pending) |
-| M4 | Invoices T3 + matcher | 4 | 4 | done (Windows; Linux run pending) |
-| M5 | Tiers 3–4, G3 | 4 | 4 | done (Windows; Linux run pending) |
-| M6 | QuickBooks gateway, post, undo | 9 | 8 | done on Windows except T-609 (ready-for-human, server); Linux run pending |
-| M7 | Rules, logging, hardening | 5 | 5 | done (Windows; Linux run pending) |
+| M0 | Bootstrap | 5 | 5 | done (Windows and Linux) |
+| M1 | API host, lifecycle, CSV dry run | 7 | 7 | done (Windows and Linux) |
+| M2 | Hermes client, T1, G2 | 5 | 5 | done (Windows and Linux) |
+| M3 | XLSX, PDF, T2, G1 | 5 | 5 | done (Windows and Linux) |
+| M4 | Invoices T3 + matcher | 4 | 4 | done (Windows and Linux) |
+| M5 | Tiers 3–4, G3 | 4 | 4 | done (Windows and Linux) |
+| M6 | QuickBooks gateway, post, undo | 9 | 8 | done on Windows except T-609 (ready-for-human, server); tests green on Linux |
+| M7 | Rules, logging, hardening | 5 | 5 | done (Windows and Linux) |
 | M8 | Deploy, shadow, go-live | 4 | 1 | agent work done on Windows: T-801 done; T-802, T-803, T-804 ready-for-human (server) |
 
 ## M0 — Bootstrap
@@ -278,3 +278,4 @@ T-804 go-live log (human):
 | 2026-09-17 | 10 (cont.) | T-802 | `deploy/start-all.ps1` (Docker in WSL or Desktop → compose up → wait for the Hermes port → start the API once → wait for `/health/hermes`; exit 0/1/2; `-WhatIf`) and `deploy/install-task.ps1` (interactive logon task, limited rights, `-Unregister`, `-WhatIf`), runbook §2.4 synced; parse-checked and dry-run on the dev box → Core 726, Api 183. Set **ready-for-human** (server dry run, checklist added). New gap Q-43 |
 | 2026-09-17 | 10 (cont.) | T-803 | Shadow week prepared: `scripts/shadow-diff.ps1` (read-only dry run vs manual CSV, exit 0/3/1) checked against the golden sample; T-803 checklist and shadow log, T-804 checklist and go-live log added → Core 730, Api 183. Set **ready-for-human** |
 | 2026-09-17 | 10 (cont.) | T-804 | Go-live prepared: `GoLiveConfigApiTests` (shipped `DryRunDefault: true`, omitted `dryRun` follows the default, request `dryRun` wins), runbook §2.5, checklist and log → Core 730, Api 187 (2 consecutive green runs). Set **ready-for-human**. New gap Q-44 (several companies). **M8 agent work done**; T-609, T-802, T-803, T-804 wait for the server. No owner answers yet (Q-1…Q-44) |
+| 2026-09-17 | 11 | Linux run, CI | No agent task left (tracker has no todo/doing rows). Linux test run done: `git archive HEAD` in `mcr.microsoft.com/dotnet/sdk:8.0` (SDK 8.0.425) → `dotnet build -warnaserror` 0 warnings, `dotnet test` Core 730 / Api 187 passed. Added `.github/workflows/ci.yml` (build + test on ubuntu-latest and windows-latest; runs once pushed). Remaining: server tasks (T-609, T-802…T-804), owner answers Q-1…Q-44, push |

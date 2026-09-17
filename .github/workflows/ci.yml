@@ -1,0 +1,26 @@
+# Build and test on Linux and Windows (plan §6: dotnet test must be green on both; CLAUDE.md hard rule 1).
+# No step contacts QuickBooks or Hermes: the tests use FakeQbGateway / FakeHermesClient.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: dotnet build -warnaserror
+      - run: dotnet test --no-build
