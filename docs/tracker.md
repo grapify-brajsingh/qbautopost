@@ -112,7 +112,7 @@ T-609 checklist (human):
 - [ ] `-Step undo -BatchId '<id>#<n>' -ConfirmCopy` → all deleted; `undo-*.response.qbxml` shows status 0 per `TxnDelRs`; transactions gone in QuickBooks
 - [ ] With QuickBooks closed: `-Step health` → 503 with a clear message, and a post ends `partial` "nothing posted"
 - [ ] COM constants confirmed (`OpenConnection2` local = 1, `BeginSession` DoNotCare = 2, `QbSession.cs`)
-- [ ] Bitness confirmed (x64/x86) and recorded here: ______
+- [x] Bitness confirmed (x64/x86) and recorded here: **x64** — QuickBooks Enterprise Solutions 24.0, `C:\Program Files\Intuit\QuickBooks Enterprise Solutions 24.0\qbw.exe` (process `QBW`, 64-bit folder), checked by the owner with `Get-Process` on 2026-09-19. The API builds AnyCPU (no `PlatformTarget`), so it runs x64 on 64-bit Windows; no change needed
 
 ## M7 — Rules, logging, hardening
 
@@ -279,3 +279,4 @@ T-804 go-live log (human):
 | 2026-09-17 | 10 (cont.) | T-803 | Shadow week prepared: `scripts/shadow-diff.ps1` (read-only dry run vs manual CSV, exit 0/3/1) checked against the golden sample; T-803 checklist and shadow log, T-804 checklist and go-live log added → Core 730, Api 183. Set **ready-for-human** |
 | 2026-09-17 | 10 (cont.) | T-804 | Go-live prepared: `GoLiveConfigApiTests` (shipped `DryRunDefault: true`, omitted `dryRun` follows the default, request `dryRun` wins), runbook §2.5, checklist and log → Core 730, Api 187 (2 consecutive green runs). Set **ready-for-human**. New gap Q-44 (several companies). **M8 agent work done**; T-609, T-802, T-803, T-804 wait for the server. No owner answers yet (Q-1…Q-44) |
 | 2026-09-17 | 11 | Linux run, CI | No agent task left (tracker has no todo/doing rows). Linux test run done: `git archive HEAD` in `mcr.microsoft.com/dotnet/sdk:8.0` (SDK 8.0.425) → `dotnet build -warnaserror` 0 warnings, `dotnet test` Core 730 / Api 187 passed. Added `.github/workflows/ci.yml` (build + test on ubuntu-latest and windows-latest; runs once pushed). Remaining: server tasks (T-609, T-802…T-804), owner answers Q-1…Q-44, push |
+| 2026-09-19 | 12 | T-609 | Owner confirmed QuickBooks Enterprise Solutions 24.0, 64-bit (`QBW` in `C:\Program Files\Intuit\...`); bitness recorded in the T-609 checklist as **x64**. No code change (AnyCPU runs x64). T-609 stays **ready-for-human** (server steps pending) |
