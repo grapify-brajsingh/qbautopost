@@ -50,12 +50,17 @@ builder.Services.AddSingleton(sp =>
 // A singleton reader holds its HermesClient, so the handler is never rotated (Hermes is a fixed loopback address).
 builder.Services.AddHttpClient<HermesClient>(http => http.Timeout = Timeout.InfiniteTimeSpan)
     .SetHandlerLifetime(Timeout.InfiniteTimeSpan);
-builder.Services.AddSingleton<IHermesClient>(sp =>
-    new LoggingHermesClient(sp.GetRequiredService<HermesClient>(), sp.GetRequiredService<ILogger<LoggingHermesClient>>()));
+// T-806: Hermes:Enabled=false runs without any AI (POC): nothing is sent to a model, the requirement is read by regex.
+static bool HermesEnabled(IServiceProvider sp) => sp.GetRequiredService<IOptions<AppSettings>>().Value.Hermes.Enabled;
+builder.Services.AddSingleton<IHermesClient>(sp => new LoggingHermesClient(
+    HermesEnabled(sp) ? sp.GetRequiredService<HermesClient>() : new DisabledHermesClient(),
+    sp.GetRequiredService<ILogger<LoggingHermesClient>>()));
 // Prompts are loaded before the host starts (below): a missing required prompt stops startup (spec §9) and is logged.
 builder.Services.AddSingleton(_ => PromptLibrary.Load(
     Path.Combine(AppContext.BaseDirectory, PromptLibrary.DefaultFolder), HermesTask.Spec, HermesTask.Statement, HermesTask.Invoice, HermesTask.Account));
-builder.Services.AddSingleton<ISpecReader, HermesSpecReader>();
+builder.Services.AddSingleton<ISpecReader>(sp => HermesEnabled(sp)
+    ? ActivatorUtilities.CreateInstance<HermesSpecReader>(sp)
+    : new RegexSpecReader());
 builder.Services.AddSingleton<IOcr>(sp =>
 {
     var ocr = sp.GetRequiredService<IOptions<AppSettings>>().Value.Ocr;

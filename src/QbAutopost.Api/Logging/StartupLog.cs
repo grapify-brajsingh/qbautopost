@@ -37,10 +37,19 @@ public static class StartupLog
             s.QuickBooks.AppName, s.QuickBooks.QbXmlVersion, s.QuickBooks.DuplicateWindowDays, s.QuickBooks.BusyTimeoutSeconds,
             string.IsNullOrWhiteSpace(s.QuickBooks.BackupFolder) ? "(not set: backup age not checked)" : s.QuickBooks.BackupFolder,
             s.QuickBooks.BackupMaxAgeHours);
-        log.LogInformation(
-            "Hermes: {HermesUrl}, model {Model}, timeout {TimeoutSeconds} s, key {HermesKeyState}; OCR {OcrState}",
-            s.Hermes.BaseUrl, s.Hermes.Model, s.Hermes.TimeoutSeconds, s.Hermes.ApiKey.Length > 0 ? "set" : "not set",
-            s.Ocr.Enabled ? "enabled, tessdata " + s.Ocr.TessDataPath : "disabled");
+        if (s.Hermes.Enabled)
+        {
+            log.LogInformation(
+                "Hermes: {HermesUrl}, model {Model}, timeout {TimeoutSeconds} s, key {HermesKeyState}; OCR {OcrState}",
+                s.Hermes.BaseUrl, s.Hermes.Model, s.Hermes.TimeoutSeconds, s.Hermes.ApiKey.Length > 0 ? "set" : "not set",
+                s.Ocr.Enabled ? "enabled, tessdata " + s.Ocr.TessDataPath : "disabled");
+        }
+        else
+        {
+            log.LogWarning(
+                "Hermes: disabled (Hermes:Enabled=false, no AI): requirement read by the regex parser; PDF statements, invoices and lines no rule resolves are held; OCR {OcrState}",
+                s.Ocr.Enabled ? "enabled, tessdata " + s.Ocr.TessDataPath : "disabled");
+        }
 
         if (State(s.Company.FilePath) != Found)
         {

@@ -11,6 +11,7 @@ TestResults/
 # Job output folders are matched only under job folders: git on Windows ignores case,
 # so a bare "output/" would also hide the src/**/Output/ code folders.
 samples/jobs/*/output/
+samples/poc/jobs/*/output/
 tests/fixtures/jobs/*/output/
 /logs/
 # Development data (appsettings.Development.json: ledger, job index, qb-lists, logs)
@@ -19,3 +20,6 @@ src/QbAutopost.Api/data/
 .env
 deploy/hermes/provider.env
 appsettings.*.local.json
+
+# POC package build output (scripts/build-poc-package.ps1)
+/dist/

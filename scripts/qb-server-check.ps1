@@ -25,6 +25,7 @@ param(
     [string] $JobId,
     [string] $BatchId,
     [switch] $ConfirmCopy,
+    [switch] $Force,
     [int] $WaitSeconds = 900
 )
 
@@ -89,7 +90,7 @@ switch ($Step) {
     }
     'dryrun' {
         if (-not $Folder) { throw 'Pass -Folder <absolute job folder>.' }
-        $created = Invoke-Api POST '/jobs' @{ folder = $Folder; dryRun = $true; force = $false }
+        $created = Invoke-Api POST '/jobs' @{ folder = $Folder; dryRun = $true; force = [bool] $Force }
         $view = Wait-Job $created.jobId
         Show $view
         Write-Host "Review $Folder\output\analysis.json before posting."

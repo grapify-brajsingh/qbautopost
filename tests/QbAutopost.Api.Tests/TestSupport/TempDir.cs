@@ -11,12 +11,15 @@ public sealed class TempDir : IDisposable
     public string Combine(params string[] parts) => System.IO.Path.Combine([Path, .. parts]);
 
     /// <summary>A copy of the sample job (without any <c>output/</c>) under this directory; returns its folder.</summary>
-    public string CopySampleJob(string jobId = "2026-08-tropicana")
+    public string CopySampleJob(string jobId = "2026-08-tropicana") => CopyJob(Fixtures.SampleJob, jobId);
+
+    /// <summary>A copy of the job folder <paramref name="from"/> (without any <c>output/</c>) as <paramref name="jobId"/>.</summary>
+    public string CopyJob(string from, string jobId)
     {
         var target = Combine(jobId);
-        foreach (var source in Directory.EnumerateFiles(Fixtures.SampleJob, "*", SearchOption.AllDirectories))
+        foreach (var source in Directory.EnumerateFiles(from, "*", SearchOption.AllDirectories))
         {
-            var relative = System.IO.Path.GetRelativePath(Fixtures.SampleJob, source);
+            var relative = System.IO.Path.GetRelativePath(from, source);
             if (relative.StartsWith("output", StringComparison.OrdinalIgnoreCase))
             {
                 continue;

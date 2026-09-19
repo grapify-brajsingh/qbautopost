@@ -1,0 +1,60 @@
+{
+  // POC rules for the synthetic Tropicana company: every line of samples/poc/jobs resolves by rule (no AI needed).
+  // Every account, vendor and customer named here is in samples/poc/tropicana-lists.iif. All names are fictional.
+  "BankAccounts": { "4521": "Chase Checking 4521" },
+  "CardAccounts": { "7788": "Chase Sapphire 7788" },
+  "PayeeAliases": {
+    "HOME DEPOT": "Home Depot",
+    "AMAZON": "Amazon",
+    "SHELL OIL": "Shell",
+    "FPL": "Florida Power & Light",
+    "CITY WATER": "City Water Dept",
+    "ALLSTATE": "Allstate Insurance",
+    "STAPLES": "Staples"
+  },
+  "CustomerAliases": {
+    "PALM COURT": "Palm Court Rentals LLC",
+    "SUNRISE PROPERTY": "Sunrise Property Mgmt"
+  },
+  "VendorAccounts": {
+    "Home Depot": "Repairs and Maintenance",
+    "Amazon": "Office Supplies",
+    "Florida Power & Light": "Utilities",
+    "City Water Dept": "Utilities",
+    "Allstate Insurance": "Insurance Expense",
+    "Staples": "Office Supplies"
+  },
+  "KeywordAccounts": [
+    { "Match": "SHELL", "Account": "Automobile Expense" }
+  ],
+  "TransferPatterns": [
+    { "Match": "ONLINE TRANSFER TO CHASE CARD", "Account": "Chase Sapphire 7788" }
+  ],
+  "SkipPatterns": [ "AUTOMATIC PAYMENT" ],
+  "HoldingExpenseAccount": "Ask My Accountant",
+  "DepositIncomeAccount": "Rental Income",
+  "FuzzyThreshold": 0.85,
+  "HistoryMinCount": 3,
+  "InvoiceMatchDays": 5,
+  "ModelConfidenceThreshold": 0.8,
+  "CsvLayouts": {
+    "chase-checking": {
+      "Kind": "Bank",
+      "HeaderContains": [ "Posting Date", "Description", "Amount", "Balance" ],
+      "DateColumn": "Posting Date",
+      "DateFormat": "MM/dd/yyyy",
+      "DescriptionColumn": "Description",
+      "AmountColumn": "Amount",
+      "BalanceColumn": "Balance",
+      "CheckNoColumn": "Check or Slip #"
+    },
+    "chase-card": {
+      "Kind": "Card",
+      "HeaderContains": [ "Transaction Date", "Post Date", "Description", "Amount" ],
+      "DateColumn": "Transaction Date",
+      "DateFormat": "MM/dd/yyyy",
+      "DescriptionColumn": "Description",
+      "AmountColumn": "Amount"
+    }
+  }
+}

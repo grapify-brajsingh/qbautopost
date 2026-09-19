@@ -1,0 +1,21 @@
+!ACCNT	NAME	ACCNTTYPE	DESC
+ACCNT	Chase Checking 4521	BANK	POC bank account
+ACCNT	Chase Sapphire 7788	CCARD	POC credit card
+ACCNT	Rental Income	INC	
+ACCNT	Repairs and Maintenance	EXP	
+ACCNT	Office Supplies	EXP	
+ACCNT	Utilities	EXP	
+ACCNT	Automobile Expense	EXP	
+ACCNT	Insurance Expense	EXP	
+ACCNT	Ask My Accountant	EXEXP	
+!VEND	NAME
+VEND	Home Depot
+VEND	Amazon
+VEND	Shell
+VEND	Florida Power & Light
+VEND	City Water Dept
+VEND	Allstate Insurance
+VEND	Staples
+!CUST	NAME
+CUST	Palm Court Rentals LLC
+CUST	Sunrise Property Mgmt

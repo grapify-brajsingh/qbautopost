@@ -94,6 +94,7 @@ Copy `rules.json` (start from `samples/rules.json`) to `C:\qb-autopost\rules.jso
 | `QuickBooks:BackupFolder` | empty | When set, posting is refused unless the newest `*.QBB` there is recent |
 | `QuickBooks:BackupMaxAgeHours` | `36` | Age limit for that backup |
 | `QuickBooks:Fake` | `false` | Test only: simulated company. Refused outside Development/Testing |
+| `Hermes:Enabled` | `true` | `false` = no AI at all (POC, `samples/poc/README-POC.md`): the requirement is read by the regex parser; PDF statements, invoices and lines no rule resolves are held |
 | `Hermes:BaseUrl` / `Model` / `TimeoutSeconds` | `http://127.0.0.1:8642` / `default` / `120` | |
 | `Hermes:ApiKey` | empty | Hermes' `API_SERVER_KEY` |
 | `Ocr:Enabled` / `TessDataPath` | `false` / empty | Scanned PDFs and invoice images need OCR (`eng.traineddata`) |
