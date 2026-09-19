@@ -35,7 +35,8 @@ public sealed class QbConnection(IQbGateway gateway, QbConnectionMode mode)
         : isWindows ? QbConnectionMode.Sdk
         : QbConnectionMode.Unavailable;
 
-    public static QbConnection Create(AppSettings settings, IHostEnvironment environment)
+    /// <param name="sdkTrace">Receives each SDK session step (connect, begin, end) for the log; SDK mode only.</param>
+    public static QbConnection Create(AppSettings settings, IHostEnvironment environment, Action<string>? sdkTrace = null)
     {
         var mode = SelectMode(settings.QuickBooks.Fake, OperatingSystem.IsWindows());
         switch (mode)
@@ -51,16 +52,17 @@ public sealed class QbConnection(IQbGateway gateway, QbConnectionMode mode)
 
                 return new QbConnection(new SimulatedQbGateway(new SimulatedQuickBooks()), mode);
             case QbConnectionMode.Sdk when OperatingSystem.IsWindows():
-                return new QbConnection(CreateSdkGateway(settings), mode);
+                return new QbConnection(CreateSdkGateway(settings, sdkTrace), mode);
             default:
                 return new QbConnection(new UnconfiguredQbGateway(), QbConnectionMode.Unavailable);
         }
     }
 
     [SupportedOSPlatform("windows")]
-    private static QbGateway CreateSdkGateway(AppSettings settings) => new(new QbGatewayOptions
+    private static QbGateway CreateSdkGateway(AppSettings settings, Action<string>? sdkTrace) => new(new QbGatewayOptions
     {
         AppName = settings.QuickBooks.AppName,
         CompanyFile = settings.Company.FilePath,
+        Trace = sdkTrace,
     });
 }

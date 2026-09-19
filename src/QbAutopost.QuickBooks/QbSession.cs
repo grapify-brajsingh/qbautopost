@@ -27,18 +27,26 @@ public sealed class QbSession : IDisposable
     public const int FileOpenDoNotCare = 2;
 
     private readonly object _processor;
+    private readonly Action<string> _trace;
     private bool _connected;
     private string? _ticket;
 
-    private QbSession(object processor) => _processor = processor;
-
-    public static QbSession Open(string appName, string companyFile)
+    private QbSession(object processor, Action<string> trace)
     {
+        _processor = processor;
+        _trace = trace;
+    }
+
+    /// <param name="trace">Receives each step (never the session ticket); a hang after "BeginSession" is usually a QuickBooks dialog.</param>
+    public static QbSession Open(string appName, string companyFile, Action<string>? trace = null)
+    {
+        trace ??= _ => { };
         if (string.IsNullOrWhiteSpace(companyFile))
         {
             throw new QuickBooksUnavailableException("Company:FilePath is not set");
         }
 
+        trace($"creating {ProgId} in a {Bitness} process");
         var type = Type.GetTypeFromProgID(ProgId, throwOnError: false)
             ?? throw new QuickBooksUnavailableException(
                 $"{ProgId} is not registered for this {Bitness} process; install the QuickBooks SDK or run the app with the bitness of QuickBooks");
@@ -54,13 +62,16 @@ public sealed class QbSession : IDisposable
             throw new QuickBooksUnavailableException($"{ProgId} could not be created ({Describe(ex)}); check that the process bitness ({Bitness}) matches QuickBooks", ex);
         }
 
-        var session = new QbSession(processor);
+        var session = new QbSession(processor, trace);
         try
         {
+            trace($"OpenConnection2 as '{appName}' (local QuickBooks Desktop)");
             session.Invoke("OpenConnection2", "", appName, LocalQbd);
             session._connected = true;
+            trace($"BeginSession on '{companyFile}' (waits while QuickBooks shows a dialog: certificate, login, single-user)");
             session._ticket = (string?)session.Invoke("BeginSession", companyFile, FileOpenDoNotCare)
                 ?? throw new QuickBooksUnavailableException("BeginSession returned no ticket");
+            trace("session open");
             return session;
         }
         catch (COMException ex)
@@ -128,6 +139,11 @@ public sealed class QbSession : IDisposable
         catch (COMException)
         {
             // As above.
+        }
+
+        if (_ticket is not null || _connected)
+        {
+            _trace("session closed");
         }
 
         _ticket = null;

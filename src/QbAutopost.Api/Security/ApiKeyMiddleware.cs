@@ -8,15 +8,19 @@ namespace QbAutopost.Api.Security;
 /// <summary><c>X-Api-Key</c> on every route except <c>/health/*</c> (spec §6). The key is never logged.</summary>
 public sealed class ApiKeyMiddleware(RequestDelegate next, IOptions<AppSettings> settings)
 {
-    public async Task InvokeAsync(HttpContext context, IProblemDetailsService problems)
+    public async Task InvokeAsync(HttpContext context, IProblemDetailsService problems, ILogger<ApiKeyMiddleware> log)
     {
+        var given = context.Request.Headers[ApiSettings.KeyHeader].ToString();
         if (context.Request.Path.StartsWithSegments("/health", StringComparison.OrdinalIgnoreCase)
-            || Matches(context.Request.Headers[ApiSettings.KeyHeader].ToString(), settings.Value.Api.ApiKey))
+            || Matches(given, settings.Value.Api.ApiKey))
         {
             await next(context);
             return;
         }
 
+        log.LogWarning(
+            "Request {Method} {Path} refused: {Problem} X-Api-Key header",
+            context.Request.Method, context.Request.Path.Value, given.Length == 0 ? "missing" : "invalid");
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
         await problems.WriteAsync(new ProblemDetailsContext
         {

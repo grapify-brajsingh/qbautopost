@@ -28,6 +28,7 @@ public sealed class JobRunner(IJobStore store, JobPipeline pipeline, IClock cloc
 
         var started = clock.UtcNow;
         job = store.Save(job.MoveTo(JobStatus.Analysing));
+        log.LogInformation("Job {JobId}: analysing {Folder} (dryRun {DryRun})", jobId, job.Folder, job.DryRun);
 
         AnalysisResult analysis;
         try
@@ -41,6 +42,7 @@ public sealed class JobRunner(IJobStore store, JobPipeline pipeline, IClock cloc
             return;
         }
 
+        JobLog.Analysis(log, jobId, analysis);
         if (analysis.FailReason is { } reason)
         {
             Finish(job.MoveTo(JobStatus.Failed, reason), analysis, null, started);
@@ -55,6 +57,7 @@ public sealed class JobRunner(IJobStore store, JobPipeline pipeline, IClock cloc
 
         // FR-10 dryRun=false: post straight after FR-9 with this analysis.
         job = store.Save(pipeline.BeginPosting(job));
+        log.LogInformation("Job {JobId}: posting batch {BatchId} ({ToPost} lines to post)", jobId, job.BatchId, analysis.ToPost.Count);
         await PostAndFinishAsync(job, analysis, started, ct);
     }
 
@@ -67,6 +70,7 @@ public sealed class JobRunner(IJobStore store, JobPipeline pipeline, IClock cloc
             return;
         }
 
+        log.LogInformation("Job {JobId}: posting batch {BatchId}; analysing the folder again first (FR-10)", jobId, job.BatchId);
         await PostAndFinishAsync(job, null, clock.UtcNow, ct);
     }
 
@@ -86,6 +90,16 @@ public sealed class JobRunner(IJobStore store, JobPipeline pipeline, IClock cloc
             return;
         }
 
+        if (analysis is null && outcome.Analysis is not null)
+        {
+            JobLog.Analysis(log, job.JobId, outcome.Analysis);
+        }
+        else if (analysis is not null && outcome.Analysis is not null)
+        {
+            JobLog.Changes(log, job.JobId, analysis, outcome.Analysis);
+        }
+
+        JobLog.Posting(log, job, outcome);
         Finish(job.MoveTo(outcome.Status, outcome.Error), outcome.Analysis, outcome, started);
     }
 

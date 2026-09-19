@@ -73,6 +73,74 @@ public sealed class LoggingApiTests : IDisposable
     }
 
     [Fact]
+    public void Should_LogProcessAndSettings_When_HostStarts()
+    {
+        _ = _factory.Services;
+
+        var text = string.Join('\n', LogLines());
+        Assert.Matches(@"(x64|x86) process", text);
+        Assert.Contains("DryRunDefault true", text, StringComparison.Ordinal);
+        Assert.Contains(ApiFactory.Company, text, StringComparison.Ordinal);
+        Assert.Contains("busy timeout", text, StringComparison.Ordinal);
+        Assert.DoesNotContain(ApiFactory.ApiKey, text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Should_LogEachRequestWithStatus_When_ApiIsCalled()
+    {
+        using var response = await _client.GetAsync("/jobs");
+
+        Assert.Contains(LogLines(), l => l.Contains("HTTP GET /jobs responded 200", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Should_LogRejectedKeyWithoutItsValue_When_KeyIsWrong()
+    {
+        using var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", "wrong-key-98765");
+
+        using var response = await client.GetAsync("/jobs");
+
+        var text = string.Join('\n', LogLines());
+        Assert.Contains("invalid X-Api-Key", text, StringComparison.Ordinal);
+        Assert.Contains("HTTP GET /jobs responded 401", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("wrong-key-98765", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Should_LogAcceptanceStatementsAndHeldLines_When_JobIsAnalysed()
+    {
+        var view = await _client.RunToEndAsync(_factory.Dir.CopySampleJob());
+
+        var text = string.Join('\n', LogLines());
+        Assert.Contains("Job 2026-08-tropicana: accepted", text, StringComparison.Ordinal);
+        Assert.Contains("statement chase-checking-4521.csv", text, StringComparison.Ordinal);
+        var held = Assert.IsType<string>(view.Held[0].Reason);
+        Assert.Contains(LogLines(), l => l.Contains("held", StringComparison.Ordinal) && l.Contains(held, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Should_KeepStatementDescriptionsOutOfInformationLog_When_JobRuns()
+    {
+        await _client.RunToEndAsync(_factory.Dir.CopySampleJob(), dryRun: false);
+
+        Assert.DoesNotContain(LogLines(), l => l.Contains("ACH DEBIT FPL ELECTRIC UTILITY", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Should_LogQuickBooksCallsAndPostedTxnIds_When_JobPosts()
+    {
+        var view = await _client.RunToEndAsync(_factory.Dir.CopySampleJob(), dryRun: false);
+
+        var txnId = view.Posted[0].TxnId;
+        var text = string.Join('\n', LogLines());
+        Assert.Contains("QuickBooks call", text, StringComparison.Ordinal);
+        Assert.Contains("CheckAddRq x", text, StringComparison.Ordinal);
+        Assert.Contains(LogLines(), l => l.Contains("posted", StringComparison.Ordinal) && l.Contains(txnId, StringComparison.Ordinal));
+        Assert.Contains("batch 2026-08-tropicana#1", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Should_MaskHermesKey_When_ItComesFromConfiguration()
     {
         using var host = _factory.WithSetting("Hermes:ApiKey", "sk-provider-0042");

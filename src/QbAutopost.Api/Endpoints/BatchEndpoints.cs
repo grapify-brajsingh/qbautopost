@@ -18,23 +18,38 @@ public static class BatchEndpoints
     }
 
     private static async Task<IResult> Undo(
-        string id, JobQueue queue, BatchUndo undo, IJobStore store, IOptions<AppSettings> settings, CancellationToken ct)
+        string id, JobQueue queue, BatchUndo undo, IJobStore store, IOptions<AppSettings> settings, ILoggerFactory loggers, CancellationToken ct)
     {
+        var log = loggers.CreateLogger(typeof(BatchEndpoints));
+        var label = id.Split('#')[0];
+        log.LogInformation("Job {JobId}: undo of batch {BatchId} requested; queued", label, id);
         UndoResult result;
         try
         {
             // On the worker: undo writes the ledger and talks to QuickBooks, so it must not overlap a job.
-            var label = id.Split('#')[0];
             result = await queue.RunExclusiveAsync(label, token => UndoAndUpdateJobAsync(id, undo, store, settings.Value, token), ct);
         }
         catch (Exception ex) when (QuickBooksEndpoints.QuickBooksProblem(ex) is { } problem)
         {
+            log.LogWarning("Job {JobId}: undo of batch {BatchId} failed, nothing marked undone: {Error}", label, id, ex.Message);
             return problem;
         }
 
-        return result.Found
-            ? Results.Ok(new UndoResponse(result.Deleted, result.Failed))
-            : Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Batch not found", detail: $"batch {id} is not in the ledger");
+        if (!result.Found)
+        {
+            log.LogWarning("Job {JobId}: batch {BatchId} is not in the ledger", label, id);
+            return Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Batch not found", detail: $"batch {id} is not in the ledger");
+        }
+
+        log.LogInformation(
+            "Job {JobId}: undo of batch {BatchId}: {Deleted} deleted, {Failed} not deleted, batch undone {BatchUndone}",
+            label, id, result.Deleted, result.Failed.Count, result.BatchUndone);
+        foreach (var failure in result.Failed)
+        {
+            log.LogWarning("Job {JobId}: batch {BatchId}: TxnID {TxnId} not deleted: {Error}", label, id, failure.TxnId, failure.Message);
+        }
+
+        return Results.Ok(new UndoResponse(result.Deleted, result.Failed));
     }
 
     private static async Task<UndoResult> UndoAndUpdateJobAsync(

@@ -48,10 +48,12 @@ builder.Services.AddSingleton(sp =>
 });
 // HermesOptions.Timeout bounds each call; the HttpClient's own 100 s default would cut the 120 s budget short.
 // A singleton reader holds its HermesClient, so the handler is never rotated (Hermes is a fixed loopback address).
-builder.Services.AddHttpClient<IHermesClient, HermesClient>(http => http.Timeout = Timeout.InfiniteTimeSpan)
+builder.Services.AddHttpClient<HermesClient>(http => http.Timeout = Timeout.InfiniteTimeSpan)
     .SetHandlerLifetime(Timeout.InfiniteTimeSpan);
-// Prompts load before the host starts: a missing required prompt stops startup (spec §9).
-builder.Services.AddSingleton(PromptLibrary.Load(
+builder.Services.AddSingleton<IHermesClient>(sp =>
+    new LoggingHermesClient(sp.GetRequiredService<HermesClient>(), sp.GetRequiredService<ILogger<LoggingHermesClient>>()));
+// Prompts are loaded before the host starts (below): a missing required prompt stops startup (spec §9) and is logged.
+builder.Services.AddSingleton(_ => PromptLibrary.Load(
     Path.Combine(AppContext.BaseDirectory, PromptLibrary.DefaultFolder), HermesTask.Spec, HermesTask.Statement, HermesTask.Invoice, HermesTask.Account));
 builder.Services.AddSingleton<ISpecReader, HermesSpecReader>();
 builder.Services.AddSingleton<IOcr>(sp =>
@@ -64,14 +66,24 @@ builder.Services.AddSingleton<StatementReader>();
 builder.Services.AddSingleton<InvoiceExtractor>();
 builder.Services.AddSingleton<AccountChooser>();
 // T-601: the SDK on Windows, the simulated company with QuickBooks:Fake=true, otherwise nothing is ever sent.
-builder.Services.AddSingleton(sp => QbConnection.Create(
-    sp.GetRequiredService<IOptions<AppSettings>>().Value, sp.GetRequiredService<IHostEnvironment>()));
+builder.Services.AddSingleton(sp =>
+{
+    // Each SDK session step (connect, BeginSession, close) is logged: a hang there usually means a QuickBooks dialog.
+    var sdkLog = sp.GetRequiredService<ILoggerFactory>().CreateLogger("QbAutopost.QuickBooks.QbSession");
+    return QbConnection.Create(
+        sp.GetRequiredService<IOptions<AppSettings>>().Value,
+        sp.GetRequiredService<IHostEnvironment>(),
+        step => sdkLog.LogInformation("QuickBooks SDK: {Step}", step));
+});
 builder.Services.AddSingleton<IQbGateway>(sp =>
 {
     var qb = sp.GetRequiredService<IOptions<AppSettings>>().Value.QuickBooks;
-    return new ResilientQbGateway(sp.GetRequiredService<QbConnection>().Gateway, new QbGatewayPolicy
+    var busyTimeout = TimeSpan.FromSeconds(qb.BusyTimeoutSeconds);
+    var logged = new LoggingQbGateway(
+        sp.GetRequiredService<QbConnection>().Gateway, sp.GetRequiredService<ILogger<LoggingQbGateway>>(), busyTimeout);
+    return new ResilientQbGateway(logged, new QbGatewayPolicy
     {
-        BusyTimeout = TimeSpan.FromSeconds(qb.BusyTimeoutSeconds),
+        BusyTimeout = busyTimeout,
         RetryDelay = TimeSpan.FromSeconds(qb.RetryDelaySeconds),
     });
 });
@@ -106,28 +118,52 @@ builder.Services.AddHostedService<JobWorker>();
 
 var app = builder.Build();
 
-RequireApiKey(app);
+try
+{
+    var settings = app.Services.GetRequiredService<IOptions<AppSettings>>().Value;
+    StartupLog.Write(app.Logger, settings, app.Environment);
 
-// With Ocr:Enabled the engine loads now, so missing language data stops startup rather than failing a job.
-app.Services.GetRequiredService<IOcr>();
+    RequireApiKey(app);
 
-// QuickBooks:Fake outside Development/Testing stops startup; the chosen mode is logged once.
-var qbConnection = app.Services.GetRequiredService<QbConnection>();
-app.Logger.LogInformation("QuickBooks gateway: {Mode}", qbConnection.Mode);
+    app.Services.GetRequiredService<PromptLibrary>();
+    app.Logger.LogInformation("Hermes prompts loaded from {PromptFolder}", Path.Combine(AppContext.BaseDirectory, PromptLibrary.DefaultFolder));
 
-// Spec §6: before the worker starts (hosted services start in app.Run), no job may remain active.
-app.Services.GetRequiredService<StartupRecovery>().Run();
+    // With Ocr:Enabled the engine loads now, so missing language data stops startup rather than failing a job.
+    app.Services.GetRequiredService<IOcr>();
 
-app.UseExceptionHandler();
-app.UseStatusCodePages();
-app.UseMiddleware<ApiKeyMiddleware>();
-app.MapJobEndpoints();
-app.MapHealthEndpoints();
-app.MapQuickBooksEndpoints();
-app.MapBatchEndpoints();
-app.MapRulesEndpoints();
+    // QuickBooks:Fake outside Development/Testing stops startup; the chosen mode is logged once.
+    var qbConnection = app.Services.GetRequiredService<QbConnection>();
+    app.Logger.LogInformation("QuickBooks gateway: {Mode}", qbConnection.Mode);
 
-app.Run();
+    // Spec §6: before the worker starts (hosted services start in app.Run), no job may remain active.
+    var recovered = app.Services.GetRequiredService<StartupRecovery>().Run();
+    app.Logger.LogInformation("Startup recovery: {Count} interrupted job(s) closed", recovered);
+
+    app.Lifetime.ApplicationStarted.Register(() =>
+        app.Logger.LogInformation("QbAutopost ready, listening on {Urls}", string.Join(", ", app.Urls)));
+    app.Lifetime.ApplicationStopping.Register(() =>
+        app.Logger.LogInformation("QbAutopost stopping; a job still running is closed by startup recovery next time"));
+
+    app.UseExceptionHandler();
+    app.UseStatusCodePages();
+    app.UseQbAutopostRequestLogging();
+    app.UseMiddleware<ApiKeyMiddleware>();
+    app.MapJobEndpoints();
+    app.MapHealthEndpoints();
+    app.MapQuickBooksEndpoints();
+    app.MapBatchEndpoints();
+    app.MapRulesEndpoints();
+
+    app.Run();
+}
+catch (Exception ex)
+{
+    app.Logger.LogCritical(ex, "QbAutopost stopped: {Error}", ex.Message);
+
+    // Disposing the host flushes and closes the log file, so the reason is on disk before the process ends.
+    await app.DisposeAsync();
+    throw;
+}
 
 // Fail closed: without a real key every route except /health would be open.
 static void RequireApiKey(WebApplication app)

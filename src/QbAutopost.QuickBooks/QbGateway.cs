@@ -7,6 +7,9 @@ public sealed record QbGatewayOptions
 {
     public required string AppName { get; init; }
     public required string CompanyFile { get; init; }
+
+    /// <summary>Receives each SDK session step for the host's log; this project has no logging dependency.</summary>
+    public Action<string>? Trace { get; init; }
 }
 
 /// <summary>
@@ -31,7 +34,7 @@ public sealed class QbGateway(QbGatewayOptions options) : IQbGateway
         {
             try
             {
-                using var session = QbSession.Open(options.AppName, options.CompanyFile);
+                using var session = QbSession.Open(options.AppName, options.CompanyFile, options.Trace);
                 result.SetResult(work(session));
             }
             catch (Exception ex)

@@ -27,16 +27,26 @@ public static class QuickBooksEndpoints
         _ => null,
     };
 
-    private static async Task<IResult> SyncLists(JobQueue queue, QbListSync sync, CancellationToken ct)
+    private static async Task<IResult> SyncLists(JobQueue queue, QbListSync sync, ILoggerFactory loggers, CancellationToken ct)
     {
+        var log = loggers.CreateLogger(typeof(QuickBooksEndpoints));
         try
         {
             // Through the worker: the sync must not overlap a job that reads qb-lists.json or talks to QuickBooks.
             var result = await queue.RunExclusiveAsync("qb-sync-lists", sync.SyncAsync, ct);
+            log.LogInformation(
+                "QuickBooks lists synced: {Accounts} accounts, {Vendors} vendors, {Customers} customers",
+                result.Accounts, result.Vendors, result.Customers);
+            if (result.MissingInRules.Count > 0)
+            {
+                log.LogWarning("Names in rules.json that QuickBooks does not have: {Missing}", string.Join("; ", result.MissingInRules));
+            }
+
             return Results.Ok(result);
         }
         catch (Exception ex) when (QuickBooksProblem(ex) is { } problem)
         {
+            log.LogWarning("QuickBooks list sync failed, qb-lists.json unchanged: {Error}", ex.Message);
             return problem;
         }
     }

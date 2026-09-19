@@ -21,19 +21,30 @@ public static class JobEndpoints
         return app;
     }
 
-    private static IResult CreateJob(CreateJobRequest? request, JobAdmission admission)
+    private static IResult CreateJob(CreateJobRequest? request, JobAdmission admission, ILoggerFactory loggers)
     {
+        var log = loggers.CreateLogger(typeof(JobEndpoints));
+        Admission result;
         try
         {
-            var result = admission.Create(request?.Folder, request?.DryRun, request?.Force ?? false);
-            return result.Outcome == AdmissionOutcome.Accepted
-                ? Results.Accepted($"/jobs/{result.Job!.JobId}", new CreateJobResponse(result.Job.JobId, result.Job.Status))
-                : Problem(result);
+            result = admission.Create(request?.Folder, request?.DryRun, request?.Force ?? false);
         }
         catch (InvalidJobFolderException ex)
         {
-            return Problem(new Admission(AdmissionOutcome.Invalid, null, ex.Errors));
+            result = new Admission(AdmissionOutcome.Invalid, null, ex.Errors);
         }
+
+        if (result.Outcome != AdmissionOutcome.Accepted)
+        {
+            log.LogWarning(
+                "Job request for {Folder} refused ({Outcome}): {Errors}", request?.Folder, result.Outcome, string.Join("; ", result.Errors ?? []));
+            return Problem(result);
+        }
+
+        log.LogInformation(
+            "Job {JobId}: accepted from {Folder} (dryRun {DryRun}, force {Force}); queued",
+            result.Job!.JobId, result.Job.Folder, result.Job.DryRun, request?.Force ?? false);
+        return Results.Accepted($"/jobs/{result.Job.JobId}", new CreateJobResponse(result.Job.JobId, result.Job.Status));
     }
 
     private static IResult ListJobs(string? status, IJobStore store)
@@ -66,12 +77,18 @@ public static class JobEndpoints
             : Results.Ok(JobView.From(job, JobOutputWriter.ReadResult(Path.Combine(job.Folder, FolderReader.OutputDirName))));
     }
 
-    private static IResult PostJob(string id, JobAdmission admission)
+    private static IResult PostJob(string id, JobAdmission admission, ILoggerFactory loggers)
     {
+        var log = loggers.CreateLogger(typeof(JobEndpoints));
         var result = admission.RequestPost(id);
-        return result.Outcome == AdmissionOutcome.Accepted
-            ? Results.Accepted($"/jobs/{result.Job!.JobId}", new CreateJobResponse(result.Job.JobId, result.Job.Status))
-            : Problem(result);
+        if (result.Outcome != AdmissionOutcome.Accepted)
+        {
+            log.LogWarning("Job {JobId}: post refused ({Outcome}): {Errors}", id, result.Outcome, string.Join("; ", result.Errors ?? []));
+            return Problem(result);
+        }
+
+        log.LogInformation("Job {JobId}: post requested; batch {BatchId} queued", result.Job!.JobId, result.Job.BatchId);
+        return Results.Accepted($"/jobs/{result.Job.JobId}", new CreateJobResponse(result.Job.JobId, result.Job.Status));
     }
 
     private static IResult Problem(Admission result)

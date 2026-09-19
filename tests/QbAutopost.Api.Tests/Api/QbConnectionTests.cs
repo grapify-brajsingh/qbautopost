@@ -71,7 +71,8 @@ public sealed class QbConnectionTests : IDisposable
         var gateway = _factory.Services.GetRequiredService<IQbGateway>();
 
         var resilient = Assert.IsType<ResilientQbGateway>(gateway);
-        Assert.Same(_factory.Gateway, resilient.Inner);
+        var logging = Assert.IsType<LoggingQbGateway>(resilient.Inner);
+        Assert.Same(_factory.Gateway, logging.Inner);
     }
 
     [Fact]

@@ -299,7 +299,7 @@ A job found `posting` after a crash or restart becomes `partial` with
 | Job `failed`: rules | `rules.json` is not valid JSON or has a bad value (see the error); teaching returns 500 in that case and does not touch the file |
 | 401 | Missing or wrong `X-Api-Key` |
 | 409 on `POST /jobs` | The job is running, or already in the ledger (use `force` only after checking QuickBooks) |
-| Host does not start | Read the console: empty API key, `QuickBooks:Fake` outside Development, missing OCR data, or a missing prompt file |
+| Host does not start | Read the console or the last `[FTL] QbAutopost stopped:` line in the log: empty API key, `QuickBooks:Fake` outside Development, missing OCR data, or a missing prompt file |
 
 ### 8.6 Logs
 
@@ -311,6 +311,21 @@ A job found `posting` after a crash or restart becomes `partial` with
 
 Search a job with `Select-String -Path C:\qb-autopost\logs\*.log -Pattern '\[2026-08-tropicana\]'`.
 For more detail set `Serilog:MinimumLevel:Default` to `Debug` and restart.
+
+What is logged (Information unless noted):
+
+| When | Lines to look for |
+|---|---|
+| Startup | `starting:` (version, **x64/x86 process**, Windows session, user), `Settings:` (API address, `DryRunDefault`, company, company file and rules file with `found`/`missing`), `Data files:`, `QuickBooks:` (qbXML version, busy timeout, backup folder), `Hermes:` (URL, model, key `set`/`not set`), `QuickBooks gateway:`, `Startup recovery:`, `ready, listening on`. Warnings for a missing company or rules file and for Windows session 0. A startup failure ends with `[FTL] QbAutopost stopped:` |
+| Every API request | `HTTP POST /jobs responded 202 in 12 ms` (4xx Warning, 5xx Error; a healthy `/health/*` poll is Debug). A wrong or missing key: `refused: invalid X-Api-Key header` (the key itself is never logged). Job, post, undo and sync-lists requests also log what was accepted or refused and why |
+| A job | `accepted`, `analysing`, `requirement read`, one line per statement (rows, reconcile) or `held (reason)`, invoices, `N lines: … to post, … held (reason xN), … skipped`, one line per held or skipped line (`file:line date amount direction`, reason, note), `posting batch …`, the final status |
+| QuickBooks | `QuickBooks SDK:` each session step (`creating …`, `OpenConnection2`, `BeginSession on '…'`, `session open`, `session closed`). **A log that stops after `BeginSession` means QuickBooks is showing a dialog** (certificate, login, single-user). `QuickBooks call N: sending CheckAddRq x5 …`, `answered in … ms with N responses: … ok, … with errors`, a Warning per refused request with its status code and message, `took … s, longer than the busy timeout` |
+| Posting | `posted Check file:line … as TxnID …` per transaction, `not posted … reason` per rejected line, `batch <id>: N posted, M not posted`, `duplicate check (G4) changed …` |
+| Hermes | `Hermes Spec: asking (N characters of input)`, `valid answer in … ms`, or a Warning `no answer` / `answer rejected twice` |
+
+Statement text (descriptions, memos), prompts and qbXML bodies are not logged at Information (spec §14): lines are named
+by file, line number, date and amount. At Debug each line's description and full mapping, and every QuickBooks response
+with its TxnID, are added. The full qbXML and Hermes exchanges stay in the job's `output\` folder.
 
 ## 9. Backing up the app's own state
 
