@@ -26,8 +26,9 @@ New-Item -ItemType Directory -Force $stage | Out-Null
 & dotnet publish (Join-Path $root 'src\QbAutopost.Api') -c Release -r $Runtime --self-contained true -o (Join-Path $stage 'app')
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
 
-# Development settings must not ship; the POC settings are copied over appsettings.json on the server.
+# Development settings and development data must not ship; the POC settings are copied over appsettings.json there.
 Remove-Item (Join-Path $stage 'app\appsettings.Development.json') -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $stage 'app\data') -Recurse -Force -ErrorAction SilentlyContinue
 
 $poc = Join-Path $stage 'poc'
 New-Item -ItemType Directory -Force $poc | Out-Null
