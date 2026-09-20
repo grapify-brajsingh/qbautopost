@@ -31,7 +31,9 @@ Fill in the result table at the end and send the failed rows back with the log f
 - [ ] **1.1** QuickBooks → **File → New Company → Detailed Start** (Express Start is fine too).
 - [ ] **1.2** Company name exactly: `Tropicana Properties LLC` — the app refuses the job if the name differs.
       Industry *Other/None*, any tax form.
-- [ ] **1.3** Save as `C:\qb-autopost\company\Tropicana Properties LLC.qbw` (create the folder first).
+- [ ] **1.3** Save it anywhere on the server. The packaged settings point at
+      `D:\Accountexx Data\Quickbook - Accounting File\Quickbook - Accounting File\18_Takoma Park Grocery Store Inc\Tropicana Properties LLC.qbw`;
+      a different location means editing `Company:FilePath` in `app\appsettings.json` (step 2.3).
 - [ ] **1.4** **File → Utilities → Import → IIF Files** → `poc\tropicana-lists.iif` from the package.
       Expect "your data has been imported".
 - [ ] **1.5** Check **Lists → Chart of Accounts**: *Chase Checking 4521* (Bank), *Chase Sapphire 7788* (Credit Card),
