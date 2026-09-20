@@ -40,6 +40,7 @@ Get-ChildItem $poc -Recurse -Directory -Filter output | Remove-Item -Recurse -Fo
 New-Item -ItemType Directory -Force (Join-Path $stage 'scripts') | Out-Null
 Copy-Item (Join-Path $root 'scripts\qb-server-check.ps1') (Join-Path $stage 'scripts') -Force
 Copy-Item (Join-Path $root 'samples\poc\README-POC.md') $stage -Force
+Copy-Item (Join-Path $root 'steps.md') $stage -Force
 
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip
 Write-Host "Package: $zip"
