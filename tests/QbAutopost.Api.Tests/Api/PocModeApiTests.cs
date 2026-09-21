@@ -45,6 +45,21 @@ public sealed class PocModeApiTests : IDisposable
     }
 
     [Fact]
+    public async Task Should_PostEveryLineOfTheXlsxJob_When_HermesIsDisabled()
+    {
+        using var client = ClientWithoutHermes(Fixtures.PocRules);
+
+        var view = await client.RunToEndAsync(_factory.Dir.CopyJob(Fixtures.PocXlsxJob, "2026-08-tropicana-xlsx"), dryRun: false);
+
+        Assert.Equal(JobStatus.Posted, view.Status);
+        Assert.Equal((9, 0, 0), (view.Counts.Posted, view.Counts.Held, view.Counts.Skipped));
+        var statement = Assert.Single(view.Statements);
+        Assert.Equal("chase-checking-4521.xlsx", statement.File);
+        Assert.True(statement.Reconcile?.Verified, statement.Reconcile?.Message);
+        Assert.Empty(_factory.Hermes.Calls);
+    }
+
+    [Fact]
     public async Task Should_ReadRequirementWithRegexParser_When_HermesIsDisabled()
     {
         using var client = ClientWithoutHermes(Fixtures.SampleRules);

@@ -1,0 +1,17 @@
+Tropicana Properties LLC.>Batch Enter Transactions
+
+Transactions Type => Checks (Debit Entries)
+Bank Account=From Statement (Last Four Digits) 4521
+Date-
+Check =Check Number /ACH
+Payee=Vendor if ACH - Blank if Check
+Account = Account Type
+Amount = take from Bank Statement
+Memo = written from Bank Statement
+
+Transactions Type > Deposit
+    Date =
+    Received From = Customer
+    Account From = Bank 4521
+    Memo = Written from Bank Statement
+    Amount = take from Bank Statement

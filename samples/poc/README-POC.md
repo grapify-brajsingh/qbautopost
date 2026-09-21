@@ -17,6 +17,7 @@ and Deposits you would type into *Batch Enter Transactions*. No AI (Hermes) is u
 | `poc\rules.json` | Mapping rules: every sample line resolves by rule |
 | `poc\tropicana-lists.iif` | QuickBooks list import: 9 accounts, 7 vendors, 2 customers the rules use |
 | `poc\jobs\2026-09-tropicana\` | The sample job: `requirement.txt` + `statements\chase-checking-4521.csv` (10 lines) and `chase-card-7788.csv` (6 lines) |
+| `poc\jobs\2026-08-tropicana-xlsx\` | A second job, one **Excel** bank statement (`chase-checking-4521.xlsx`, 9 lines, August 2026): 7 Checks and 2 Deposits, nothing skipped. Run it like the first one; it is a separate job id, so no `-Force` |
 | `scripts\qb-server-check.ps1` | Runs each step against the app: health, sync, dryrun, post, undo |
 
 Expected result for the sample job: **15 transactions posted, 1 skipped** (the card's "AUTOMATIC PAYMENT"):

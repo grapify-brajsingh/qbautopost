@@ -19,7 +19,11 @@ $name = "qbautopost-poc-$Runtime"
 $stage = Join-Path $root "dist\$name"
 $zip = Join-Path $root "dist\$name.zip"
 
-if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+if (Test-Path $stage) {
+    # A file in the old staging folder can be held by a virus scanner or a still-running copy of the app.
+    try { Remove-Item $stage -Recurse -Force -ErrorAction Stop }
+    catch { $stage = Join-Path $root ("dist\$name-" + (Get-Date -Format 'yyyyMMdd-HHmmss')) }
+}
 if (Test-Path $zip) { Remove-Item $zip -Force }
 New-Item -ItemType Directory -Force $stage | Out-Null
 
