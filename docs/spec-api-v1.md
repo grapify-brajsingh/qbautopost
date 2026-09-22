@@ -206,17 +206,22 @@ Response:
   "qbXmlVersion": "16.0",
   "steps": [
     { "name": "waitForGateway", "ok": true, "ms": 0 },
-    { "name": "openConnection", "ok": true, "ms": 41 },
-    { "name": "beginSession",   "ok": true, "ms": 101420,
-      "message": "slow: a QuickBooks dialog (certificate/permission) usually causes this" },
-    { "name": "hostQuery",      "ok": true, "ms": 88 },
-    { "name": "companyQuery",   "ok": true, "ms": 63 },
-    { "name": "endSession",     "ok": true, "ms": 12 }
+    { "name": "hostQuery",      "ok": true, "ms": 101508,
+      "message": "slow: a QuickBooks dialog (certificate or permission) usually causes this; it must be answered on the QuickBooks desktop" },
+    { "name": "companyFile",    "ok": true, "ms": 63 }
   ],
   "totalMs": 101624,
   "message": "connected"
 }
 ```
+
+**Amended at T-904 (2026-09-22).** The draft listed `openConnection`, `beginSession`, `companyQuery` and `endSession`
+as separate steps. They cannot be timed separately without changing `IQbGateway`: one gateway call **is** one SDK
+session (FR-11 — `OpenConnection2` → `BeginSession` → request → `EndSession` → `CloseConnection`), so those phases
+happen inside `hostQuery`. Reporting them as separate numbers would mean inventing them. The three steps above are
+each measured. A slow `BeginSession` — the 101 s certificate dialog — therefore shows as a slow `hostQuery` carrying
+the hint, which answers the operator's question either way. Whether it is worth widening the gateway interface to
+report real per-phase timings is **Q-56**.
 
 - `timeoutSeconds` defaults to `QuickBooks:ConnectionTestTimeoutSeconds` (**new**, default **180**), deliberately
   longer than the 60 s busy timeout so the first call of the day — the one that raises the certificate dialog —
