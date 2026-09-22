@@ -17,20 +17,27 @@ public sealed record ValidationResponse(
     ValidationQbXml QbXml)
 {
     /// <summary>
-    /// SPEC-GAP T-907: FR-A-6 returns the qbXML body for <c>?includeQbXml=true</c> with the <c>qb:debug</c> scope,
-    /// but scopes do not exist until T-910. Until a key can be shown to hold that scope the body is withheld and this
-    /// note says why — handing every holder of the shared key the exact request is the less careful of the two.
+    /// FR-A-6 returns the qbXML body only for <c>?includeQbXml=true</c> from a key holding <c>qb:debug</c> (T-910).
+    /// A caller who asks without that scope is told why rather than left wondering where the field went.
     /// </summary>
-    public const string DebugScopeNote =
-        "the qbXML request body is withheld until a caller key can be shown to hold the qb:debug scope (T-910)";
+    public const string DebugScopeNote = "the qbXML request body needs a caller key holding the qb:debug scope";
 
-    public static ValidationResponse From(DirectPlan plan, bool includeQbXml) => new(
+    /// <param name="includeQbXml">
+    /// True only when the caller both asked for the body and holds <c>qb:debug</c>; the endpoint decides that,
+    /// because only it can see who is calling.
+    /// </param>
+    /// <param name="asked">True when the caller asked at all, so a refusal can explain itself.</param>
+    public static ValidationResponse From(DirectPlan plan, bool includeQbXml, bool asked = false) => new(
         plan.Ok,
         new ValidationCounts(plan.Submitted, plan.WouldPost, plan.Held, plan.Skipped, plan.Duplicates),
         new ValidationTotals(plan.SubmittedTotal, plan.WouldPostTotal, plan.ControlTotal, plan.Errors.Count == 0),
         [.. plan.Rows.Select(ValidationRow.From)],
         plan.UnknownNames,
-        new ValidationQbXml(plan.ToPost.Count, plan.QbXmlCounts, includeQbXml ? DebugScopeNote : null));
+        new ValidationQbXml(
+            plan.ToPost.Count,
+            plan.QbXmlCounts,
+            includeQbXml && plan.QbXml.Length > 0 ? plan.QbXml : null,
+            asked && !includeQbXml ? DebugScopeNote : null));
 }
 
 /// <summary>
@@ -86,4 +93,5 @@ public sealed record ValidationRow(
 public sealed record ValidationQbXml(
     int RequestCount,
     IReadOnlyDictionary<string, int> ByType,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Request,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Note);

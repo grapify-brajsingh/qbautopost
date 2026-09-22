@@ -17,6 +17,7 @@ using QbAutopost.Core.Hermes;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Mapping;
 using QbAutopost.Core.Pipeline;
+using QbAutopost.Core.Security;
 using QbAutopost.Core.Store;
 using QbAutopost.QuickBooks;
 
@@ -45,6 +46,9 @@ builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
 
 builder.Services.AddSingleton<IClock, SystemClock>();
+// T-910 (FR-A-13): the caller list is re-read per request, so revoking a key takes effect without a restart.
+builder.Services.AddSingleton(sp => new ApiClientStore(sp.GetRequiredService<IOptions<AppSettings>>().Value.Paths.Clients));
+builder.Services.AddScoped(sp => new ApiClientResolver(sp.GetRequiredService<ApiClientStore>().Load()));
 builder.Services.AddSingleton<LegacyRouteLog>();
 builder.Services.AddSingleton<AppHealth>();
 builder.Services.AddSingleton<IJobStore, JobStore>();
@@ -265,14 +269,37 @@ static void MapAll(IEndpointRouteBuilder routes)
     routes.MapRulesEndpoints();
 }
 
-// Fail closed: without a real key every route except /health would be open.
+// Fail closed (FR-A-13): without either a usable caller list or a real shared key, every route but liveness and
+// readiness would be open. Refusing to start is louder than serving an empty allow-list, and far louder than
+// silently admitting nobody while an operator wonders why their integration broke.
 static void RequireApiKey(WebApplication app)
 {
-    var key = app.Services.GetRequiredService<IOptions<AppSettings>>().Value.Api.ApiKey;
-    if (string.IsNullOrWhiteSpace(key) || (key == "change-me" && !app.Environment.IsDevelopment()))
+    var api = app.Services.GetRequiredService<IOptions<AppSettings>>().Value.Api;
+    var clients = app.Services.GetRequiredService<ApiClientStore>().Load().Clients;
+    var usable = clients.Count(c => c.Enabled);
+    var legacyUsable = api.AllowLegacyKey
+                       && !string.IsNullOrWhiteSpace(api.ApiKey)
+                       && (api.ApiKey != "change-me" || app.Environment.IsDevelopment());
+
+    if (usable == 0 && !legacyUsable)
     {
         throw new InvalidOperationException(
-            "Api:ApiKey is not set. Configure it in appsettings or the QBAUTOPOST__Api__ApiKey environment variable.");
+            "No API caller can authenticate: clients.json has no enabled client and the shared Api:ApiKey is unusable. "
+            + "Issue a key with scripts/new-api-client.ps1, or set QBAUTOPOST__Api__ApiKey with Api:AllowLegacyKey true.");
+    }
+
+    app.Logger.LogInformation(
+        "API callers: {Clients} client(s) in {ClientsFile}; shared Api:ApiKey {Legacy}",
+        usable,
+        app.Services.GetRequiredService<ApiClientStore>().FilePath,
+        legacyUsable ? "accepted (Api:AllowLegacyKey is true)" : "not accepted");
+
+    if (legacyUsable && usable > 0)
+    {
+        // FR-A-13 expects the shared key to be retired once per-caller keys exist; it is all-scopes, so it
+        // outranks every scope decision made in clients.json while it stays on.
+        app.Logger.LogWarning(
+            "The shared Api:ApiKey is still accepted and carries every scope. Set Api:AllowLegacyKey false once each caller has its own key.");
     }
 }
 

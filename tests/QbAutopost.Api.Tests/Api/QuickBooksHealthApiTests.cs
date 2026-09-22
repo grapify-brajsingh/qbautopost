@@ -12,7 +12,7 @@ public sealed class QuickBooksHealthApiTests : IDisposable
     private readonly ApiFactory _factory = new();
     private readonly HttpClient _client;
 
-    public QuickBooksHealthApiTests() => _client = _factory.CreateClient(); // no API key: health is open
+    public QuickBooksHealthApiTests() => _client = _factory.CreateAuthorizedClient(); // T-910: /health/quickbooks opens a QuickBooks session, so it needs health:read
 
     public void Dispose()
     {
@@ -65,6 +65,7 @@ public sealed class QuickBooksHealthApiTests : IDisposable
     {
         _factory.Gateway.QueryHang = true;
         using var client = _factory.WithSetting("QuickBooks:BusyTimeoutSeconds", "1").CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", ApiFactory.ApiKey);
 
         using var response = await client.GetAsync("/health/quickbooks");
 

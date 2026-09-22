@@ -21,9 +21,10 @@ public sealed class HealthApiTests : IDisposable
     public void Dispose() => _factory.Dispose();
 
     [Fact]
-    public async Task Should_Return200WithoutApiKey_When_HermesIsOk()
+    public async Task Should_Return200_When_HermesIsOk()
     {
-        using var client = _factory.CreateClient();
+        // T-910: health:read is required here now (api-v1 §2.2); only liveness and readiness stay open.
+        using var client = _factory.CreateAuthorizedClient();
 
         using var response = await client.GetAsync("/health/hermes");
 
@@ -38,7 +39,7 @@ public sealed class HealthApiTests : IDisposable
     public async Task Should_Return503WithReason_When_FakeIsToldToFail()
     {
         _factory.Hermes.Ping = new HermesPing(false, "fake-model", 7, "HTTP 502");
-        using var client = _factory.CreateClient();
+        using var client = _factory.CreateAuthorizedClient();
 
         using var response = await client.GetAsync("/health/hermes");
 
@@ -54,6 +55,7 @@ public sealed class HealthApiTests : IDisposable
         var handler = new RecordingHandler(HttpStatusCode.OK, """{ "choices": [ { "message": { "content": "ok" } } ] }""");
         using var factory = WithRealClient(handler);
         using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", ApiFactory.ApiKey);
 
         using var response = await client.GetAsync("/health/hermes");
 
@@ -72,6 +74,7 @@ public sealed class HealthApiTests : IDisposable
         var handler = new RecordingHandler(HttpStatusCode.InternalServerError, """{ "error": "bad key sk-configured-key-0001" }""");
         using var factory = WithRealClient(handler);
         using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", ApiFactory.ApiKey);
 
         using var response = await client.GetAsync("/health/hermes");
 

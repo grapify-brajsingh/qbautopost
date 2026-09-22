@@ -102,7 +102,7 @@ public sealed class LoggingApiTests : IDisposable
         using var response = await client.GetAsync("/jobs");
 
         var text = string.Join('\n', LogLines());
-        Assert.Contains("invalid X-Api-Key", text, StringComparison.Ordinal);
+        Assert.Contains("unknown X-Api-Key", text, StringComparison.Ordinal);
         Assert.Contains("HTTP GET /jobs responded 401", text, StringComparison.Ordinal);
         Assert.DoesNotContain("wrong-key-98765", text, StringComparison.Ordinal);
     }

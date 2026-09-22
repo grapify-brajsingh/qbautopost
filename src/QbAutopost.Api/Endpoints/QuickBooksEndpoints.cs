@@ -1,11 +1,13 @@
 using Microsoft.Extensions.Options;
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Jobs;
+using QbAutopost.Api.Security;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Api;
 using QbAutopost.Core.Mapping;
 using QbAutopost.Core.Pipeline;
 using QbAutopost.Core.QbXml;
+using QbAutopost.Core.Security;
 using QbAutopost.Core.Store;
 
 namespace QbAutopost.Api.Endpoints;
@@ -114,6 +116,7 @@ public static class QuickBooksEndpoints
     private static IResult ValidateTransactions(
         DirectRequest? request,
         bool? includeQbXml,
+        HttpContext http,
         PipelineOptions pipeline,
         DirectPlanner planner,
         IClock clock,
@@ -148,7 +151,11 @@ public static class QuickBooksEndpoints
                 extensions: new Dictionary<string, object?> { ["errors"] = plan.Errors });
         }
 
-        var response = ValidationResponse.From(plan, includeQbXml == true);
+        // T-910: the qbXML body carries every amount and name in the batch, so it needs the qb:debug scope (FR-A-6).
+        var response = ValidationResponse.From(
+            plan,
+            includeQbXml == true && ApiKeyMiddleware.HasScope(http, ApiScopes.QbDebug),
+            asked: includeQbXml == true);
         log.LogInformation(
             "Validated {Submitted} row(s) for reference {Reference}: {WouldPost} would post, {Held} held, {Duplicates} duplicate(s)",
             plan.Submitted, request.Reference, plan.WouldPost, plan.Held, plan.Duplicates);

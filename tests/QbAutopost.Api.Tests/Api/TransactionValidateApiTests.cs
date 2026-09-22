@@ -195,16 +195,16 @@ public sealed class TransactionValidateApiTests : IDisposable
     }
 
     [Fact]
-    public async Task Should_WithholdTheQbXmlBody_When_ItIsAskedForWithoutTheDebugScope()
+    public async Task Should_ReturnTheQbXmlBody_When_TheSharedKeyAsksForIt()
     {
-        // Scopes arrive at T-910. Until a key can be shown to hold qb:debug, the body is withheld rather than handed
-        // to every caller of the shared key (CLAUDE.md rule 4: choose the behaviour that reveals less).
+        // T-910: the shared Api:ApiKey stands in as an all-scopes client, so it does hold qb:debug. A client key
+        // without that scope is refused the body instead - see ClientScopeApiTests.
         var (status, body) = await PostAsync(Request(Row()), "?includeQbXml=true");
 
         Assert.Equal(HttpStatusCode.OK, status);
         var qbXml = body.GetProperty("qbXml");
-        Assert.False(qbXml.TryGetProperty("request", out _));
-        Assert.Contains("qb:debug", qbXml.GetProperty("note").GetString());
+        Assert.Contains("CheckAddRq", qbXml.GetProperty("request").GetString());
+        Assert.False(qbXml.TryGetProperty("note", out _));
     }
 
     [Fact]

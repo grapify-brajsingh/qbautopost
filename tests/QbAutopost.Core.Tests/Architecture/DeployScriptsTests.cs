@@ -15,6 +15,7 @@ public sealed class DeployScriptsTests
     [InlineData("deploy/start-all.ps1")]
     [InlineData("deploy/install-task.ps1")]
     [InlineData("scripts/shadow-diff.ps1")]
+    [InlineData("scripts/new-api-client.ps1")]
     public void Should_BeAsciiOnly_When_ReadingOperatorScript(string file)
     {
         var bytes = File.ReadAllBytes(Path.Combine(RepoRoot.Find(), file));
@@ -96,4 +97,20 @@ public sealed class DeployScriptsTests
     }
 
     private static string Script(string file) => File.ReadAllText(Path.Combine(DeployDir, file));
+    /// <summary>
+    /// T-910 / FR-A-13: the key issuer prints the key once and stores only a salted hash. A script that wrote the
+    /// key itself would turn clients.json from a hash list into a credential store (CLAUDE.md rule 6).
+    /// </summary>
+    [Fact]
+    public void Should_StoreOnlyAHash_When_ReadingTheKeyIssuer()
+    {
+        var script = File.ReadAllText(Path.Combine(RepoRoot.Find(), "scripts", "new-api-client.ps1"));
+
+        Assert.Contains("SupportsShouldProcess", script, StringComparison.Ordinal);
+        Assert.Contains("keyHash", script, StringComparison.Ordinal);
+        // The key reaches the console and nothing else: it is never put into the object that is serialised.
+        Assert.DoesNotContain("key  = $key", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("apiKey", script, StringComparison.OrdinalIgnoreCase);
+    }
+
 }

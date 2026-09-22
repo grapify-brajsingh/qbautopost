@@ -23,3 +23,7 @@ appsettings.*.local.json
 
 # POC package build output (scripts/build-poc-package.ps1)
 /dist/
+
+# T-910 (api-v1 FR-A-13): per-caller keys. Holds salted hashes only, never a key, but it is per-deployment
+# data and must never reach the repository.
+clients.json

@@ -37,9 +37,10 @@ public sealed class RouteVersioningTests : IDisposable
     }
 
     [Theory]
-    [InlineData("/health/hermes")]
-    [InlineData("/api/v1/health/hermes")]
-    public async Task Should_NotRequireApiKey_When_RouteIsHealth(string path)
+    [InlineData("/health")]
+    [InlineData("/api/v1/health")]
+    [InlineData("/api/v1/health/ready")]
+    public async Task Should_NotRequireApiKey_When_RouteIsLiveness(string path)
     {
         using var client = _factory.CreateClient();
 
@@ -118,8 +119,10 @@ public sealed class RouteVersioningTests : IDisposable
     [Fact]
     public async Task Should_RefuseFlatHealth_When_LegacyRoutesAreDisabled()
     {
+        // T-910: the key is sent so this is a genuine "route is gone", not the 401 that any keyed route now gives.
         using var host = _factory.WithSetting("Api:LegacyRoutes", "false");
         using var client = host.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", ApiFactory.ApiKey);
 
         using var response = await client.GetAsync("/health/hermes");
 

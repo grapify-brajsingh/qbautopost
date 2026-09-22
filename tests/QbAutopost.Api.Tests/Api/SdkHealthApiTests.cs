@@ -19,7 +19,7 @@ public sealed class SdkHealthApiTests : IDisposable
 
     private async Task<JsonElement> GetAsync(HttpStatusCode expected)
     {
-        using var client = _factory.CreateClient();
+        using var client = _factory.CreateAuthorizedClient();
         using var response = await client.GetAsync("/api/v1/health/sdk");
         Assert.Equal(expected, response.StatusCode);
         return await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -75,13 +75,14 @@ public sealed class SdkHealthApiTests : IDisposable
     }
 
     [Fact]
-    public async Task Should_NotRequireApiKey_When_SdkHealthIsRequested()
+    public async Task Should_RequireAKey_When_SdkHealthIsRequested()
     {
+        // T-910 (api-v1 §2.2): the SDK probe touches COM, so it is no longer open to an unauthenticated caller.
         using var client = _factory.CreateClient();
 
         using var response = await client.GetAsync("/api/v1/health/sdk");
 
-        Assert.NotEqual(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]

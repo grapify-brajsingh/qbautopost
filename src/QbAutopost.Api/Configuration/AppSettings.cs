@@ -45,6 +45,12 @@ public sealed class ApiSettings
     /// </summary>
     public bool LegacyRoutes { get; set; } = true;
 
+    /// <summary>
+    /// T-910 / FR-A-13: the single Api:ApiKey keeps working as an implicit all-scopes client while this is true.
+    /// Default true for one release so the POC package and the deploy scripts keep working; then default false.
+    /// </summary>
+    public bool AllowLegacyKey { get; set; } = true;
+
     /// <summary>FR-A-4: the largest <c>timeoutSeconds</c> a caller may ask for; above it the request is a 400.</summary>
     public int MaxConnectionTestTimeoutSeconds { get; set; } = 600;
 
@@ -160,6 +166,9 @@ public sealed class PathsSettings
     /// </summary>
     public string JobIndex { get; set; } = "jobs.json";
 
+    /// <summary>T-910 / FR-A-13: the caller list, git-ignored and holding salted hashes only, never a key.</summary>
+    public string Clients { get; set; } = "clients.json";
+
     /// <summary>
     /// T-908 / §6.3: one folder per direct batch, holding its request, state and qbXML. Blank means "beside the
     /// ledger", which is where the rest of the app's data already lives.
@@ -173,6 +182,7 @@ public sealed class PathsSettings
         QbLists = Path.GetFullPath(QbLists, root);
         Logs = Path.GetFullPath(Logs, root);
         JobIndex = Path.GetFullPath(JobIndex, root);
+        Clients = Path.GetFullPath(Clients, root);
         ApiBatches = string.IsNullOrWhiteSpace(ApiBatches)
             ? Path.Combine(Path.GetDirectoryName(Ledger)!, "api-batches")
             : Path.GetFullPath(ApiBatches, root);
