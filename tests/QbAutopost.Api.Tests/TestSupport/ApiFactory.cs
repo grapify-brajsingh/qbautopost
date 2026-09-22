@@ -50,8 +50,11 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
     /// <summary>A host with one setting overridden (applied after the defaults above).</summary>
     public WebApplicationFactory<Program> WithSetting(string key, string? value) =>
-        WithWebHostBuilder(b => b.ConfigureAppConfiguration((_, config) =>
-            config.AddInMemoryCollection(new Dictionary<string, string?> { [key] = value })));
+        WithSettings(new Dictionary<string, string?> { [key] = value });
+
+    /// <summary>A host with several settings overridden — T-911's limits need more than one at a time.</summary>
+    public WebApplicationFactory<Program> WithSettings(IDictionary<string, string?> settings) =>
+        WithWebHostBuilder(b => b.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(settings)));
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -70,6 +73,10 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             // Rule 1 again: the shipped appsettings.json names a real machine folder, and the test host inherits it.
             // Without this line a posting test writes its batch evidence to C:\qb-autopost on a developer's box.
             ["Paths:ApiBatches"] = Dir.Combine("data", "api-batches"),
+            // T-911 (handoff trap 14): the limits are meant for the internet, and this suite sends far more than 120
+            // requests a minute to these same routes. Tests that need the limiter turn it on themselves; that it
+            // ships *on* is asserted by RateLimitTests.Should_ShipEnabled_When_NobodyConfiguresIt.
+            ["Api:RateLimits:Enabled"] = "false",
             // Rule 1: even a real HermesClient built by mistake cannot reach a Hermes on this machine (.invalid never resolves).
             ["Hermes:BaseUrl"] = "http://hermes.invalid:8642",
             ["Hermes:ApiKey"] = "",

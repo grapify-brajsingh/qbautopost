@@ -71,6 +71,76 @@ public sealed class ApiSettings
     /// outlives any plausible outage; short enough that the file stays small.
     /// </summary>
     public int IdempotencyRetentionDays { get; set; } = 30;
+
+    /// <summary>
+    /// T-911 / FR-A-14: bind somewhere strangers can reach without TLS. Default false, and startup <b>refuses</b>
+    /// rather than serving keys and amounts in the clear; turning it on warns at startup and on every request, so a
+    /// temporary arrangement cannot quietly become the permanent one.
+    /// </summary>
+    public bool AllowInsecureRemote { get; set; }
+
+    /// <summary>
+    /// T-911 / FR-A-17: the largest request body accepted, in bytes (2 MB). T-909 buffers the whole body to hash it
+    /// for the idempotency key, so this cap bounds that buffer as much as it bounds the parser.
+    /// </summary>
+    public long MaxRequestBodyBytes { get; set; } = 2 * 1024 * 1024;
+
+    public TlsSettings Tls { get; set; } = new();
+
+    public CorsSettings Cors { get; set; } = new();
+
+    public RateLimitSettings RateLimits { get; set; } = new();
+}
+
+/// <summary>
+/// T-911 / FR-A-14. <see cref="PfxPassword"/> is <b>environment only</b>: a value found in <c>appsettings.json</c> is
+/// accepted — refusing would strand an operator mid-deploy — but warned about by name, never by value.
+/// </summary>
+public sealed class TlsSettings
+{
+    public string PfxPath { get; set; } = "";
+
+    public string PfxPassword { get; set; } = "";
+
+    public string StoreThumbprint { get; set; } = "";
+
+    /// <summary>True when a certificate has been named at all, by file or by store.</summary>
+    public bool Configured =>
+        !string.IsNullOrWhiteSpace(PfxPath) || !string.IsNullOrWhiteSpace(StoreThumbprint);
+}
+
+/// <summary>
+/// T-911 / FR-A-14: CORS is off until an origin is named. <c>*</c> is refused rather than ignored — with a key on
+/// every route, a wildcard invites any page on the internet to spend a browser's credentials here.
+/// </summary>
+public sealed class CorsSettings
+{
+    public IList<string> AllowedOrigins { get; set; } = [];
+}
+
+/// <summary>
+/// T-911 / FR-A-15. The defaults are api-v1's table. <see cref="Enabled"/> exists so the test host can run over a
+/// thousand requests through these routes without tripping a brake meant for the internet — it is <b>true</b>
+/// everywhere else, including the shipped <c>appsettings.json</c>.
+/// </summary>
+public sealed class RateLimitSettings
+{
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>Requests a minute a caller may send to a route that writes to QuickBooks.</summary>
+    public int PostPerMinute { get; set; } = 10;
+
+    /// <summary>Requests a minute a caller may send to any other authenticated route.</summary>
+    public int DefaultPerMinute { get; set; } = 120;
+
+    /// <summary>Requests a minute one address may send to the key-free health routes.</summary>
+    public int HealthPerMinute { get; set; } = 600;
+
+    /// <summary>Failed authentications a minute from one address before the brute-force brake bites.</summary>
+    public int FailedAuthPerMinute { get; set; } = 10;
+
+    /// <summary>How long that address is then refused outright.</summary>
+    public int FailedAuthBlockMinutes { get; set; } = 5;
 }
 
 public sealed class CompanySettings
@@ -175,6 +245,13 @@ public sealed class PathsSettings
     /// </summary>
     public string ApiBatches { get; set; } = "";
 
+    /// <summary>
+    /// T-911 / FR-A-17: the folders a caller's <c>folder</c> may sit inside. Empty means unrestricted, which is only
+    /// tolerable while the bind is loopback — <see cref="Security.TransportGuard"/> refuses to start a remote bind
+    /// with this list empty, so "unconfigured" can never quietly become "open to strangers".
+    /// </summary>
+    public IList<string> AllowedJobRoots { get; set; } = [];
+
     /// <summary>Relative paths resolve against the content root.</summary>
     public void ResolveAgainst(string root)
     {
@@ -186,5 +263,15 @@ public sealed class PathsSettings
         ApiBatches = string.IsNullOrWhiteSpace(ApiBatches)
             ? Path.Combine(Path.GetDirectoryName(Ledger)!, "api-batches")
             : Path.GetFullPath(ApiBatches, root);
+
+        // An allow-list entry that stayed relative would compare against a caller's absolute path and never match,
+        // which reads as "the allow-list is broken" rather than "your folder is outside it".
+        for (var i = 0; i < AllowedJobRoots.Count; i++)
+        {
+            if (!string.IsNullOrWhiteSpace(AllowedJobRoots[i]))
+            {
+                AllowedJobRoots[i] = Path.GetFullPath(AllowedJobRoots[i], root);
+            }
+        }
     }
 }

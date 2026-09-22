@@ -28,13 +28,32 @@ public sealed class ApiKeyMiddleware(RequestDelegate next, IOptions<AppSettings>
         HttpContext context,
         ApiClientResolver clients,
         IClock clock,
+        AuthBrake brake,
         IProblemDetailsService problems,
         ILogger<ApiKeyMiddleware> log)
     {
         var scope = ApiRoutes.ScopeFor(context.Request.Method, context.Request.Path);
         if (scope is null)
         {
+            // Liveness and readiness carry no key, so there is no key here to guess; applying the brake would only
+            // break the owner's monitoring because some other address had been guessing.
             await next(context);
+            return;
+        }
+
+        var address = context.Connection.RemoteIpAddress;
+
+        // T-911 (FR-A-15): an address that has been guessing is refused before its next guess is even compared.
+        if (brake.IsBlocked(address, out var retryAfter))
+        {
+            var seconds = (int)Math.Ceiling(retryAfter.TotalSeconds);
+            log.LogWarning(
+                "Request {Method} {Path} refused: {Address} is blocked for another {RetrySeconds} s after repeated failed authentication",
+                context.Request.Method, context.Request.Path.Value, address?.ToString() ?? "(none)", seconds);
+            context.Response.Headers.RetryAfter = seconds.ToString();
+            await Problem(
+                context, problems, StatusCodes.Status429TooManyRequests, "Too many failed authentications",
+                $"Too many requests with an unrecognised key came from this address. Retry after {seconds} seconds.");
             return;
         }
 
@@ -42,6 +61,7 @@ public sealed class ApiKeyMiddleware(RequestDelegate next, IOptions<AppSettings>
         var client = clients.Resolve(given, clock.UtcNow) ?? Legacy(given);
         if (client is null)
         {
+            brake.RecordFailure(address);
             log.LogWarning(
                 "Request {Method} {Path} refused: {Problem} {Header} header",
                 context.Request.Method, context.Request.Path.Value, given.Length == 0 ? "missing" : "unknown",
@@ -54,7 +74,10 @@ public sealed class ApiKeyMiddleware(RequestDelegate next, IOptions<AppSettings>
 
         context.Items[ClientItemKey] = client;
 
-        if (!client.AllowsAddress(context.Connection.RemoteIpAddress))
+        // The key belongs to somebody, so whatever happens next — wrong network, missing scope — is not guessing.
+        brake.RecordSuccess(address);
+
+        if (!client.AllowsAddress(address))
         {
             log.LogWarning(
                 "Client {ClientId} refused on {Method} {Path}: address {Address} is outside its allowed networks",

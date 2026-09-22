@@ -1,7 +1,7 @@
 # Session Handoff — QbAutopost
 
 **This is an unattended relay. The owner is away and will answer nothing mid-run.**
-Written: 2026-09-23 (session 15) · **M9 (API v1): 10 of 14 done**, branch `m9-api-v1` · **Next task: T-911.**
+Written: 2026-09-23 (session 16) · **M9 (API v1): 11 of 14 done**, branch `m9-api-v1` · **Next task: T-912.**
 
 > **If you are an agent starting fresh: read §0, do the one task named in §3 as "NEXT", then §5 before you finish.**
 > Do not read ahead and do not do two tasks. The next agent has no memory of you — this file is the only thing
@@ -65,37 +65,26 @@ The usual rules (`CLAUDE.md`) all still apply. These matter more when nobody is 
 |---|---|
 | Repo | `D:\qb_post`, branch **`m9-api-v1`**, tracking `origin/m9-api-v1` (pushed 2026-09-23; credentials cached, so `git push` works unattended) |
 | Build | `dotnet build -warnaserror` → 0 warnings |
-| Tests | **Core 820, Api 344** (1164), green twice on Windows |
-| Milestones | M0–M7 done; M8 agent work done (`ready-for-human`); **M9 10/14** |
-| Packages | 6 + `Scalar.AspNetCore` **approved** for T-913 (Q-46 answered 2026-09-23) |
-| Owner | **Away. Answers nothing.** Q-1…Q-45, Q-47…Q-61 outstanding; each already has a conservative behaviour |
+| Tests | **Core 834, Api 405** (1239), green twice on Windows |
+| Milestones | M0–M7 done; M8 agent work done (`ready-for-human`); **M9 11/14** |
+| Packages | 6 + `Scalar.AspNetCore` **approved** for T-913 (Q-46 answered 2026-09-23). T-911 added **no** package — the limiter is shared framework |
+| Owner | **Away. Answers nothing.** Q-1…Q-45, Q-47…Q-63 outstanding; each already has a conservative behaviour |
 
 ## 3. The task queue
 
 | Task | Status | One line |
 |---|---|---|
-| T-901…T-910 | **done** | Routes, health, SDK probe, connection test, company-file validate, direct model, validate, post, idempotency, clients+scopes |
-| **T-911** | **NEXT** | FR-A-14 TLS + FR-A-15 rate limits + FR-A-17 input hardening — see §4 |
-| T-912 | queued | FR-A-16 audit trail (`audit-yyyyMMdd.jsonl`) + the `requestId` of §2.6, which does not exist yet |
+| T-901…T-911 | **done** | Routes, health, SDK probe, connection test, company-file validate, direct model, validate, post, idempotency, clients+scopes, transport+limits+input hardening |
+| **T-912** | **NEXT** | FR-A-16 audit trail (`audit-yyyyMMdd.jsonl`) + the `requestId` of §2.6, which does not exist yet — see §4 |
 | T-913 | queued | FR-A-18 OpenAPI document + Scalar reference UI. **Unblocked**: the package is approved |
 | T-914 | queued | Move docs, runbook and the POC package to the v1 routes and the new auth rules |
 | *(then)* | **STOP** | Write the final report (§9). Do not start M10. Do not attempt the server tasks |
 
 ## 4. The next three tasks, in detail
 
-**T-911 — three separable pieces; do three RED/GREEN cycles inside the one task.**
-- *Transport (FR-A-14)*: Kestrel HTTPS from `Api:Tls:PfxPath` + `PfxPassword` (**environment only** — a value found
-  in `appsettings.json` logs a warning naming the file, never the value, and is accepted). **Startup refuses a
-  non-loopback bind without TLS** unless `Api:AllowInsecureRemote=true`, which warns at startup *and* on every
-  request. HSTS, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, no `Server` header. CORS off by
-  default; `*` refused while any route needs a key.
-- *Rate limits (FR-A-15)*: ASP.NET Core 8's built-in limiter — **shared framework, no package**. Partition by client
-  id (`ApiKeyMiddleware.ClientOf(context)`), by IP for the unauthenticated health routes. `qb:post` 10/min, other
-  authenticated 120/min, health 600/min per IP, failed auth 10/min per IP then 429 for 5 minutes. `429` carries
-  `Retry-After`. `ApiClient.PostPerMinute` / `DefaultPerMinute` already exist for per-client overrides and are unused.
-- *Input hardening (FR-A-17)*: body 2 MB (`Api:MaxRequestBodyBytes`), string bounds (`reference` 64, `memo` 4096,
-  names 255) → `400`, and **caller-supplied paths absolute and inside `Paths:AllowedJobRoots[]`**. Note T-909
-  buffers the whole body to hash it, so the 2 MB cap protects that too.
+*(T-911 is done. Its shape is worth one line before you read on: the startup rules live in
+`Api/Security/TransportGuard.cs` as pure functions, not inline in `Program.cs`, so they are testable — copy that if
+T-912 adds any startup decision of its own.)*
 
 **T-912 — FR-A-16 audit.** One JSON line per authenticated mutating request to `Paths:Logs/audit-yyyyMMdd.jsonl`:
 `utc, requestId, clientId, remoteIp, method, path, idempotencyKey, outcome, status, batchId, jobId, counts,
@@ -143,8 +132,41 @@ Scalar, behind `Api:Reference:Enabled` default **false**). Swagger/Swashbuckle s
     `Api:SyncPostTimeoutSeconds` so a regression fails fast. Do the same for anything that waits.
 13. **`WithSetting(...)` returns `WebApplicationFactory<Program>`, not `ApiFactory`** — no `CreateAuthorizedClient()`
     on it; create the client and add the header.
-14. **Rate limiting will break existing tests** (T-911). 1164 tests hammer these routes. Expect to make the limits
-    configurable and effectively off in `ApiFactory`, and say so in the evidence rather than quietly raising them.
+14. **Rate limiting will break existing tests** (T-911). 1164 tests hammer these routes. ~~Expect to~~ **Done**: the
+    limiter is `Api:RateLimits:Enabled`, default **true**, and `ApiFactory` pins it **false**. If you add a test that
+    needs it, turn it on with `WithSettings` and use tiny limits. Never raise a shipped limit to make a test pass.
+15. **`ApiFactory.WithSettings(IDictionary)` now exists** beside `WithSetting(key, value)` — use it when you need
+    more than one override. Both still return `WebApplicationFactory<Program>`, so trap 13 is unchanged.
+16. **Four middlewares now sit in front of `ApiKeyMiddleware`**, in this order: request logging,
+    `SecurityHeadersMiddleware` (FR-A-14 headers, so a 401 carries them too), `RequestSizeMiddleware` (FR-A-17 body
+    cap, before T-909's body buffering), then the key check, then `UseRateLimiter`, then `IdempotencyMiddleware`.
+    **Anything that needs the caller's identity goes after the key check** — that is where the limiter had to go.
+17. **A 401 never reaches the rate limiter**, because the key check short-circuits first. That is why the
+    brute-force brake (`Api/Security/AuthBrake.cs`) is separate and lives inside `ApiKeyMiddleware`. If T-912's audit
+    must record refused requests, remember it has the same problem: the audit middleware cannot sit behind a check
+    that returns early.
+18. **`Q-62` is an unexplained single test failure** — one run reported `Failed: 1, Passed: 404` and it did not
+    recur in 11 more runs; the name was not captured. If you see a one-off failure, **capture the name** before
+    re-running, and update Q-62 with it.
+
+## 7a. What changed underneath you in session 16 (T-911)
+
+1. **The app can now refuse to start.** `TransportGuard.Require` throws on: a non-loopback bind without TLS (unless
+   `Api:AllowInsecureRemote`), a CORS `*`, or a non-loopback bind with an empty `Paths:AllowedJobRoots`. The shipped
+   bind is still `http://127.0.0.1:5080`, so nothing changes today — but **do not add a setting that makes the bind
+   remote without reading §4 of `docs/testing/T-911.tdd.md` first.**
+2. **`Paths:AllowedJobRoots` and `QuickBooks:AllowedCompanyFolders` exist and ship empty**, and empty means
+   *unconfigured* = unrestricted (Q-63). `Core/Security/PathAllowList.IsInside` is the one place that decides;
+   reuse it rather than writing a second path comparison.
+3. **`DirectRequestReader` now rejects over-long fields** (`memo` 4096, names 255) as whole-batch `400`s. If you add
+   a field to `DirectRow`, add it to that bounds list or it is unbounded.
+4. **`ApiKeyMiddleware.InvokeAsync` gained an `AuthBrake` parameter** and now answers `429` before comparing a key
+   from a blocked address. It records a *success* as soon as a key resolves — before the CIDR and scope checks — so
+   a 403 never counts as a guess.
+5. **New config, all in `appsettings.json` except one**: `Api:AllowInsecureRemote`, `Api:MaxRequestBodyBytes`,
+   `Api:Tls:{PfxPath,StoreThumbprint}`, `Api:Cors:AllowedOrigins`, `Api:RateLimits:*`,
+   `QuickBooks:AllowedCompanyFolders`, `Paths:AllowedJobRoots`. **`Api:Tls:PfxPassword` is deliberately absent from
+   the file** — it is environment-only, and the guard warns (naming the file, never the value) if it is found there.
 
 ## 7. What changed underneath you in session 15
 

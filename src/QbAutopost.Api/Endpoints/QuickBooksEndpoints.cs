@@ -169,6 +169,26 @@ public static class QuickBooksEndpoints
     /// FR-A-5. Read-only: no qbXML is sent, only "which file do you have open?". 422 when an error check failed, so a
     /// caller can act on the status alone, and the body lists every check either way.
     /// </summary>
+    /// <summary>
+    /// T-911 (FR-A-17): an overridden company file must sit inside <c>QuickBooks:AllowedCompanyFolders</c>. An empty
+    /// list means unrestricted, which is safe here only because <c>AllowCompanyFileOverride</c> is false by default —
+    /// a caller cannot name a file at all until the owner has turned the override on.
+    /// </summary>
+    private static IResult? OutsideAllowedFolders(string? companyFile, AppSettings s, ILogger log)
+    {
+        if (string.IsNullOrWhiteSpace(companyFile)
+            || PathAllowList.IsInside(companyFile, [.. s.QuickBooks.AllowedCompanyFolders]))
+        {
+            return null;
+        }
+
+        log.LogWarning("Request refused: the company file named is outside QuickBooks:AllowedCompanyFolders");
+        return Results.Problem(
+            statusCode: StatusCodes.Status400BadRequest,
+            title: "Company file is not in an allowed folder",
+            detail: "The company file must be an absolute path inside QuickBooks:AllowedCompanyFolders.");
+    }
+
     private static async Task<IResult> ValidateCompanyFile(
         CompanyFileRequest? request,
         IOptions<AppSettings> settings,
@@ -185,6 +205,11 @@ public static class QuickBooksEndpoints
                 statusCode: StatusCodes.Status400BadRequest,
                 title: "Company file override is not allowed",
                 detail: "This installation serves one company. Set QuickBooks:AllowCompanyFileOverride to name a company file per request.");
+        }
+
+        if (OutsideAllowedFolders(request?.CompanyFile, s, log) is { } outside)
+        {
+            return outside;
         }
 
         var companyFile = string.IsNullOrWhiteSpace(request?.CompanyFile) ? s.Company.FilePath : request.CompanyFile;
@@ -235,6 +260,11 @@ public static class QuickBooksEndpoints
                 statusCode: StatusCodes.Status400BadRequest,
                 title: "Company file override is not allowed",
                 detail: "This installation serves one company. Set QuickBooks:AllowCompanyFileOverride to name a company file per request.");
+        }
+
+        if (OutsideAllowedFolders(request?.CompanyFile, s, log) is { } outside)
+        {
+            return outside;
         }
 
         var max = s.Api.MaxConnectionTestTimeoutSeconds;

@@ -70,12 +70,39 @@ public sealed partial class DirectRequestReader(DirectLimits limits)
         return new DirectReadResult([], lines, held);
     }
 
+    /// <summary>
+    /// FR-A-17 field bounds. These are <b>400</b>, not a held row: a memo longer than a chapter is a caller whose
+    /// mapping is wrong, and letting the rest of their batch through would post money under a misunderstanding.
+    /// </summary>
+    public const int MaxNameLength = 255;
+
+    /// <inheritdoc cref="MaxNameLength"/>
+    public const int MaxMemoLength = 4096;
+
     /// <summary>Problems that make the request itself unusable, so the batch is refused rather than trimmed.</summary>
     private static IEnumerable<string> Malformed(DirectRow row, int index)
     {
         if (row.Kind is not (TxnKind.Check or TxnKind.CcCharge or TxnKind.CcCredit or TxnKind.Deposit))
         {
             yield return $"row {index}: kind must be Check, CcCharge, CcCredit or Deposit";
+        }
+
+        foreach (var (field, value, limit) in new (string, string?, int)[]
+                 {
+                     ("account", row.Account, MaxNameLength),
+                     ("lineAccount", row.LineAccount, MaxNameLength),
+                     ("payee", row.Payee, MaxNameLength),
+                     ("externalId", row.ExternalId, MaxNameLength),
+                     ("checkNo", row.CheckNo, MaxNameLength),
+                     ("refNumber", row.RefNumber, MaxNameLength),
+                     ("last4", row.Last4, MaxNameLength),
+                     ("memo", row.Memo, MaxMemoLength),
+                 })
+        {
+            if (value is not null && value.Length > limit)
+            {
+                yield return $"row {index}: {field} must be at most {limit} characters, {value.Length} were sent";
+            }
         }
 
         if (row.Amount <= 0)

@@ -36,12 +36,36 @@ builder.Configuration.AddEnvironmentVariables(prefix: "QBAUTOPOST__");
 builder.AddQbAutopostLogging();
 builder.WebHost.UseUrls(builder.Configuration["Api:Bind"] ?? new ApiSettings().Bind);
 
+// T-911 (FR-A-14, FR-A-17): no Server header, a body cap Kestrel enforces before anything is read, and HTTPS when a
+// certificate is configured. Only the real host uses Kestrel — the test server ignores all of this, which is why the
+// decisions above it are tested as decisions (TransportGuard) rather than through a socket.
+builder.WebHost.ConfigureKestrel((context, kestrel) =>
+{
+    var api = context.Configuration.GetSection("Api").Get<ApiSettings>() ?? new ApiSettings();
+    kestrel.AddServerHeader = false;
+    kestrel.Limits.MaxRequestBodySize = api.MaxRequestBodyBytes;
+    if (api.Tls.Configured)
+    {
+        kestrel.ConfigureHttpsDefaults(https => https.ServerCertificate = TlsCertificate.Load(api.Tls));
+    }
+});
+
 var contentRoot = builder.Environment.ContentRootPath;
 builder.Services.AddOptions<AppSettings>()
     .Bind(builder.Configuration)
     .PostConfigure(s => s.ResolvePaths(contentRoot));
 
+const string CorsPolicyName = "QbAutopostCallers";
+
 builder.Services.AddProblemDetails();
+// T-911 (FR-A-14): CORS stays off until an origin is named; '*' never gets this far (TransportGuard refuses it).
+var corsOrigins = builder.Configuration.GetSection("Api:Cors:AllowedOrigins").Get<string[]>() ?? [];
+if (corsOrigins.Length > 0)
+{
+    builder.Services.AddCors(o => o.AddPolicy(
+        CorsPolicyName,
+        p => p.WithOrigins(corsOrigins).AllowAnyHeader().AllowAnyMethod()));
+}
 builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
 
@@ -49,6 +73,12 @@ builder.Services.AddSingleton<IClock, SystemClock>();
 // T-910 (FR-A-13): the caller list is re-read per request, so revoking a key takes effect without a restart.
 builder.Services.AddSingleton(sp => new ApiClientStore(sp.GetRequiredService<IOptions<AppSettings>>().Value.Paths.Clients));
 builder.Services.AddScoped(sp => new ApiClientResolver(sp.GetRequiredService<ApiClientStore>().Load()));
+// T-911 (FR-A-15): the built-in limiter, and the brute-force brake the limiter cannot cover — a request refused at
+// the key check never reaches the limiter, so guessing keys has to be counted where the guess is read.
+builder.Services.AddRateLimiter(RateLimitPolicy.Configure);
+builder.Services.AddSingleton(sp => new AuthBrake(
+    sp.GetRequiredService<IClock>(),
+    sp.GetRequiredService<IOptions<AppSettings>>().Value.Api.RateLimits));
 builder.Services.AddSingleton<LegacyRouteLog>();
 builder.Services.AddSingleton<AppHealth>();
 builder.Services.AddSingleton<IJobStore, JobStore>();
@@ -194,6 +224,14 @@ try
 
     RequireApiKey(app);
 
+    // T-911 (FR-A-14): refuse to serve a configuration that would expose keys and amounts, before a socket is opened.
+    foreach (var warning in TransportGuard
+                 .Require(settings.Api, settings.Paths, TransportGuard.CameFromFile(app.Configuration, "Api:Tls:PfxPassword"))
+                 .Warnings)
+    {
+        app.Logger.LogWarning("{TransportWarning}", warning);
+    }
+
     app.Services.GetRequiredService<PromptLibrary>();
     app.Logger.LogInformation("Hermes prompts loaded from {PromptFolder}", Path.Combine(AppContext.BaseDirectory, PromptLibrary.DefaultFolder));
 
@@ -213,10 +251,27 @@ try
     app.Lifetime.ApplicationStopping.Register(() =>
         app.Logger.LogInformation("QbAutopost stopping; a job still running is closed by startup recovery next time"));
 
+    if (TransportGuard.UseHsts(settings.Api))
+    {
+        app.UseHsts();
+    }
+
     app.UseExceptionHandler();
     app.UseStatusCodePages();
     app.UseQbAutopostRequestLogging();
+    // T-911 (FR-A-14): in front of the key check, so a 401 carries the same headers a 200 does.
+    app.UseMiddleware<SecurityHeadersMiddleware>();
+    // T-911 (FR-A-17): also in front of it — refusing a flood should not depend on who is sending it.
+    app.UseMiddleware<RequestSizeMiddleware>();
+    if (settings.Api.Cors.AllowedOrigins.Count > 0)
+    {
+        app.UseCors(CorsPolicyName);
+    }
+
     app.UseMiddleware<ApiKeyMiddleware>();
+    // T-911 (FR-A-15): behind the key check, so a partition can be the caller rather than whatever address they
+    // happen to be calling from today.
+    app.UseRateLimiter();
     // T-909 (FR-A-12): behind the key check, so an unauthenticated caller can neither claim an idempotency key nor
     // learn from a 409 which keys someone else has used.
     app.UseMiddleware<IdempotencyMiddleware>();
