@@ -16,7 +16,15 @@ using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Mapping;
 using QbAutopost.Core.Pipeline;
 
-var builder = WebApplication.CreateBuilder(args);
+// T-901 (api-v1 §12): read appsettings.json from the exe's folder, not the working directory (server defect 1).
+// The environment is read from the variable because the host does not exist yet; the test host keeps its own root.
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    ContentRootPath = ContentRoot.Select(
+        Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT"),
+        AppContext.BaseDirectory),
+});
 
 // Secrets may come from QBAUTOPOST__Section__Key environment variables (spec §12).
 builder.Configuration.AddEnvironmentVariables(prefix: "QBAUTOPOST__");
@@ -33,6 +41,7 @@ builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
 
 builder.Services.AddSingleton<IClock, SystemClock>();
+builder.Services.AddSingleton<LegacyRouteLog>();
 builder.Services.AddSingleton<IJobStore, JobStore>();
 builder.Services.AddSingleton<JobQueue>();
 builder.Services.AddSingleton(sp =>
@@ -158,7 +167,9 @@ try
     MapAll(app.MapGroup(ApiRoutes.V1Prefix));
     if (settings.Api.LegacyRoutes)
     {
-        MapAll(app);
+        var legacy = app.MapGroup(string.Empty);
+        legacy.AddEndpointFilter(WarnOnLegacyRoute);
+        MapAll(legacy);
     }
 
     app.Run();
@@ -170,6 +181,24 @@ catch (Exception ex)
     // Disposing the host flushes and closes the log file, so the reason is on disk before the process ends.
     await app.DisposeAsync();
     throw;
+}
+
+/// <summary>
+/// api-v1 §9: a flat path still answers, but says so in the log at most once per route per hour, so the owner can see
+/// which callers must move before the legacy routes are switched off (Q-53). The caller's identity is added at T-910.
+/// </summary>
+static async ValueTask<object?> WarnOnLegacyRoute(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+{
+    var http = context.HttpContext;
+    var pattern = (http.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText ?? http.Request.Path.Value ?? string.Empty;
+    if (http.RequestServices.GetRequiredService<LegacyRouteLog>().ShouldWarn(pattern))
+    {
+        http.RequestServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(LegacyRouteLog))
+            .LogWarning("Legacy route {Path} used; use {Versioned} instead", pattern, ApiRoutes.V1Prefix + pattern);
+    }
+
+    return await next(context);
 }
 
 /// <summary>Every route of spec §6, mapped into <paramref name="routes"/> (the /api/v1 group, or the host itself).</summary>

@@ -83,6 +83,39 @@ public sealed class RouteVersioningTests : IDisposable
     }
 
     [Fact]
+    public async Task Should_WarnOnce_When_SameFlatPathIsUsedTwice()
+    {
+        using var client = _factory.CreateAuthorizedClient();
+
+        using (await client.GetAsync("/jobs"))
+        using (await client.GetAsync("/jobs"))
+        {
+        }
+
+        Assert.Equal(1, LogLines().Count(l => l.Contains("Legacy route", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task Should_NotWarn_When_PathIsAlreadyVersioned()
+    {
+        using var client = _factory.CreateAuthorizedClient();
+
+        using (await client.GetAsync("/api/v1/jobs"))
+        {
+        }
+
+        Assert.DoesNotContain(LogLines(), l => l.Contains("Legacy route", StringComparison.Ordinal));
+    }
+
+    private string[] LogLines()
+    {
+        var file = Assert.Single(Directory.GetFiles(_factory.Dir.Combine("data", "logs")));
+        using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    [Fact]
     public async Task Should_RefuseFlatHealth_When_LegacyRoutesAreDisabled()
     {
         using var host = _factory.WithSetting("Api:LegacyRoutes", "false");
