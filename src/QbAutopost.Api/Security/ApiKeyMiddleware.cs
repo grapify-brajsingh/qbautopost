@@ -2,16 +2,17 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Options;
 using QbAutopost.Api.Configuration;
+using QbAutopost.Api.Endpoints;
 
 namespace QbAutopost.Api.Security;
 
-/// <summary><c>X-Api-Key</c> on every route except <c>/health/*</c> (spec §6). The key is never logged.</summary>
+/// <summary><c>X-Api-Key</c> on every route except health, under either prefix (spec §6). The key is never logged.</summary>
 public sealed class ApiKeyMiddleware(RequestDelegate next, IOptions<AppSettings> settings)
 {
     public async Task InvokeAsync(HttpContext context, IProblemDetailsService problems, ILogger<ApiKeyMiddleware> log)
     {
         var given = context.Request.Headers[ApiSettings.KeyHeader].ToString();
-        if (context.Request.Path.StartsWithSegments("/health", StringComparison.OrdinalIgnoreCase)
+        if (ApiRoutes.IsHealth(context.Request.Path)
             || Matches(given, settings.Value.Api.ApiKey))
         {
             await next(context);

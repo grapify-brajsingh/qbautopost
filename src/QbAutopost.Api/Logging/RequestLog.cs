@@ -1,3 +1,4 @@
+using QbAutopost.Api.Endpoints;
 using Serilog;
 using Serilog.Events;
 
@@ -34,6 +35,6 @@ public static class RequestLog
     public static LogEventLevel Level(HttpContext http, double elapsedMs, Exception? ex) =>
         ex is not null || http.Response.StatusCode >= 500 ? LogEventLevel.Error
         : http.Response.StatusCode >= 400 ? LogEventLevel.Warning
-        : http.Request.Path.StartsWithSegments("/health", StringComparison.OrdinalIgnoreCase) ? LogEventLevel.Debug
+        : ApiRoutes.IsHealth(http.Request.Path) ? LogEventLevel.Debug
         : LogEventLevel.Information;
 }

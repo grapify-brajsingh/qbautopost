@@ -153,11 +153,13 @@ try
     app.UseStatusCodePages();
     app.UseQbAutopostRequestLogging();
     app.UseMiddleware<ApiKeyMiddleware>();
-    app.MapJobEndpoints();
-    app.MapHealthEndpoints();
-    app.MapQuickBooksEndpoints();
-    app.MapBatchEndpoints();
-    app.MapRulesEndpoints();
+    // T-901 (api-v1 §3): the versioned surface. The flat paths of spec §6 are mapped as well while Api:LegacyRoutes
+    // is true (api-v1 §9), so the POC package and the deploy scripts keep working until T-914 moves them.
+    MapAll(app.MapGroup(ApiRoutes.V1Prefix));
+    if (settings.Api.LegacyRoutes)
+    {
+        MapAll(app);
+    }
 
     app.Run();
 }
@@ -168,6 +170,16 @@ catch (Exception ex)
     // Disposing the host flushes and closes the log file, so the reason is on disk before the process ends.
     await app.DisposeAsync();
     throw;
+}
+
+/// <summary>Every route of spec §6, mapped into <paramref name="routes"/> (the /api/v1 group, or the host itself).</summary>
+static void MapAll(IEndpointRouteBuilder routes)
+{
+    routes.MapJobEndpoints();
+    routes.MapHealthEndpoints();
+    routes.MapQuickBooksEndpoints();
+    routes.MapBatchEndpoints();
+    routes.MapRulesEndpoints();
 }
 
 // Fail closed: without a real key every route except /health would be open.

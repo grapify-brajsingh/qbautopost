@@ -37,6 +37,13 @@ public sealed class ApiSettings
 
     public string Bind { get; set; } = "http://127.0.0.1:5080";
     public string ApiKey { get; set; } = "";
+
+    /// <summary>
+    /// T-901 (api-v1 §9): also map the flat paths of spec §6 (<c>/jobs</c>, <c>/health/*</c>, …) beside
+    /// <c>/api/v1/*</c>. Default true for one release so the POC package and the deploy scripts keep working; each
+    /// use is logged. Set false once no caller uses them (Q-53), after which they are deleted.
+    /// </summary>
+    public bool LegacyRoutes { get; set; } = true;
 }
 
 public sealed class CompanySettings
