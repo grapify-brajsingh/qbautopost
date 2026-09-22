@@ -27,7 +27,8 @@ repository: `handoff.md`, `docs/tracker.md`, and the commits.
    question in the Questions table.
 7. **Update this file**: move `NEXT` to the following task, fill in §2 (state), add anything the next agent would
    be hurt by not knowing to §6 (traps) or §7 (what changed underneath you).
-8. **Commit** `T-9xx: <summary>` and **push**: `git push -u origin m9-api-v1`.
+8. **Commit** `T-9xx: <summary>` and **push**: `git push`. The upstream is already set and credentials are cached
+   (session 15 pushed successfully), so a push failure means something real — report it, do not retry blindly.
 9. **Hand over.** Your last output is the handover note in §8's format, and nothing else. Then stop.
 
 **Why one task per agent:** each handover is only as trustworthy as it is small. An agent that did four tasks
@@ -62,7 +63,7 @@ The usual rules (`CLAUDE.md`) all still apply. These matter more when nobody is 
 
 | Item | State |
 |---|---|
-| Repo | `D:\qb_post`, branch **`m9-api-v1`**, remote `origin` = `github.com/grapify-brajsingh/qbautopost` |
+| Repo | `D:\qb_post`, branch **`m9-api-v1`**, tracking `origin/m9-api-v1` (pushed 2026-09-23; credentials cached, so `git push` works unattended) |
 | Build | `dotnet build -warnaserror` → 0 warnings |
 | Tests | **Core 820, Api 344** (1164), green twice on Windows |
 | Milestones | M0–M7 done; M8 agent work done (`ready-for-human`); **M9 10/14** |
@@ -116,7 +117,7 @@ Scalar, behind `Api:Reference:Enabled` default **false**). Swagger/Swashbuckle s
 - [ ] `ls C:\qb-autopost` is **empty** (trap #4 — tests must not write to the machine's data folder)
 - [ ] Tracker: task row + session-log line + any new question
 - [ ] This file: `NEXT` moved, §2 updated, traps added
-- [ ] Commit `T-9xx: <summary>` with the Co-Authored-By trailer, then `git push -u origin m9-api-v1`
+- [ ] Commit `T-9xx: <summary>` with the Co-Authored-By trailer, then `git push`
 - [ ] Handover note written in §8's format
 
 ## 6. Traps this codebase has already sprung
