@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 
 namespace QbAutopost.Api.Jobs;
@@ -26,15 +27,33 @@ public sealed class JobQueue
     private readonly Channel<JobWorkItem> _channel =
         Channel.CreateUnbounded<JobWorkItem>(new UnboundedChannelOptions { SingleReader = true });
 
+    private int _depth;
+
+    /// <summary>
+    /// Items waiting for the worker, not counting the one it is running (FR-A-1). Counted here rather than through
+    /// <c>ChannelReader.Count</c>, which a single-reader unbounded channel does not support.
+    /// </summary>
+    public int Depth => Volatile.Read(ref _depth);
+
     public void Enqueue(JobWorkItem item)
     {
         if (!_channel.Writer.TryWrite(item))
         {
             throw new InvalidOperationException("The job queue is closed.");
         }
+
+        Interlocked.Increment(ref _depth);
     }
 
-    public IAsyncEnumerable<JobWorkItem> ReadAllAsync(CancellationToken ct) => _channel.Reader.ReadAllAsync(ct);
+    public async IAsyncEnumerable<JobWorkItem> ReadAllAsync([EnumeratorCancellation] CancellationToken ct)
+    {
+        await foreach (var item in _channel.Reader.ReadAllAsync(ct))
+        {
+            // Decremented as the worker takes the item: from here it is running, not waiting.
+            Interlocked.Decrement(ref _depth);
+            yield return item;
+        }
+    }
 
     /// <summary>
     /// Runs <paramref name="work"/> on the single worker, after any job ahead of it, and returns its result. The work

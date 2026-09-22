@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Endpoints;
+using QbAutopost.Api.Health;
 using QbAutopost.Api.Jobs;
 using QbAutopost.Api.Logging;
 using QbAutopost.Api.Ocr;
@@ -42,6 +43,7 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 
 builder.Services.AddSingleton<IClock, SystemClock>();
 builder.Services.AddSingleton<LegacyRouteLog>();
+builder.Services.AddSingleton<AppHealth>();
 builder.Services.AddSingleton<IJobStore, JobStore>();
 builder.Services.AddSingleton<JobQueue>();
 builder.Services.AddSingleton(sp =>

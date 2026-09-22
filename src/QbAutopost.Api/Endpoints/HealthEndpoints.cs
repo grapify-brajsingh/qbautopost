@@ -1,3 +1,4 @@
+using QbAutopost.Api.Health;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Pipeline;
 
@@ -9,9 +10,26 @@ public static class HealthEndpoints
     public static IEndpointRouteBuilder MapHealthEndpoints(this IEndpointRouteBuilder app)
     {
         var health = app.MapGroup("/health");
+        health.MapGet("/", GetApp);
+        health.MapGet("/ready", GetReady);
         health.MapGet("/hermes", GetHermes);
         health.MapGet("/quickbooks", GetQuickBooks);
         return app;
+    }
+
+    /// <summary>
+    /// FR-A-1. In-process state only: it never calls QuickBooks or Hermes, so it answers in milliseconds even while a
+    /// post holds the gateway — the difference between "the app is dead" and "the app is busy".
+    /// </summary>
+    private static IResult GetApp(AppHealth health) => Results.Ok(health.Now());
+
+    /// <summary>FR-A-2. 503 when an <c>error</c> check failed; the body lists every check either way.</summary>
+    private static IResult GetReady(AppHealth health)
+    {
+        var view = health.Ready();
+        return view.Ok
+            ? Results.Ok(view)
+            : Results.Json(view, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
     /// <summary>
