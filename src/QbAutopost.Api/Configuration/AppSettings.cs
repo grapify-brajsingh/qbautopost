@@ -59,6 +59,12 @@ public sealed class ApiSettings
     /// poll. The work is never cancelled by this — only the waiting is.
     /// </summary>
     public int SyncPostTimeoutSeconds { get; set; } = 120;
+
+    /// <summary>
+    /// T-909 / FR-A-12: how long an <c>Idempotency-Key</c> is remembered. Long enough that a caller's retry logic
+    /// outlives any plausible outage; short enough that the file stays small.
+    /// </summary>
+    public int IdempotencyRetentionDays { get; set; } = 30;
 }
 
 public sealed class CompanySettings

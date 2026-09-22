@@ -160,6 +160,12 @@ builder.Services.AddSingleton(sp =>
 });
 builder.Services.AddSingleton(sp =>
     new ApiBatchStore(sp.GetRequiredService<IOptions<AppSettings>>().Value.Paths.ApiBatches));
+// T-909 (FR-A-12): beside the batches, because a key's whole purpose is to name the batch it produced.
+builder.Services.AddSingleton(sp =>
+{
+    var s = sp.GetRequiredService<IOptions<AppSettings>>().Value;
+    return new IdempotencyStore(Path.Combine(s.Paths.ApiBatches, "idempotency.json"), s.Api.IdempotencyRetentionDays);
+});
 builder.Services.AddSingleton<DirectPostRunner>();
 builder.Services.AddSingleton<JobPipeline>();
 builder.Services.AddSingleton<QbListSync>();
@@ -207,6 +213,9 @@ try
     app.UseStatusCodePages();
     app.UseQbAutopostRequestLogging();
     app.UseMiddleware<ApiKeyMiddleware>();
+    // T-909 (FR-A-12): behind the key check, so an unauthenticated caller can neither claim an idempotency key nor
+    // learn from a 409 which keys someone else has used.
+    app.UseMiddleware<IdempotencyMiddleware>();
     // T-901 (api-v1 §3): the versioned surface. The flat paths of spec §6 are mapped as well while Api:LegacyRoutes
     // is true (api-v1 §9), so the POC package and the deploy scripts keep working until T-914 moves them.
     MapAll(app.MapGroup(ApiRoutes.V1Prefix));

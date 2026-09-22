@@ -18,4 +18,32 @@ public static class ApiRoutes
     public static bool IsHealth(PathString path) =>
         path.StartsWithSegments(HealthPrefix, StringComparison.OrdinalIgnoreCase)
         || path.StartsWithSegments(V1Prefix + HealthPrefix, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// T-909 (FR-A-12): the four routes that change something and therefore accept an <c>Idempotency-Key</c> — the
+    /// direct post, a new job, a job post and an undo. Matched under either prefix.
+    /// <para>
+    /// Validation and the health and read routes are deliberately absent: replaying a validate would hide a change in
+    /// the rules or the ledger, which is the opposite of what a validate is for.
+    /// </para>
+    /// </summary>
+    public static bool IsIdempotent(string method, PathString path)
+    {
+        if (!HttpMethods.IsPost(method) || !path.HasValue)
+        {
+            return false;
+        }
+
+        var value = path.Value!.TrimEnd('/');
+        return Is(value, "/quickbooks/transactions")
+               || Is(value, "/jobs")
+               || (value.EndsWith("/post", Ordinal) && value.Contains("/jobs/", Ordinal))
+               || (value.EndsWith("/undo", Ordinal) && value.Contains("/batches/", Ordinal));
+    }
+
+    private const StringComparison Ordinal = StringComparison.OrdinalIgnoreCase;
+
+    /// <summary>True for the flat path and its <c>/api/v1</c> form, and for neither of their longer relatives.</summary>
+    private static bool Is(string path, string route) =>
+        path.Equals(route, Ordinal) || path.Equals(V1Prefix + route, Ordinal);
 }
