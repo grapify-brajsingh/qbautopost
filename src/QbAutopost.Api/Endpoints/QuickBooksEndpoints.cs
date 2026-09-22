@@ -10,6 +10,9 @@ namespace QbAutopost.Api.Endpoints;
 /// <summary>QuickBooks routes that are not about one job (spec §6): <c>POST /qb/sync-lists</c>.</summary>
 public static class QuickBooksEndpoints
 {
+    /// <summary>FR-A-5 request; both fields optional.</summary>
+    public sealed record CompanyFileRequest(string? CompanyFile, bool? RequireBackup);
+
     /// <summary>FR-A-4 request; every field optional.</summary>
     public sealed record ConnectionTestRequest(string? CompanyFile, int? TimeoutSeconds, bool? IncludeCompanyInfo);
 
@@ -17,7 +20,56 @@ public static class QuickBooksEndpoints
     {
         app.MapPost("/qb/sync-lists", SyncLists);
         app.MapPost("/quickbooks/connection/test", ConnectionTest);
+        app.MapPost("/quickbooks/company-file/validate", ValidateCompanyFile);
         return app;
+    }
+
+    /// <summary>
+    /// FR-A-5. Read-only: no qbXML is sent, only "which file do you have open?". 422 when an error check failed, so a
+    /// caller can act on the status alone, and the body lists every check either way.
+    /// </summary>
+    private static async Task<IResult> ValidateCompanyFile(
+        CompanyFileRequest? request,
+        IOptions<AppSettings> settings,
+        CompanyFileValidator validator,
+        ILoggerFactory loggers,
+        CancellationToken ct)
+    {
+        var log = loggers.CreateLogger(typeof(QuickBooksEndpoints));
+        var s = settings.Value;
+        if (!string.IsNullOrWhiteSpace(request?.CompanyFile) && !s.QuickBooks.AllowCompanyFileOverride)
+        {
+            log.LogWarning("Company file validation refused: a company file was given but QuickBooks:AllowCompanyFileOverride is false");
+            return Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Company file override is not allowed",
+                detail: "This installation serves one company. Set QuickBooks:AllowCompanyFileOverride to name a company file per request.");
+        }
+
+        var companyFile = string.IsNullOrWhiteSpace(request?.CompanyFile) ? s.Company.FilePath : request.CompanyFile;
+        CompanyFileValidation result;
+        try
+        {
+            result = await validator.ValidateAsync(companyFile, ct);
+        }
+        catch (Exception ex) when (QuickBooksProblem(ex) is { } problem)
+        {
+            log.LogWarning("Company file validation could not reach QuickBooks: {Error}", ex.Message);
+            return problem;
+        }
+
+        foreach (var check in result.Checks.Where(c => !c.Ok))
+        {
+            log.LogWarning("Company file check {Check} failed ({Severity}): {Message}", check.Name, check.Severity, check.Message);
+        }
+
+        if (result.Ok)
+        {
+            log.LogInformation("Company file validated: {CompanyFile}, {Message}", result.CompanyFile, result.Message);
+            return Results.Ok(result);
+        }
+
+        return Results.Json(result, statusCode: StatusCodes.Status422UnprocessableEntity);
     }
 
     /// <summary>
