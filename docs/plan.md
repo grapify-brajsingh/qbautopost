@@ -23,7 +23,7 @@ Suggested Claude Code prompts:
 qb-autopost/
 ├── CLAUDE.md
 ├── QbAutopost.sln
-├── docs/                          spec.md · plan.md · tracker.md · runbook.md (M8)
+├── docs/                          spec.md · spec-api-v1.md (M9) · plan.md · tracker.md · runbook.md (M8)
 ├── src/
 │   ├── QbAutopost.Core/           net8.0, cross-platform, NO COM. Models, Extract, Mapping, Gates, QbXml, Store, Output, Hermes client + prompts.
 │   ├── QbAutopost.QuickBooks/     net8.0, Windows-only at runtime. QbSession (COM), QbGateway : IQbGateway.
@@ -47,6 +47,7 @@ public interface IClock        { DateTime UtcNow { get; } DateOnly Today { get; 
 ```
 
 NuGet (only these): `PdfPig`, `ClosedXML`, `Serilog.AspNetCore`, `Serilog.Sinks.File`, `Tesseract` (optional, M3, behind `Ocr.Enabled`), `Microsoft.AspNetCore.Mvc.Testing` (tests).
+M9 asks for one more, `Scalar.AspNetCore`, for the reference UI only — **pending Q-46**, and it buys nothing else: the OpenAPI document is hand-authored and drift-tested. `Swashbuckle.AspNetCore` is **excluded by the owner** (2026-09-22), as a UI and as a generator. Everything else M9 needs (rate limiting, TLS, CORS, static files) is in the ASP.NET Core 8 shared framework.
 
 ## 2. Milestones
 
@@ -124,11 +125,34 @@ Done when: a fixture statement text goes through T2 (fake) and reconciles; a cor
 - T-803 **[server]** Shadow week: five real folders in dry run; diff against manual entry; log disagreements as rules.
 - T-804 **[server]** Go-live: `DryRunDefault=false` for one company; monitor a week; then the rest.
 
+### M9 — API v1 conversion (4 sessions + server time)
+Reads `docs/spec-api-v1.md` (the contract for this milestone; `spec.md` §6 still describes the legacy flat routes until T-914).
+Goal: the same engine behind a versioned, documented, authenticated API a remote caller can use — plus the two defects found on the server in session 13.
+
+- T-901 `/api/v1` route group; legacy flat routes kept behind `Api:LegacyRoutes` (default true, warned once per route per hour); content root → `AppContext.BaseDirectory` so `appsettings.json` is read from the exe folder (server defect 1).
+- T-902 `GET /api/v1/health` (liveness, version, bitness, gateway mode, worker) and `/health/ready` (settings, rules, lists, log folder, worker). No QuickBooks or Hermes call.
+- T-903 `IQbSdkProbe` + `QbSdkProbe` (COM, `QbAutopost.QuickBooks` only) + `GET /api/v1/health/sdk`: registration, server path, bitness match, supported qbXML versions. Never opens a company file. **[server]** for the COM half.
+- T-904 `POST /api/v1/quickbooks/connection/test` with per-step timings; "waiting for QuickBooks" log line; `ConnectionTestTimeoutSeconds` (180) so the first call of the day survives the certificate dialog (server defect 2).
+- T-905 `POST /api/v1/quickbooks/company-file/validate`: exists, readable, open in QuickBooks, name matches `Company:Name`, backup freshness, lists synced.
+- T-906 Direct-post request model in Core: rows → mapped transactions, fingerprint/RequestId per §7, control total, date window, amount cap, reuse of the FR-6 mapper. Tests first.
+- T-907 `POST /api/v1/quickbooks/transactions/validate` — the offline dry run (no QuickBooks call; names from `qb-lists.json`, duplicates from the ledger).
+- T-908 `POST /api/v1/quickbooks/transactions` + batch persistence under `Paths:ApiBatches` + `GET /api/v1/batches/{id}`; synchronous under `SyncPostTimeoutSeconds`, else 202 + poll.
+- T-909 Idempotency store and middleware (`Idempotency-Key`, body hash, replay, in-progress).
+- T-910 `clients.json`: per-caller keys (hash + salt only), scopes, expiry, rotation, CIDR; `scripts/new-api-client.ps1`; the legacy shared key as an implicit all-scopes client.
+- T-911 TLS (refuse a non-loopback bind without it), HSTS/CORS/headers, rate limiting (framework, no package), body and field limits, path allow-lists.
+- T-912 Audit trail `audit-yyyyMMdd.jsonl` (400 days) + `requestId`/`clientId` on every log line.
+- T-913 Hand-authored `wwwroot/openapi.json` + drift test against `EndpointDataSource`; then the **Scalar** reference UI at `/api/v1/reference` (pending Q-46). **No Swagger/Swashbuckle** — owner decision 2026-09-22.
+- T-914 `GET /api/v1/quickbooks/lists`, `POST /api/v1/jobs/validate`; runbook, POC package, `steps.md`, `qb-server-check.ps1`, `start-all.ps1` and `spec.md` §6 moved to v1 paths.
+
+Order: T-901 first (everything lands in the new group); T-906 before T-907/T-908; T-910 before T-911.
+Done when: both suites green twice in a row on Linux and Windows; the direct path and the folder path emit byte-identical qbXML for the same transaction; every v1 route has a contract test and an auth-matrix row.
+
 ## 3. Dependencies and order
 
 ```
-M0 → M1 → M2 → M3 → M4 → M5 → M6 → M7 → M8
+M0 → M1 → M2 → M3 → M4 → M5 → M6 → M7 → M8 → M9
              └──── M3/M4/M5 can run on a dev box with the fake gateway; M6/M8 need the server
+                                                     M9 needs the server for T-903 only
 ```
 M2 before M3 because T2 uses the client; M5 after M4 because Tier 3 consumes invoice evidence.
 
@@ -142,6 +166,15 @@ curl -H "X-Api-Key: dev" -X POST http://127.0.0.1:5080/jobs -d '{"folder":"<abs 
 curl -H "X-Api-Key: dev" http://127.0.0.1:5080/jobs/2026-08-tropicana
 ```
 
+From M9 (v1 paths; the flat ones above keep working while `Api:LegacyRoutes` is true):
+
+```
+curl http://127.0.0.1:5080/api/v1/health                                   # no key needed
+curl -H "Authorization: Bearer dev" http://127.0.0.1:5080/api/v1/health/sdk
+curl -H "Authorization: Bearer dev" -X POST http://127.0.0.1:5080/api/v1/quickbooks/connection/test -d '{}' -H "Content-Type: application/json"
+curl -H "Authorization: Bearer dev" -X POST http://127.0.0.1:5080/api/v1/quickbooks/transactions/validate -d @rows.json -H "Content-Type: application/json"
+```
+
 ## 5. Risks and mitigations
 
 | Risk | Mitigation |
@@ -153,6 +186,10 @@ curl -H "X-Api-Key: dev" http://127.0.0.1:5080/jobs/2026-08-tropicana
 | Double posting after a crash mid-post | `posting` interrupted → `partial`; G4 live query before any re-post. |
 | Docker Desktop unsupported on Windows Server | WSL 2 + Docker Engine path documented (T-801). |
 | Model chooses a non-existent account | T4 validation rejects any name not in `QbLists`. |
+| **M9**: a remote caller can now reach a service that posts money | Per-caller keys and scopes (T-910); TLS required off-loopback; rate limits; path allow-lists; every mutating call audited (T-911/T-912). |
+| **M9**: a caller retries and posts twice | `Idempotency-Key` replays the stored result (T-909); without one, G4 fingerprints hold the repeat rather than posting it. |
+| **M9**: a caller's JSON has no statement, so G1 cannot check the arithmetic | A required `controlTotal` must equal the sum of rows to the cent; a mismatch refuses the whole batch. Code checks, never repairs (Q-49). |
+| **M9**: the hand-authored `openapi.json` drifts from the routes | A drift test walks `EndpointDataSource` and fails the build when a route or an operation is undocumented (T-913). |
 
 ## 6. Definition of done (whole POC)
 
