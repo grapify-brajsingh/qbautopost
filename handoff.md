@@ -1,161 +1,144 @@
 # Session Handoff — QbAutopost
 
-Written: 2026-09-21 (session 13) · M0–M8 agent work done · **The app talked to a real QuickBooks for the first time
-(Enterprise 24, x64)** · Next session: **the owner brings a spec for an "API project"** — connection endpoints,
-health checks, logging to a local folder. Read §6 before planning that: the app already *is* an ASP.NET Core API.
+Written: 2026-09-22 (session 14) · **M9 (API v1) started: 5 of 14 tasks done, on branch `m9-api-v1`, not merged**
+· Both session-13 server defects are now closed in code · Next session: **T-907 and T-908 — the JSON transactions
+validate + post endpoints**, the biggest remaining pieces.
 
 ## 1. Start the next session with this prompt
 
 ```
-Read handoff.md, CLAUDE.md, docs/spec.md §6 and docs/tracker.md (rows T-805, T-806, questions Q-27, Q-37, Q-45).
-The owner will paste a spec for the API conversion. Before planning: the app is already an ASP.NET Core
-minimal-API host with 10 routes, Serilog file logging and /health/hermes + /health/quickbooks (handoff §3, §6).
-Map each line of the new spec to "already there", "rename/move", or "new", and say so before writing code.
-Tests first for Core logic, one task at a time, tracker row + session log + commit per task.
+Read handoff.md, CLAUDE.md, docs/spec-api-v1.md (the M9 contract) and docs/tracker.md (M9 rows T-901…T-914,
+questions Q-46…Q-57). You are on branch m9-api-v1 with 14 commits; main is untouched.
+Continue with T-907 (POST /api/v1/quickbooks/transactions/validate), then T-908 (the post itself).
+Work test-first: a RED you actually ran and pasted, then the fix, then the full suite twice, then the tracker row,
+session-log line, docs/testing/T-90x.tdd.md and a commit per task. Read handoff.md §7 before writing any test —
+it lists the traps this codebase has already sprung.
 ```
 
 ## 2. Project in one paragraph
 
-QbAutopost is a single .NET 8 app. It takes a job folder (`requirement.txt` + bank/card statements + optional
-invoices) and turns it into QuickBooks Desktop transactions: Checks, credit-card charges and credits, Deposits —
-the same things a person would type into *Batch Enter Transactions*. Deterministic code does all money and mapping;
-Hermes (a local OpenAI-compatible model) only reads PDFs/invoices and suggests accounts, and **can now be switched
-off entirely** (`Hermes:Enabled=false`, T-806) for a no-AI POC. The contract is `docs/spec.md`, milestones
-`docs/plan.md`, progress `docs/tracker.md`, operator guide `docs/runbook.md`, POC guide `samples/poc/README-POC.md`
-and `steps.md`, agent rules `CLAUDE.md`.
+QbAutopost is a single .NET 8 app that turns a job folder (`requirement.txt` + bank/card statements + optional
+invoices) into QuickBooks Desktop transactions: Checks, credit-card charges and credits, Deposits. Deterministic code
+does all money and mapping; Hermes (a local OpenAI-compatible model) only reads PDFs/invoices and suggests accounts,
+and can be switched off entirely (`Hermes:Enabled=false`). The contract is `docs/spec.md`; **M9's contract is
+`docs/spec-api-v1.md`**, which wins for `/api/v1/*`. Milestones `docs/plan.md`, progress `docs/tracker.md`, operator
+guide `docs/runbook.md`, agent rules `CLAUDE.md`, per-task test evidence `docs/testing/T-90x.tdd.md`.
 
-## 3. What exists today (the part that matters for the API conversion)
-
-**Host:** `src/QbAutopost.Api` — ASP.NET Core 8 minimal API, `WebApplication`, Kestrel bound to
-`Api:Bind` (default `http://127.0.0.1:5080`, loopback). No MVC controllers, no Swagger, no auth middleware beyond a
-single API-key check.
-
-**Routes** (`src/QbAutopost.Api/Endpoints/`):
-
-| Route | File | Does |
-|---|---|---|
-| `POST /jobs` | JobEndpoints | validates the folder, queues an analysis; `dryRun`, `force` |
-| `GET /jobs?status=` | JobEndpoints | list of job summaries |
-| `GET /jobs/{id}` | JobEndpoints | `JobView`: status, statements, counts, held/skipped/posted lines |
-| `POST /jobs/{id}/post` | JobEndpoints | re-analyses and posts a `ready` job |
-| `GET /health/hermes` | HealthEndpoints | model ping; 503 when down or turned off (no API key needed) |
-| `GET /health/quickbooks` | HealthEndpoints | `HostQuery` + open company file; 503 with the reason |
-| `POST /qb/sync-lists` | QuickBooksEndpoints | reads accounts/vendors/customers into `qb-lists.json` |
-| `POST /batches/{id}/undo` | BatchEndpoints | deletes a posted batch from QuickBooks (FR-13) |
-| `POST /rules/alias`, `POST /rules/account` | RulesEndpoints | teach a payee alias / vendor account |
-
-Cross-cutting: `Security/ApiKeyMiddleware` (`X-Api-Key` on everything except `/health/*`, constant-time compare),
-RFC 7807 problem details, `System.Text.Json` with camelCase enums, one `JobWorker` background service consuming an
-in-process queue (`JobQueue`), `JobStore` mirroring state to each job's `output/status.json` plus a `jobs.json` index.
-
-**QuickBooks connection** (`src/QbAutopost.QuickBooks`, the only project allowed to touch COM):
-`QbSession` → `QBXMLRP2.RequestProcessor` → `OpenConnection2` → `BeginSession(companyFile)` → `ProcessRequest(qbXML)`
-→ `EndSession`/`CloseConnection`, each call on its own STA thread (`QbGateway`), wrapped by
-`Core/Gateway/ResilientQbGateway` (one call at a time process-wide, busy timeout, one safe retry) and by
-`Api/QuickBooks/LoggingQbGateway` (T-805). `QbConnection.Create` picks: real SDK on Windows, `SimulatedQbGateway`
-with `QuickBooks:Fake=true` (Development/Testing only), otherwise `UnconfiguredQbGateway` (never sends anything).
-
-**Logging (T-805, already "logs to a local folder"):** Serilog, console + daily rolling file
-`Paths:Logs/qbautopost-yyyyMMdd.log` (31 kept, 1 GB roll, shared). Sinks are fixed in code so a configured sink
-cannot bypass the secret scrubber; only `Serilog:MinimumLevel:Default` / `Override:<category>` are read. Every line
-carries a `jobId`. Logged: startup summary (version, **x64/x86**, Windows session, every setting, files found/missing),
-one line per HTTP request (`HTTP GET /jobs responded 200 in 12 ms`, 4xx warning, 5xx error, health polls at Debug),
-API-key refusals without the key, job steps (requirement, statements, invoices, held/skipped lines, G4 changes,
-posted TxnIDs, batch totals), every QuickBooks call with per-response status and each SDK session step, every Hermes
-call. No statement text, prompts or qbXML bodies at Information (spec §14). `docs/runbook.md` §8.6 has the table.
-
-**Config** (`appsettings.json`, env `QBAUTOPOST__Section__Key`): `Api:Bind/ApiKey`, `DryRunDefault`,
-`Company:Name/FilePath/RulesFile`, `QuickBooks:AppName/QbXmlVersion/DuplicateWindowDays/BusyTimeoutSeconds/
-BackupFolder/BackupMaxAgeHours/Fake/RetryDelaySeconds`, `Hermes:Enabled/BaseUrl/ApiKey/Model/TimeoutSeconds`,
-`Ocr:Enabled/TessDataPath`, `Paths:Ledger/QbLists/Logs/JobIndex`, `Serilog:MinimumLevel`.
-
-## 4. State at handoff
+## 3. State at handoff
 
 | Item | State |
 |---|---|
-| Repo | `D:\qb_post`, branch `main`, remote `origin` = https://github.com/grapify-brajsingh/qbautopost.git, **pushed through `252ce00`** |
+| Repo | `D:\qb_post`, branch **`m9-api-v1`** (14 commits), `main` last at `33b96b8`. **Nothing pushed, nothing merged.** |
 | Build | `dotnet build -warnaserror` → 0 warnings |
-| Tests | **Core 732, Api 210** (942), green twice in a row on Windows; Linux + Windows CI in `.github/workflows/ci.yml` |
-| Milestones | M0–M7 done; M8: T-801/T-805/T-806 done, T-802/T-803/T-804 ready-for-human; T-609 partly verified on the server (see §5) |
-| Packages | none added in sessions 12–13 |
-| POC package | `scripts/build-poc-package.ps1` → `dist/qbautopost-poc-win-x64.zip` (self-contained, ~53 MB, git-ignored): `app\`, `poc\` (settings, rules, IIF lists, 2 sample jobs), `scripts\qb-server-check.ps1`, `README-POC.md`, `steps.md` |
+| Tests | **Core 757, Api 292** (1049), green twice in a row on Windows. Linux not re-run this session (CI covers it) |
+| Milestones | M0–M7 done; M8 agent work done (T-802/T-803/T-804 `ready-for-human`); **M9 5/14 done** |
+| Packages | none added this session. Q-46 (Scalar) still unanswered |
+| Owner answers | Q-1…Q-45 still unanswered except Q-0; **Q-46…Q-57 new this session** |
 
-## 5. What happened on the owner's server (2026-09-20, first real QuickBooks run)
+## 4. What M9 is, and the four owner decisions behind it
 
-Windows Server 2019, RDP session 9, user `accountexx-grapify`, **QuickBooks Enterprise Solutions 24.0 (34.0), x64**,
-test company `Tropicana Properties LLC` at
-`D:\Accountexx Data\Quickbook - Accounting File\Quickbook - Accounting File\18_Takoma Park Grocery Store Inc\`,
-POC package unzipped under `…\18_Takoma Park Grocery Store Inc\QBAUTO_POST\qbautopost-poc-win-x64\`.
+The owner asked to "convert this to an API project". It already was one, so M9 is a restructure plus five new
+capabilities. Decisions taken 2026-09-22 (recorded in `docs/tracker.md › Decisions`):
 
-Verified working: `GET /health/quickbooks` → `ok: true` with the product string and company file (**T-609 bitness = x64,
-recorded**); `POST /qb/sync-lists` → 37 accounts, 7 vendors, 2 customers, `missingInRules` empty (the
-`tropicana-lists.iif` import works); dry run of `2026-09-tropicana` → `ready`, 15 to post, 0 held, 1 skipped,
-bank balance chain reconciles. **The post step was not completed yet** — the owner hit a 409 (the job was no longer
-`ready`); the fix is `-Step dryrun … -Force` then post, or use the second job.
+- **D-1** Keep the job-folder pipeline **and** add a direct JSON-rows post. One engine, two entrances.
+- **D-2** Two validation endpoints: the QuickBooks **company file**, and the incoming **transaction data**.
+- **D-3** `/api/v1` prefix + an OpenAPI document. Reference UI is **Scalar — the owner explicitly ruled out Swagger**.
+- **D-4** **Remote callers**: TLS, per-caller keys with scopes, rate limits, a 400-day audit trail.
 
-Two defects found there, both still open:
-1. **The exe reads `appsettings.json` from the working directory.** Started from `C:\Users\…`, the app ran with an
-   empty `Company:Name` and Hermes enabled. Starting it from `app\` fixes it. Worth making the content root
-   `AppContext.BaseDirectory` (check `WebApplicationFactory` tests still pass) — a natural item for the API work.
-2. **The certificate dialog blocked `BeginSession` for 101 s**, past the 60 s busy timeout, so the first health call
-   returned `quickbooks-busy` while the session itself succeeded. Also: **waiting for the gateway lock is not logged**
-   (the log is silent while a request queues behind another QuickBooks call). Consider a "waiting for QuickBooks" log
-   line and a longer first-call timeout.
+## 5. What was built in session 14 (all test-first, all committed)
 
-## 6. Next session: "convert this app to an API project"
+| Task | State | What it does |
+|---|---|---|
+| T-901 | done | `/api/v1` route group; flat paths kept behind `Api:LegacyRoutes` (default true) and warned about once per route per hour; content root → `AppContext.BaseDirectory` (**server defect 1 closed**) |
+| T-902 | done | `GET /api/v1/health` (liveness: version, bitness, gateway mode, worker) and `/health/ready` (settings, rules, qb-lists, log folder, worker). Zero QuickBooks/Hermes calls, asserted |
+| T-903 | **ready-for-human** | `GET /api/v1/health/sdk` + the COM probe: registration, bitness match, running QuickBooks. **Never calls `BeginSession`**, so it answers with QuickBooks closed. The COM half has no automated test — checklist in the tracker |
+| T-904 | done | `POST /api/v1/quickbooks/connection/test`: three timed steps, a slow step stays `ok:true` with a dialog hint, 180 s default timeout, and a "Waiting for QuickBooks" log line (**server defect 2 closed**) |
+| T-905 | done | `POST /api/v1/quickbooks/company-file/validate`: 7 checks. A different company open is an **error**; a stale backup is a **warning** reusing FR-11's `BackupGuard` |
+| T-906 | done | `Core/Api/DirectRequestReader`: JSON rows → the same `StatementLine`s a statement produces. Control total refuses the batch; over-cap/out-of-window/missing-account holds the row. Equivalence test pins same fingerprint + byte-identical qbXML from both paths |
 
-**Read this first: it is already an API project.** ASP.NET Core 8 minimal API, 10 routes, API-key auth, problem
-details, health endpoints and file logging all exist (§3). So the work is almost certainly *restructuring and filling
-gaps*, not a rewrite. Before writing code, map every line of the owner's spec onto one of:
+Both defects from the owner's server (§5 of the previous handoff) are closed **in code**; neither is confirmed on the
+server yet.
 
-- **already there** — e.g. "health checks" (`/health/hermes`, `/health/quickbooks`), "logging to a local folder"
-  (`Paths:Logs`, daily rolling file), "connection" (`/qb/sync-lists`, the health probe, `QbConnection`).
-- **rename / re-shape** — e.g. controllers instead of minimal APIs, `/api/v1/...` prefixes, a different response
-  envelope, OpenAPI/Swagger UI, CORS, a non-loopback bind, Windows service or IIS hosting.
-- **genuinely new** — e.g. connect/disconnect endpoints that open a session on demand, a "post transactions" endpoint
-  that takes JSON rows instead of a job folder, per-request company file, status/progress polling, an endpoint to read
-  the log, API keys per caller.
+## 6. Next: T-907 and T-908 (the big ones)
 
-Things the spec should settle (ask if it does not):
-1. **Does the caller send transactions as JSON**, or keep the job-folder model? Today everything hangs off a folder
-   on disk (`FolderReader`, `output/*`), and the ledger/undo assume a job id per folder.
-2. **Who holds the QuickBooks session?** Today: one call at a time, a fresh session per call, no "connect" state. A
-   connect/disconnect API means keeping a session open across requests — that changes `ResilientQbGateway` and how
-   the busy timeout behaves.
-3. **Is the API still loopback-only and single-company?** Both are current assumptions (Q-44). A remote caller means
-   real auth, TLS and a threat model, not just the shared `X-Api-Key`.
-4. **Logging**: what beyond today's file sink — a `GET /logs` endpoint, correlation id per request (today it is
-   `jobId`), JSON lines for ingestion, retention other than 31 days?
-5. **Hermes**: does the API keep the no-AI mode as default (Q-45)?
+Everything before this was plumbing. These two carry money.
 
-Keep these rules while doing it (`CLAUDE.md`): COM only in `QbAutopost.QuickBooks`; the model never computes money;
-hold rather than guess; qbXML element order is golden-file tested; no new NuGet packages without a tracker question;
-every state transition persisted; `dotnet test` must stay green on Linux (no real QuickBooks or Hermes in tests).
+**T-907 — `POST /api/v1/quickbooks/transactions/validate` (FR-A-6).** The offline dry run: take the same body as
+T-908, run `DirectRequestReader` → the FR-6 mapper → G3 → G4 (duplicates, against `ledger.json`) → build qbXML, and
+report what *would* post. **It must not contact QuickBooks at all** — names come from `qb-lists.json`, duplicates from
+the ledger — so a caller can validate before the QuickBooks server is even up. Returns 200 when clean, **422 with the
+same body** otherwise. Follow the `qbXml` count-only rule: the body is returned only with `?includeQbXml=true` and the
+`qb:debug` scope (which does not exist until T-910 — gate it behind the scope check or leave a `// SPEC-GAP T-907`).
 
-## 7. Things a new session must know
+**T-908 — `POST /api/v1/quickbooks/transactions` (FR-A-8, FR-A-10, FR-A-11).** The post. Runs through
+`JobQueue.RunExclusiveAsync` so it never overlaps a job; persists the batch under `Paths:ApiBatches/<batchId>/`
+(`request.json`, `status.json`, `request.qbxml`, `response.qbxml`, `result.json`) **before the first qbXML leaves the
+process** (rule 7); synchronous under `Api:SyncPostTimeoutSeconds` (120), else `202` + `GET /api/v1/batches/{id}`.
+Batch id is `api-<reference>#1`. Undo (FR-13) must work on these batches too.
 
-1. **Owner answers**: still none for Q-1…Q-45 except Q-0. Q-27 (re-running T2/T3/T4 at post time) and Q-37 (COM retry,
-   backup guard) matter before any real posting; Q-45 asks whether the no-AI mode stays.
-2. **Tests**: `ApiFactory` boots the real host with `FakeQbGateway` + `FakeHermesClient` in a temp folder;
-   `ApiFactory.WithSetting` is not chainable (use `WithWebHostBuilder` + `AddInMemoryCollection` for several
-   settings, as `PocModeApiTests` does). `ListLogger<T>` (T-805) captures `ILogger` calls. Host tests replace
-   `IHermesClient`, so the logging decorator around it is covered by unit tests only.
-3. **The POC data** (`samples/poc/`): `rules.json` resolves every line by rule; `tropicana-lists.iif` creates the
-   9 accounts / 7 vendors / 2 customers those rules name; `jobs/2026-09-tropicana` (CSV bank + card, 15 post,
-   1 skip) and `jobs/2026-08-tropicana-xlsx` (one Excel bank statement, 9 post, 0 skip). A job id is the folder name,
-   so a re-run of the same folder needs `force=true`.
-4. **Still true**: JSON enums camelCase; read shared JSON with `AtomicFile.ReadAllText`; never teach rules against
-   `Fixtures.SampleRules` (copy first); Serilog reads only `Serilog:MinimumLevel`; `src/QbAutopost.Api/data/` and
-   `dist/` are git-ignored; PowerShell 5.1 on the dev box (no `pwsh`), scripts must be ASCII; the GateGuard hook
-   blocks the first edit of each file until the facts are restated.
-5. **Running by hand**: `dotnet run --project src/QbAutopost.Api` with `ASPNETCORE_ENVIRONMENT=Development`,
-   `QBAUTOPOST__QuickBooks__Fake=true`, `QBAUTOPOST__Api__Bind=http://127.0.0.1:5099`. With `Hermes:Enabled=false`
-   a full CSV job runs end to end with no model.
+Watch for: the batch id feeds the ledger and undo, which today assume a job id per folder. Read `JobStore` and
+`Ledger` before inventing a parallel store.
 
-## 8. Open follow-ups
+Then T-909 (idempotency), T-910 (`clients.json`, scopes), T-911 (TLS, rate limits, input hardening), T-912 (audit),
+T-913 (OpenAPI + Scalar, pending Q-46), T-914 (docs/POC moved to v1 paths).
 
-- Finish the POC on the server: post `2026-08-tropicana-xlsx` (or `-Force` the September job), check both registers,
-  then undo. `steps.md` sections 7–10.
-- The two defects in §5 (content root, gateway-lock logging / first-call timeout).
-- T-802/T-803/T-804 remain `ready-for-human` (Hermes container, shadow week, go-live) and assume Hermes is on.
-- Decide whether `docs/CLAUDE.md` or the root `CLAUDE.md` is the single copy.
+## 7. Traps this codebase has already sprung — read before writing tests
+
+1. **A GateGuard hook blocks the first Bash command and the first edit/create of every file** until you restate
+   facts (callers, affected API, data shapes, the user's verbatim instruction). It is not a failure; answer and retry.
+2. **Test namespaces shadow production ones.** `QbAutopost.Api.Tests.Endpoints` broke four existing files, because
+   inside `…Tests.Api` the name `Endpoints.JobView` then resolved to the test namespace. Use a name the production
+   tree does not have (`…Tests.Routing`, `…Tests.HealthChecks`).
+3. **`ApiFactory` must substitute every external double.** It now replaces `QbConnection`, `IHermesClient` **and
+   `IQbSdkProbe`** — without the last one the host picks the real COM probe on a Windows dev box and the tests talk to
+   the actual SDK (rule 1 violation).
+4. **The test host inherits the shipped `appsettings.json`.** `Company:FilePath` and friends are *set* in tests unless
+   you override them. A test that assumes "nothing configured" is wrong.
+5. **`JsonNamingPolicy.CamelCase` lowercases only the first character.** `QuickBooksGateway` → `quickBooksGateway`,
+   not `quickbooksGateway`. Pin wire names with `[property: JsonPropertyName(...)]`.
+6. **`ChannelReader.Count` throws `NotSupportedException`** on a `SingleReader` unbounded channel. `JobQueue.Depth`
+   is an `Interlocked` counter for that reason.
+7. **`CoreIsolationTests` scans Core sources for COM tokens**, including the literal `QBXMLRP2`. A ProgId string in
+   Core fails the build. Carry such values as data from `QbAutopost.QuickBooks`.
+8. **Windows-only types cannot be referenced from tests** (`CA1416` as an error): `QbSession.ProgId` is
+   `[SupportedOSPlatform("windows")]`, so tests use a literal.
+9. `PipelineOptions` has **required** members; `QuickBooksCallException` takes `(message, errorCode)`.
+10. PowerShell 5.1 only (no `pwsh`), no `python` on this box, scripts must be ASCII.
+
+## 8. Open questions (owner) — `docs/tracker.md › Questions`
+
+New this session, each with a conservative behaviour already implemented so nothing is blocked:
+
+| # | In one line |
+|---|---|
+| Q-46 | May we add `Scalar.AspNetCore`? (Swagger is ruled out; the OpenAPI document itself needs no package) |
+| Q-47 | Remote callers from where — LAN, VPN or the internet? Decides the TLS/proxy design |
+| Q-48 | Who issues and revokes caller keys? |
+| Q-49 | Is `controlTotal` an acceptable substitute for G1 on the direct path, and should a mismatch refuse the whole batch? (currently yes) |
+| Q-50 | May a request name its own company file? (currently no) |
+| Q-51 | May a direct post use Hermes for account choice? (currently no: needs a flag **and** a scope) |
+| Q-52 | How long must batch evidence be kept? (400 days audit) |
+| Q-53 | When may `Api:LegacyRoutes` default to false? |
+| Q-54 | Does the folder model stay for good? |
+| Q-55 | FR-A-3 wants supported qbXML versions, but the SDK only gives them from a session ticket, which the same rule forbids |
+| Q-56 | FR-A-4's per-SDK-phase timings need a wider gateway interface — worth it? (the spec was amended to the 3 measurable steps) |
+| Q-57 | FR-A-5's `companyName` check needs a `CompanyQueryRq` whose element names could not be verified — not implemented rather than guessed |
+
+Q-1…Q-45 from earlier milestones are **still unanswered**; Q-27 and Q-37 matter before any real posting.
+
+## 9. Waiting on the server (a person, not an agent)
+
+- **T-903 checklist** (8 items, in the tracker): `/api/v1/health/sdk` with QuickBooks closed and open, bitness `x64`,
+  no company file opened, two calls in a row.
+- **T-904/T-905 confirmations** on the same visit: that the 180 s timeout really outlasts the certificate dialog, that
+  the "Waiting for QuickBooks" line appears when a job holds the gateway, and that the SDK's spelling of the open
+  company file path matches the configured one (a UNC vs mapped-drive difference would read as "a different file").
+- Still open from M8: T-802 dry run, T-803 shadow week, T-804 go-live, and finishing the POC post/undo.
+
+## 10. Housekeeping
+
+- `main` is untouched; `m9-api-v1` is **not pushed**. Decide whether to push/merge or keep iterating.
+- Every M9 task has a `docs/testing/T-90x.tdd.md` recording the RED output, the test specification and — importantly —
+  **what is not verified**. Keep that section honest; it is the only record of which claims are proven.
+- `docs/spec-api-v1.md` FR-A-4 was **amended** during T-904 (six illustrative steps → three measurable ones). If the
+  spec and the code disagree again, change the spec deliberately and raise a question; do not quietly diverge.
