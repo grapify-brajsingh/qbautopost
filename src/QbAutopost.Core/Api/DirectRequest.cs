@@ -67,8 +67,13 @@ public sealed record DirectLimits
 /// <summary>A row that will not be posted, with the reason an operator will read.</summary>
 public sealed record DirectRowIssue(int Index, string? ExternalId, string Reason);
 
-/// <summary>A row that became a statement line, keeping what the caller said about it.</summary>
-public sealed record DirectLine(int Index, string? ExternalId, TxnKind Kind, string? LineAccount, string? Payee, StatementLine Line);
+/// <summary>
+/// A row that became a statement line, keeping what the caller said about it. <paramref name="Account"/> is the
+/// header account they named: on the direct path it replaces the <c>rules.json</c> last-four lookup the folder path
+/// does, so a caller need not edit the rules before posting.
+/// </summary>
+public sealed record DirectLine(
+    int Index, string? ExternalId, TxnKind Kind, string Account, string? LineAccount, string? Payee, StatementLine Line);
 
 /// <summary>
 /// The outcome of reading a direct request. <see cref="Errors"/> is a refusal of the whole batch (400 — nothing is

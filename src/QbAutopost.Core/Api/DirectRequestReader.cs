@@ -63,7 +63,8 @@ public sealed partial class DirectRequestReader(DirectLimits limits)
                 continue;
             }
 
-            lines.Add(new DirectLine(i, row.ExternalId, row.Kind, Trimmed(row.LineAccount), Trimmed(row.Payee), ToLine(row, request, i)));
+            lines.Add(new DirectLine(
+                i, row.ExternalId, row.Kind, row.Account.Trim(), Trimmed(row.LineAccount), Trimmed(row.Payee), ToLine(row, request, i)));
         }
 
         return new DirectReadResult([], lines, held);

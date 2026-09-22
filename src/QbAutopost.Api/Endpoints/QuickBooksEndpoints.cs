@@ -2,8 +2,11 @@ using Microsoft.Extensions.Options;
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Jobs;
 using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Api;
+using QbAutopost.Core.Mapping;
 using QbAutopost.Core.Pipeline;
 using QbAutopost.Core.QbXml;
+using QbAutopost.Core.Store;
 
 namespace QbAutopost.Api.Endpoints;
 
@@ -21,7 +24,64 @@ public static class QuickBooksEndpoints
         app.MapPost("/qb/sync-lists", SyncLists);
         app.MapPost("/quickbooks/connection/test", ConnectionTest);
         app.MapPost("/quickbooks/company-file/validate", ValidateCompanyFile);
+        app.MapPost("/quickbooks/transactions/validate", ValidateTransactions);
         return app;
+    }
+
+    /// <summary>
+    /// FR-A-6. The offline dry run: the same reader, mapper, gates and qbXML builder the post uses, stopping short of
+    /// the SDK call. Nothing here may reach QuickBooks or Hermes — that is what lets a caller validate a batch while
+    /// the QuickBooks server is still shut down.
+    /// <para>
+    /// 400 when the request contradicts itself (a control total that does not add up, no rows, too many); 422 when it
+    /// was understood and a gate refused a row; 200 when it would post clean. The body is the same either way.
+    /// </para>
+    /// </summary>
+    private static IResult ValidateTransactions(
+        DirectRequest? request,
+        bool? includeQbXml,
+        PipelineOptions pipeline,
+        DirectPlanner planner,
+        IClock clock,
+        ILoggerFactory loggers)
+    {
+        var log = loggers.CreateLogger(typeof(QuickBooksEndpoints));
+        if (request is null)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "A request body is required",
+                detail: "Send the transactions to validate as JSON (api-v1 §6.1).");
+        }
+
+        var plan = planner.Plan(
+            request,
+            Rules.Load(pipeline.RulesFile),
+            new QbListsStore(pipeline.QbListsFile).Load(),
+            new LedgerStore(pipeline.LedgerFile).Load(),
+            DateOnly.FromDateTime(clock.UtcNow),
+            pipeline.QbXmlVersion);
+
+        if (plan.Errors.Count > 0)
+        {
+            log.LogWarning(
+                "Transaction validation refused {Rows} row(s) for reference {Reference}: {Errors}",
+                plan.Submitted, request.Reference, string.Join("; ", plan.Errors));
+            return Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "The request could not be read",
+                detail: string.Join("; ", plan.Errors),
+                extensions: new Dictionary<string, object?> { ["errors"] = plan.Errors });
+        }
+
+        var response = ValidationResponse.From(plan, includeQbXml == true);
+        log.LogInformation(
+            "Validated {Submitted} row(s) for reference {Reference}: {WouldPost} would post, {Held} held, {Duplicates} duplicate(s)",
+            plan.Submitted, request.Reference, plan.WouldPost, plan.Held, plan.Duplicates);
+
+        return plan.Ok
+            ? Results.Ok(response)
+            : Results.Json(response, statusCode: StatusCodes.Status422UnprocessableEntity);
     }
 
     /// <summary>

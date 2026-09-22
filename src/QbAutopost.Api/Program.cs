@@ -10,6 +10,7 @@ using QbAutopost.Api.Ocr;
 using QbAutopost.Api.QuickBooks;
 using QbAutopost.Api.Security;
 using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Api;
 using QbAutopost.Core.Extract;
 using QbAutopost.Core.Gateway;
 using QbAutopost.Core.Hermes;
@@ -143,6 +144,18 @@ builder.Services.AddSingleton(sp =>
         BackupFolder = s.QuickBooks.BackupFolder,
         BackupMaxAgeHours = s.QuickBooks.BackupMaxAgeHours,
     };
+});
+// T-907 (§6.1, §12): the bounds a direct request is read against. Core stays free of the settings types.
+builder.Services.AddSingleton(sp =>
+{
+    var s = sp.GetRequiredService<IOptions<AppSettings>>().Value;
+    return new DirectPlanner(new DirectLimits
+    {
+        MaxRows = s.Api.MaxTransactionsPerRequest,
+        MaxLineAmount = s.QuickBooks.MaxLineAmount,
+        MaxAgeDays = s.QuickBooks.AllowedDateWindow.MaxAgeDays,
+        MaxFutureDays = s.QuickBooks.AllowedDateWindow.MaxFutureDays,
+    });
 });
 builder.Services.AddSingleton<JobPipeline>();
 builder.Services.AddSingleton<QbListSync>();

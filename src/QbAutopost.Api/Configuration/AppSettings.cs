@@ -47,6 +47,12 @@ public sealed class ApiSettings
 
     /// <summary>FR-A-4: the largest <c>timeoutSeconds</c> a caller may ask for; above it the request is a 400.</summary>
     public int MaxConnectionTestTimeoutSeconds { get; set; } = 600;
+
+    /// <summary>
+    /// T-907 / §6.1: rows per direct request. A cap keeps one call from holding the QuickBooks lock for an hour;
+    /// exceeding it refuses the batch rather than truncating it, because a truncated batch posts part of the money.
+    /// </summary>
+    public int MaxTransactionsPerRequest { get; set; } = 500;
 }
 
 public sealed class CompanySettings
@@ -89,6 +95,25 @@ public sealed class QuickBooksSettings
 
     /// <summary>Folders an overridden company file must sit inside, when the override is allowed at all.</summary>
     public IList<string> AllowedCompanyFolders { get; set; } = [];
+
+    /// <summary>
+    /// T-907 / §6.1: the largest amount one direct line may carry. A bigger line is <b>held</b>, not refused, so one
+    /// unusual amount cannot fail a batch of hundreds — and a person still looks at it before that money moves.
+    /// </summary>
+    public decimal MaxLineAmount { get; set; } = 100000.00m;
+
+    /// <summary>§6.1: how old or how far ahead a direct line's date may be. Outside it the row is held.</summary>
+    public DateWindowSettings AllowedDateWindow { get; set; } = new();
+}
+
+/// <summary>§6.1 <c>QuickBooks:AllowedDateWindow</c>, in whole days either side of today.</summary>
+public sealed class DateWindowSettings
+{
+    /// <summary>Default two years: older than that is far likelier to be a typo than a real posting.</summary>
+    public int MaxAgeDays { get; set; } = 730;
+
+    /// <summary>Tomorrow is allowed, because a caller's clock may be a time zone ahead of the server's.</summary>
+    public int MaxFutureDays { get; set; } = 1;
 }
 
 public sealed class HermesSettings
