@@ -80,8 +80,14 @@ public sealed class FakeQbGateway : IQbGateway
         return Company.Process(qbxml, readOnly ? null : Reject);
     }
 
-    public Task<string> CurrentCompanyFileAsync(CancellationToken ct) =>
-        CompanyFileThrow is { } error ? Task.FromException<string>(error) : Task.FromResult(@"C:\fake\Tropicana.QBW");
+    /// <summary>How often the company file was asked for — FR-A-3 requires the SDK probe never to ask.</summary>
+    public int CompanyFileCalls { get; private set; }
+
+    public Task<string> CurrentCompanyFileAsync(CancellationToken ct)
+    {
+        CompanyFileCalls++;
+        return CompanyFileThrow is { } error ? Task.FromException<string>(error) : Task.FromResult(@"C:\fake\Tropicana.QBW");
+    }
 
     private XElement? Reject(int position, XElement request) =>
         RejectLine == position && request.Name.LocalName.EndsWith("AddRq", StringComparison.Ordinal)

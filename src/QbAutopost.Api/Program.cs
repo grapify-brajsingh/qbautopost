@@ -16,6 +16,7 @@ using QbAutopost.Core.Hermes;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Mapping;
 using QbAutopost.Core.Pipeline;
+using QbAutopost.QuickBooks;
 
 // T-901 (api-v1 §12): read appsettings.json from the exe's folder, not the working directory (server defect 1).
 // The environment is read from the variable because the host does not exist yet; the test host keeps its own root.
@@ -90,6 +91,15 @@ builder.Services.AddSingleton(sp =>
         sp.GetRequiredService<IOptions<AppSettings>>().Value,
         sp.GetRequiredService<IHostEnvironment>(),
         step => sdkLog.LogInformation("QuickBooks SDK: {Step}", step));
+});
+// T-903 (FR-A-3): the COM probe only where the SDK can exist; everywhere else an honest "unavailable" answer.
+builder.Services.AddSingleton<IQbSdkProbe>(sp =>
+{
+    var s = sp.GetRequiredService<IOptions<AppSettings>>().Value;
+    var mode = sp.GetRequiredService<QbConnection>().Mode;
+    return mode == QbConnectionMode.Sdk && OperatingSystem.IsWindows()
+        ? new QbSdkProbe(s.QuickBooks.QbXmlVersion)
+        : new UnavailableQbSdkProbe(s.QuickBooks.QbXmlVersion, $"the QuickBooks gateway is {mode.ToString().ToLowerInvariant()}, not the Desktop SDK");
 });
 builder.Services.AddSingleton<IQbGateway>(sp =>
 {

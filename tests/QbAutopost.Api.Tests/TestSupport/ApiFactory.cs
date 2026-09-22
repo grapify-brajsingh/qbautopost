@@ -34,6 +34,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
     public FakeHermesClient Hermes { get; } = new();
 
+    /// <summary>Rule 1: the host must never reach the real COM probe, not even on a developer's Windows box.</summary>
+    public FakeQbSdkProbe SdkProbe { get; } = new();
+
     public string LedgerFile => Dir.Combine("data", "ledger.json");
 
     public string JobIndexFile => Dir.Combine("data", "jobs.json");
@@ -75,6 +78,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             services.AddSingleton(new QbConnection(Gateway, QbConnectionMode.Test));
             services.RemoveAll<IHermesClient>();
             services.AddSingleton<IHermesClient>(Hermes);
+            // Without this the host would pick the real COM probe on a Windows dev box (CLAUDE.md rule 1).
+            services.RemoveAll<IQbSdkProbe>();
+            services.AddSingleton<IQbSdkProbe>(SdkProbe);
         });
     }
 

@@ -12,6 +12,7 @@ public static class HealthEndpoints
         var health = app.MapGroup("/health");
         health.MapGet("/", GetApp);
         health.MapGet("/ready", GetReady);
+        health.MapGet("/sdk", GetSdk);
         health.MapGet("/hermes", GetHermes);
         health.MapGet("/quickbooks", GetQuickBooks);
         return app;
@@ -22,6 +23,25 @@ public static class HealthEndpoints
     /// post holds the gateway — the difference between "the app is dead" and "the app is busy".
     /// </summary>
     private static IResult GetApp(AppHealth health) => Results.Ok(health.Now());
+
+    /// <summary>
+    /// FR-A-3. The SDK itself: registration, bitness, configured qbXML version. No company file is opened and no
+    /// session is begun, so it answers while QuickBooks is closed — and a bitness mismatch (the T-609 failure) is
+    /// reported as not ok rather than as a warning.
+    /// </summary>
+    private static async Task<IResult> GetSdk(IQbSdkProbe probe, ILoggerFactory loggers, CancellationToken ct)
+    {
+        var log = loggers.CreateLogger(typeof(HealthEndpoints));
+        var info = await probe.ProbeAsync(ct);
+        if (info.Ok)
+        {
+            log.LogDebug("QuickBooks SDK health: ok, {Message}", info.Message);
+            return Results.Ok(info);
+        }
+
+        log.LogWarning("QuickBooks SDK health: not ok: {Message}", info.Message);
+        return Results.Json(info, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
 
     /// <summary>FR-A-2. 503 when an <c>error</c> check failed; the body lists every check either way.</summary>
     private static IResult GetReady(AppHealth health)
