@@ -1,7 +1,9 @@
 using Microsoft.Extensions.Options;
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Jobs;
+using QbAutopost.Core.Api;
 using QbAutopost.Core.Jobs;
+using QbAutopost.Core.Store;
 using QbAutopost.Core.Pipeline;
 
 namespace QbAutopost.Api.Endpoints;
@@ -14,7 +16,32 @@ public static class BatchEndpoints
     public static IEndpointRouteBuilder MapBatchEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapPost("/batches/{id}/undo", Undo);
+        app.MapGet("/batches/{id}", Get);
         return app;
+    }
+
+    /// <summary>
+    /// FR-A-11: the batch as last recorded — the poll target for a post that outlasted its synchronous budget. It
+    /// reads <c>result.json</c>, falling back to <c>status.json</c> while the batch is still running, so the answer
+    /// survives a restart of this process.
+    /// </summary>
+    private static IResult Get(string id, ApiBatchStore batches)
+    {
+        DirectPostResult? batch;
+        try
+        {
+            batch = batches.Load(id);
+        }
+        catch (ArgumentException)
+        {
+            // The id is a path segment; one that is not a batch id is a bad request, not a server error.
+            return Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest, title: "Invalid batch id", detail: $"'{id}' is not a batch id");
+        }
+
+        return batch is null
+            ? Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Batch not found", detail: $"batch {id} is not known")
+            : Results.Ok(batch);
     }
 
     private static async Task<IResult> Undo(

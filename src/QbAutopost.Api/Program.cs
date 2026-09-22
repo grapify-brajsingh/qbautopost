@@ -17,6 +17,7 @@ using QbAutopost.Core.Hermes;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Mapping;
 using QbAutopost.Core.Pipeline;
+using QbAutopost.Core.Store;
 using QbAutopost.QuickBooks;
 
 // T-901 (api-v1 §12): read appsettings.json from the exe's folder, not the working directory (server defect 1).
@@ -157,6 +158,9 @@ builder.Services.AddSingleton(sp =>
         MaxFutureDays = s.QuickBooks.AllowedDateWindow.MaxFutureDays,
     });
 });
+builder.Services.AddSingleton(sp =>
+    new ApiBatchStore(sp.GetRequiredService<IOptions<AppSettings>>().Value.Paths.ApiBatches));
+builder.Services.AddSingleton<DirectPostRunner>();
 builder.Services.AddSingleton<JobPipeline>();
 builder.Services.AddSingleton<QbListSync>();
 builder.Services.AddSingleton<BatchUndo>();

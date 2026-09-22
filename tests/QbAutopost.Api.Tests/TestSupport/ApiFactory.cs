@@ -66,6 +66,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             ["Paths:QbLists"] = Dir.Combine("data", "qb-lists.json"),
             ["Paths:Logs"] = Dir.Combine("data", "logs"),
             ["Paths:JobIndex"] = JobIndexFile,
+            // Rule 1 again: the shipped appsettings.json names a real machine folder, and the test host inherits it.
+            // Without this line a posting test writes its batch evidence to C:\qb-autopost on a developer's box.
+            ["Paths:ApiBatches"] = Dir.Combine("data", "api-batches"),
             // Rule 1: even a real HermesClient built by mistake cannot reach a Hermes on this machine (.invalid never resolves).
             ["Hermes:BaseUrl"] = "http://hermes.invalid:8642",
             ["Hermes:ApiKey"] = "",

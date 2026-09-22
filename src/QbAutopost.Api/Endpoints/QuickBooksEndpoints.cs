@@ -25,7 +25,81 @@ public static class QuickBooksEndpoints
         app.MapPost("/quickbooks/connection/test", ConnectionTest);
         app.MapPost("/quickbooks/company-file/validate", ValidateCompanyFile);
         app.MapPost("/quickbooks/transactions/validate", ValidateTransactions);
+        app.MapPost("/quickbooks/transactions", PostTransactions);
         return app;
+    }
+
+    /// <summary>
+    /// FR-A-8, FR-A-10. The post. It runs on the single worker (<see cref="JobQueue.RunExclusiveAsync"/>), so it can
+    /// never overlap a folder job, and the caller waits at most <c>Api:SyncPostTimeoutSeconds</c> for it; past that
+    /// they get 202 and a batch to poll, while the work carries on.
+    /// <para>
+    /// The batch is on disk before it is queued (rule 7). A dry run ends in <c>ready</c> without a single byte sent.
+    /// </para>
+    /// </summary>
+    private static async Task<IResult> PostTransactions(
+        DirectRequest? request,
+        HttpContext http,
+        IOptions<AppSettings> settings,
+        JobQueue queue,
+        DirectPostRunner runner,
+        ApiBatchStore batches,
+        ILoggerFactory loggers)
+    {
+        var log = loggers.CreateLogger(typeof(QuickBooksEndpoints));
+        if (request is null)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "A request body is required",
+                detail: "Send the transactions to post as JSON (api-v1 §6.1).");
+        }
+
+        var plan = runner.Plan(request);
+        if (plan.Errors.Count > 0)
+        {
+            // Refused before it has an identity: no batch id, no folder, nothing to undo later.
+            log.LogWarning(
+                "Post refused {Rows} row(s) for reference {Reference}: {Errors}",
+                plan.Submitted, request.Reference, string.Join("; ", plan.Errors));
+            return Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "The request could not be read",
+                detail: string.Join("; ", plan.Errors),
+                extensions: new Dictionary<string, object?> { ["errors"] = plan.Errors });
+        }
+
+        var s = settings.Value;
+        var dryRun = request.DryRun ?? s.DryRunDefault;
+        var batchId = runner.NextBatchId(request);
+        var opening = runner.Begin(batchId, request, plan, dryRun);
+        if (dryRun)
+        {
+            return Results.Ok(opening);
+        }
+
+        log.LogInformation("Batch {BatchId}: queued for posting, {Rows} row(s) to post", batchId, plan.WouldPost);
+
+        // The work runs to the end whatever the caller does; this token only bounds the wait (FR-A-10).
+        var async = http.Request.Headers.TryGetValue("Prefer", out var prefer)
+                    && prefer.Any(p => p?.Contains("respond-async", StringComparison.OrdinalIgnoreCase) == true);
+        using var wait = new CancellationTokenSource(async ? TimeSpan.Zero : TimeSpan.FromSeconds(s.Api.SyncPostTimeoutSeconds));
+        try
+        {
+            var result = await queue.RunExclusiveAsync(
+                batchId, ct => runner.RunAsync(batchId, request, plan, ct), wait.Token);
+            return result.Unavailable
+                ? Results.Json(result, statusCode: StatusCodes.Status503ServiceUnavailable)
+                : Results.Ok(result);
+        }
+        catch (OperationCanceledException)
+        {
+            // Still running. The batch is already persisted, so the caller has somewhere to look.
+            log.LogInformation("Batch {BatchId}: still posting after the synchronous budget; answering 202", batchId);
+            var location = ApiRoutes.V1Prefix + "/batches/" + batchId;
+            var current = batches.Load(batchId) ?? opening;
+            return Results.Accepted(location, new { current.BatchId, current.Status, location });
+        }
     }
 
     /// <summary>

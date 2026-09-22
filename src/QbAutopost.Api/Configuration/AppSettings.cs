@@ -53,6 +53,12 @@ public sealed class ApiSettings
     /// exceeding it refuses the batch rather than truncating it, because a truncated batch posts part of the money.
     /// </summary>
     public int MaxTransactionsPerRequest { get; set; } = 500;
+
+    /// <summary>
+    /// T-908 / FR-A-10: how long a direct post may hold the caller's connection before it answers 202 and lets them
+    /// poll. The work is never cancelled by this — only the waiting is.
+    /// </summary>
+    public int SyncPostTimeoutSeconds { get; set; } = 120;
 }
 
 public sealed class CompanySettings
@@ -148,6 +154,12 @@ public sealed class PathsSettings
     /// </summary>
     public string JobIndex { get; set; } = "jobs.json";
 
+    /// <summary>
+    /// T-908 / §6.3: one folder per direct batch, holding its request, state and qbXML. Blank means "beside the
+    /// ledger", which is where the rest of the app's data already lives.
+    /// </summary>
+    public string ApiBatches { get; set; } = "";
+
     /// <summary>Relative paths resolve against the content root.</summary>
     public void ResolveAgainst(string root)
     {
@@ -155,5 +167,8 @@ public sealed class PathsSettings
         QbLists = Path.GetFullPath(QbLists, root);
         Logs = Path.GetFullPath(Logs, root);
         JobIndex = Path.GetFullPath(JobIndex, root);
+        ApiBatches = string.IsNullOrWhiteSpace(ApiBatches)
+            ? Path.Combine(Path.GetDirectoryName(Ledger)!, "api-batches")
+            : Path.GetFullPath(ApiBatches, root);
     }
 }
