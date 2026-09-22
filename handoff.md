@@ -1,134 +1,195 @@
 # Session Handoff — QbAutopost
 
-Written: 2026-09-23 (session 15) · **M9 (API v1): 10 of 14 tasks done, on branch `m9-api-v1`, not pushed, not
-merged** · This session delivered the four that carry the money and the callers: **T-907, T-908, T-909, T-910**.
-Next session: **T-911 (TLS, rate limits, input hardening)** then **T-912 (audit trail)**. T-913 is **blocked on
-Q-46** — it needs a NuGet package the owner has not approved.
+**This is an unattended relay. The owner is away and will answer nothing mid-run.**
+Written: 2026-09-23 (session 15) · **M9 (API v1): 10 of 14 done**, branch `m9-api-v1` · **Next task: T-911.**
 
-## 1. Start the next session with this prompt
+> **If you are an agent starting fresh: read §0, do the one task named in §3 as "NEXT", then §5 before you finish.**
+> Do not read ahead and do not do two tasks. The next agent has no memory of you — this file is the only thing
+> that carries forward, so leaving it accurate is part of the task, not paperwork after it.
 
-```
-Read handoff.md, CLAUDE.md, docs/spec-api-v1.md (the M9 contract) and docs/tracker.md (M9 rows T-901…T-914,
-questions Q-46…Q-61). You are on branch m9-api-v1; main is untouched.
-Continue with T-911 (FR-A-14 TLS, FR-A-15 rate limits, FR-A-17 input hardening), then T-912 (FR-A-16 audit).
-T-913 is blocked on Q-46 (the Scalar package) — do not add a package without an answer.
-Work test-first: a RED you actually ran and pasted, then the fix, then the full suite twice, then the tracker row,
-session-log line, docs/testing/T-91x.tdd.md and a commit per task. Read handoff.md §7 before writing any test —
-it lists the traps this codebase has already sprung.
-```
+---
 
-## 2. Project in one paragraph
+## 0. The relay protocol
 
-QbAutopost is a single .NET 8 app that turns a job folder (`requirement.txt` + bank/card statements + optional
-invoices) **or a JSON request** into QuickBooks Desktop transactions: Checks, credit-card charges and credits,
-Deposits. Deterministic code does all money and mapping; Hermes (a local OpenAI-compatible model) only reads
-PDFs/invoices and suggests accounts, and can be switched off entirely (`Hermes:Enabled=false`). The contract is
-`docs/spec.md`; **M9's contract is `docs/spec-api-v1.md`**, which wins for `/api/v1/*`. Milestones `docs/plan.md`,
-progress `docs/tracker.md`, operator guide `docs/runbook.md`, agent rules `CLAUDE.md`, per-task test evidence
-`docs/testing/T-9xx.tdd.md`.
+One agent does **one task**, then hands over to a fresh agent with empty context. State travels only through the
+repository: `handoff.md`, `docs/tracker.md`, and the commits.
 
-## 3. State at handoff
+**Your loop, in order:**
+
+1. **Read** `CLAUDE.md`, this file, `docs/spec-api-v1.md` (the M9 contract), and the tracker row for your task.
+2. **Confirm the task.** §3 names exactly one as `NEXT`. That is yours. If it is marked `BLOCKED`, see §4.
+3. **Work test-first.** Write the failing test, *run it*, paste the real RED output. Then implement. Then GREEN.
+   A RED you did not actually run is a lie in the evidence file, and nobody is here to catch it.
+4. **Verify**: `dotnet build -warnaserror` (0 warnings) and `dotnet test` **twice in a row**, both green.
+5. **Write the evidence**: `docs/testing/T-9xx.tdd.md`, including its "what this does not prove" section. Be honest
+   there. It is the only record of which claims are actually tested.
+6. **Update `docs/tracker.md`**: the task row (Status, Files, Verified by, Notes), a Session-log line, and any new
+   question in the Questions table.
+7. **Update this file**: move `NEXT` to the following task, fill in §2 (state), add anything the next agent would
+   be hurt by not knowing to §6 (traps) or §7 (what changed underneath you).
+8. **Commit** `T-9xx: <summary>` and **push**: `git push -u origin m9-api-v1`.
+9. **Hand over.** Your last output is the handover note in §8's format, and nothing else. Then stop.
+
+**Why one task per agent:** each handover is only as trustworthy as it is small. An agent that did four tasks
+writes a summary nobody can check; an agent that did one writes a summary the next one can verify in a minute.
+
+---
+
+## 1. Hard rules for running unattended
+
+The usual rules (`CLAUDE.md`) all still apply. These matter more when nobody is watching:
+
+1. **Hold, don't guess** (`CLAUDE.md` rule 4) is now the primary safety mechanism. If the spec is silent or two
+   specs disagree, choose the behaviour that **posts less / reveals less / refuses sooner**, mark it
+   `// SPEC-GAP T-9xx`, and add a Questions row. Never pick the permissive reading because it unblocks you.
+2. **Never weaken a test to make it pass.** If an existing test fails, read it and decide whether the *test* or the
+   *code* is wrong, and write down which and why. Session 15 changed 18 tests deliberately and listed every one in
+   `docs/testing/T-910.tdd.md` §5 — that is the standard.
+3. **Never touch a real QuickBooks or Hermes.** `FakeQbGateway`, `FakeHermesClient`, `FakeQbSdkProbe`. If a task
+   cannot be proven without the real SDK, mark it `ready-for-human` and say exactly what a person must check.
+4. **Never add a NuGet package** beyond `CLAUDE.md`'s list (which now includes `Scalar.AspNetCore`). If you want
+   another, stop the task and record the question.
+5. **Never push to `main`, never open a PR, never merge.** Push `m9-api-v1` only.
+6. **Never delete or overwrite anything outside the repo and the temp folders.** If a test writes outside its
+   `TempDir`, that is a bug in the test — see trap #4.
+7. **Never claim a verification you did not run.** Paste real output. "Tests pass" without a count is not evidence.
+8. **If you are stuck twice on the same thing, stop.** Record the state honestly and hand over. A confused agent
+   doing a third attempt unattended is how money logic gets broken.
+
+---
+
+## 2. State
 
 | Item | State |
 |---|---|
-| Repo | `D:\qb_post`, branch **`m9-api-v1`** (20 commits), `main` last at `33b96b8`. **Nothing pushed, nothing merged.** |
+| Repo | `D:\qb_post`, branch **`m9-api-v1`**, remote `origin` = `github.com/grapify-brajsingh/qbautopost` |
 | Build | `dotnet build -warnaserror` → 0 warnings |
-| Tests | **Core 820, Api 344** (1164), green twice in a row on Windows. Linux not re-run this session (CI covers it) |
-| Milestones | M0–M7 done; M8 agent work done (T-802/T-803/T-804 `ready-for-human`); **M9 10/14** |
-| Packages | none added. **Q-46 (Scalar) still unanswered, and it blocks T-913** |
-| Owner answers | Q-1…Q-45 still unanswered except Q-0; **Q-46…Q-61 outstanding**, Q-61 needs telling before the next deploy |
+| Tests | **Core 820, Api 344** (1164), green twice on Windows |
+| Milestones | M0–M7 done; M8 agent work done (`ready-for-human`); **M9 10/14** |
+| Packages | 6 + `Scalar.AspNetCore` **approved** for T-913 (Q-46 answered 2026-09-23) |
+| Owner | **Away. Answers nothing.** Q-1…Q-45, Q-47…Q-61 outstanding; each already has a conservative behaviour |
 
-## 4. What session 15 built
+## 3. The task queue
 
-| Task | State | What it does |
+| Task | Status | One line |
 |---|---|---|
-| T-907 | done | `POST /api/v1/quickbooks/transactions/validate` — the offline dry run. `DirectPlanner` runs the rows through the same FR-6 mapper, duplicate checks and qbXML builder as a folder job and stops before the SDK. Zero QuickBooks/Hermes calls, asserted. 400 for a control-total mismatch, **422 with the same body** for a gate verdict |
-| T-908 | done | `POST /api/v1/quickbooks/transactions` + `GET /api/v1/batches/{id}`. Evidence folder per batch; `request.json` written **before** the first qbXML leaves the process, proven by a test where QuickBooks throws. **No parallel store** — the ledger still records what posted, so `BatchUndo` needed no change and FR-13 works on a direct batch. 202 + poll past `Api:SyncPostTimeoutSeconds` |
-| T-909 | done | `Idempotency-Key` (FR-A-12). Same request twice under one key → one batch, one TxnID, **one write to QuickBooks**. Different body → 409; still running → 409 + `Retry-After: 5`. Covers undo; deliberately not validate |
-| T-910 | done | `clients.json`, per-caller keys, scopes, rotation, CIDR, `scripts/new-api-client.ps1`. Only salted hashes stored. Fail-closed startup. Closed T-907's `qb:debug` gap |
+| T-901…T-910 | **done** | Routes, health, SDK probe, connection test, company-file validate, direct model, validate, post, idempotency, clients+scopes |
+| **T-911** | **NEXT** | FR-A-14 TLS + FR-A-15 rate limits + FR-A-17 input hardening — see §4 |
+| T-912 | queued | FR-A-16 audit trail (`audit-yyyyMMdd.jsonl`) + the `requestId` of §2.6, which does not exist yet |
+| T-913 | queued | FR-A-18 OpenAPI document + Scalar reference UI. **Unblocked**: the package is approved |
+| T-914 | queued | Move docs, runbook and the POC package to the v1 routes and the new auth rules |
+| *(then)* | **STOP** | Write the final report (§9). Do not start M10. Do not attempt the server tasks |
 
-## 5. Read this before T-911 — two things this session changed under you
+## 4. The next three tasks, in detail
 
-1. **Health routes are no longer all open.** api-v1 §2.2 narrows spec.md §6: only `/health` and `/health/ready` need
-   no key. `/health/sdk`, `/health/quickbooks`, `/health/hermes` now require `health:read`. It moved 18 existing
-   tests. **Q-61** is open, and the owner's monitoring needs telling before the next deploy.
-2. **`ApiKeyMiddleware` is now identity, not a string compare.** It resolves a caller from `clients.json` (falling
-   back to the shared key while `Api:AllowLegacyKey`), checks CIDR, then checks the route's scope from
-   `ApiRoutes.ScopeFor`. Anything T-911 adds to the pipeline goes *after* it, so it can see the client id via
-   `ApiKeyMiddleware.ClientOf(context)` — which is exactly what FR-A-15's per-client rate limits and FR-A-16's audit
-   need.
-
-## 6. Next: T-911, then T-912
-
-**T-911 — FR-A-14 + FR-A-15 + FR-A-17.** Three separable pieces; consider three RED/GREEN cycles.
-- *Transport*: Kestrel HTTPS from `Api:Tls:PfxPath` + `PfxPassword` (**environment only** — a value in
-  `appsettings.json` warns and is accepted) or `StoreThumbprint`. **Startup refuses a non-loopback bind without TLS**
-  unless `Api:AllowInsecureRemote=true`, which warns at startup *and* on every request. HSTS, `nosniff`,
-  `Referrer-Policy: no-referrer`, no `Server` header. CORS off; `*` refused while any route needs a key.
-- *Rate limits*: ASP.NET Core 8's built-in limiter (**shared framework, no package**), partitioned by client id, by
-  IP for the unauthenticated health routes. `qb:post` 10/min, other authenticated 120/min, health 600/min per IP,
-  failed auth 10/min per IP then 429 for 5 minutes. `429` carries `Retry-After`. Per-client overrides already exist
-  on `ApiClient` (`PostPerMinute`, `DefaultPerMinute`) and are so far unused.
-- *Input hardening*: body 2 MB (`Api:MaxRequestBodyBytes`), string bounds (`reference` 64, `memo` 4096, names 255),
-  and **caller-supplied paths must be absolute and inside `Paths:AllowedJobRoots[]`** — the traversal fix now that
-  callers are remote. Note T-909 buffers the whole body to hash it, so the 2 MB cap matters there too.
+**T-911 — three separable pieces; do three RED/GREEN cycles inside the one task.**
+- *Transport (FR-A-14)*: Kestrel HTTPS from `Api:Tls:PfxPath` + `PfxPassword` (**environment only** — a value found
+  in `appsettings.json` logs a warning naming the file, never the value, and is accepted). **Startup refuses a
+  non-loopback bind without TLS** unless `Api:AllowInsecureRemote=true`, which warns at startup *and* on every
+  request. HSTS, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, no `Server` header. CORS off by
+  default; `*` refused while any route needs a key.
+- *Rate limits (FR-A-15)*: ASP.NET Core 8's built-in limiter — **shared framework, no package**. Partition by client
+  id (`ApiKeyMiddleware.ClientOf(context)`), by IP for the unauthenticated health routes. `qb:post` 10/min, other
+  authenticated 120/min, health 600/min per IP, failed auth 10/min per IP then 429 for 5 minutes. `429` carries
+  `Retry-After`. `ApiClient.PostPerMinute` / `DefaultPerMinute` already exist for per-client overrides and are unused.
+- *Input hardening (FR-A-17)*: body 2 MB (`Api:MaxRequestBodyBytes`), string bounds (`reference` 64, `memo` 4096,
+  names 255) → `400`, and **caller-supplied paths absolute and inside `Paths:AllowedJobRoots[]`**. Note T-909
+  buffers the whole body to hash it, so the 2 MB cap protects that too.
 
 **T-912 — FR-A-16 audit.** One JSON line per authenticated mutating request to `Paths:Logs/audit-yyyyMMdd.jsonl`:
 `utc, requestId, clientId, remoteIp, method, path, idempotencyKey, outcome, status, batchId, jobId, counts,
-totalAmount`. Never the key, never the body, never statement text. Retention `Api:AuditRetentionDays` (400).
-`requestId` (§2.6) **does not exist yet** — T-908 notes the gap; T-912 is the natural place to add it.
+totalAmount`. **Never the key, never the body, never statement text.** Retention `Api:AuditRetentionDays` (400 —
+longer than the 31-day operational log, because this is money evidence). §2.6's `requestId` does not exist yet;
+this is the place to add it (26-char sortable, echoed as `X-Request-Id`, honoured inbound when it matches
+`^[A-Za-z0-9_-]{8,64}$`).
 
-Then T-913 (OpenAPI + Scalar, **blocked on Q-46**) and T-914 (docs/POC moved to v1 paths).
+**T-913 — FR-A-18.** Two separate things on purpose: the **document** (`GET /api/v1/openapi.json`, hand-authored,
+with a drift test that fails when a route exists without a matching entry) and the **UI** (`GET /api/v1/reference`,
+Scalar, behind `Api:Reference:Enabled` default **false**). Swagger/Swashbuckle stays ruled out. Add
+`Scalar.AspNetCore` to `src/QbAutopost.Api/QbAutopost.Api.csproj` and note it in the tracker row.
 
-## 7. Traps this codebase has already sprung — read before writing tests
+## 5. Before you finish — the checklist
+
+- [ ] RED output pasted in `docs/testing/T-9xx.tdd.md`, from a run you actually did
+- [ ] `dotnet build -warnaserror` → 0 warnings
+- [ ] `dotnet test` twice, both green, counts recorded
+- [ ] `ls C:\qb-autopost` is **empty** (trap #4 — tests must not write to the machine's data folder)
+- [ ] Tracker: task row + session-log line + any new question
+- [ ] This file: `NEXT` moved, §2 updated, traps added
+- [ ] Commit `T-9xx: <summary>` with the Co-Authored-By trailer, then `git push -u origin m9-api-v1`
+- [ ] Handover note written in §8's format
+
+## 6. Traps this codebase has already sprung
 
 1. **A GateGuard hook blocks the first Bash command and the first edit/create of every file** until you restate
-   facts (callers, affected API, data shapes, the user's verbatim instruction). It is not a failure; answer and retry.
-2. **Test namespaces shadow production ones.** `QbAutopost.Api.Tests.Endpoints` broke four files because inside
-   `…Tests.Api` the name `Endpoints.JobView` resolved to the test namespace. Use a name production does not have.
+   facts (callers, affected API, data shapes, the user's verbatim instruction). Not a failure; answer and retry.
+2. **Test namespaces shadow production ones.** `…Tests.Endpoints` broke four files because inside `…Tests.Api` the
+   name `Endpoints.JobView` resolved to the test namespace. Use a name production does not have.
 3. **`ApiFactory` must substitute every external double** — `QbConnection`, `IHermesClient`, `IQbSdkProbe`.
-4. **The test host inherits the shipped `appsettings.json`**, and this bit twice. T-908 added `Paths:ApiBatches`
-   there and five tests promptly wrote batches into the real `C:\qb-autopost`. **Any new path setting must also be
-   pinned in `ApiFactory`.** `Paths:Clients` and `Paths:ApiBatches` are pinned now; the next one will not be.
+4. **The test host inherits the shipped `appsettings.json`**, and this has bitten twice. T-908 added
+   `Paths:ApiBatches` there and five tests immediately wrote real batch folders into `C:\qb-autopost`. **Any new
+   path setting must also be pinned in `ApiFactory`.** T-911 adds `Paths:AllowedJobRoots` — pin it.
 5. **`JsonNamingPolicy.CamelCase` lowercases only the first character.** Pin wire names with `JsonPropertyName`.
 6. **`ChannelReader.Count` throws** on a `SingleReader` unbounded channel; `JobQueue.Depth` is an `Interlocked` counter.
 7. **`CoreIsolationTests` scans Core sources for COM tokens**, including the literal `QBXMLRP2`.
 8. **Windows-only types cannot be referenced from tests** (`CA1416` as an error).
 9. `PipelineOptions` has **required** members; `QuickBooksCallException` takes `(message, errorCode)`.
-10. PowerShell 5.1 only (no `pwsh`), no `python` on this box, scripts must be ASCII (`DeployScriptsTests` enforces it).
+10. PowerShell 5.1 only (no `pwsh`), no `python`, scripts must be ASCII (`DeployScriptsTests` enforces it).
 11. **Platform-dependent APIs fail on CI, not here.** T-908's batch-id guard used `Path.GetInvalidFileNameChars()`,
     which permits `\` and `:` on Linux, so `C:\windows\system32` would have passed. Prefer an explicit allow-list.
-12. **A hanging test costs two minutes, not a failure.** T-909's in-progress test wedges the gateway; it pins a 2 s
-    `Api:SyncPostTimeoutSeconds` so a regression fails fast instead of waiting out the default.
+    **This matters for T-911's path allow-list too.**
+12. **A hanging test costs two minutes, not a failure.** T-909's in-progress test wedges the gateway and pins a 2 s
+    `Api:SyncPostTimeoutSeconds` so a regression fails fast. Do the same for anything that waits.
 13. **`WithSetting(...)` returns `WebApplicationFactory<Program>`, not `ApiFactory`** — no `CreateAuthorizedClient()`
     on it; create the client and add the header.
+14. **Rate limiting will break existing tests** (T-911). 1164 tests hammer these routes. Expect to make the limits
+    configurable and effectively off in `ApiFactory`, and say so in the evidence rather than quietly raising them.
 
-## 8. Open questions (owner) — `docs/tracker.md › Questions`
+## 7. What changed underneath you in session 15
 
-Q-46…Q-57 from session 14, plus five raised this session:
+1. **Health routes are no longer all open.** api-v1 §2.2 narrows spec.md §6: only `/health` and `/health/ready`
+   need no key; `/health/sdk`, `/health/quickbooks`, `/health/hermes` need `health:read`. This moved 18 tests.
+   **Q-61** records that the owner's monitoring must be told. `docs/spec.md` §6 is now the stale one — if that is
+   ever reversed, edit the spec, do not quietly change the code.
+2. **`ApiKeyMiddleware` is identity, not a string compare.** It resolves a caller from `clients.json`, checks CIDR,
+   then checks `ApiRoutes.ScopeFor`. Anything you add to the pipeline goes **after** it so you can read
+   `ApiKeyMiddleware.ClientOf(context)` — which is what T-911's per-client limits and T-912's audit both need.
+3. **`ApiRoutes` now owns three route questions**: `IsHealth`, `IsIdempotent`, `ScopeFor`. Add route policy there,
+   not scattered through middleware.
+4. **`Paths:ApiBatches` holds per-batch evidence and `idempotency.json`.** It grows without bound (Q-52).
 
-| # | In one line |
-|---|---|
-| Q-46 | May we add `Scalar.AspNetCore`? **Blocks T-913** |
-| Q-58 | The caller's payee is honoured on a numbered check, where FR-6 leaves it blank. Right? |
-| Q-59 | FR-A-8 mentions posting a `ready` batch later; that route was not built (re-send with `dryRun:false` instead) |
-| Q-60 | A non-2xx **releases** an idempotency key, so a corrected resend works. Right? |
-| Q-61 | **Health routes now need a key** (api-v1 §2.2 over spec.md §6). The owner's monitoring must be told |
+## 8. Handover note format
 
-Q-1…Q-45 from earlier milestones are **still unanswered**; Q-27 and Q-37 matter before any real posting.
+End your session with exactly this, and nothing after it:
 
-## 9. Waiting on the server (a person, not an agent)
+```
+TASK DONE: T-9xx — <one line>
+TESTS: Core <n>, Api <n>, green twice. Build: 0 warnings.
+PUSHED: <commit sha> to origin/m9-api-v1
+NEXT: T-9xx (see handoff.md §3)
+BLOCKED/NEW QUESTIONS: <Q-nn one-liners, or "none">
+FOR THE HUMAN: <anything the owner must decide or do on the server, or "nothing">
+```
 
-- **T-903 checklist** (8 items, in the tracker) and the **T-904/T-905 confirmations**, unchanged from session 14.
-- **New**: nothing in T-907…T-910 has met a real QuickBooks. The direct-post path needs its own server checklist
-  before T-804 go-live — a dry run, then one real batch, then an undo of it.
-- Still open from M8: T-802 dry run, T-803 shadow week, T-804 go-live, and finishing the POC post/undo.
+If you could **not** finish, say so plainly instead:
 
-## 10. Housekeeping
+```
+TASK NOT DONE: T-9xx — stopped at <what> because <why>
+STATE: <what is committed, what is half-done, what is safe to delete>
+NEXT AGENT SHOULD: <the single next action>
+```
 
-- `main` is untouched; `m9-api-v1` is **not pushed**. Twenty commits now sit only on this machine — worth deciding.
-- Every M9 task has a `docs/testing/T-9xx.tdd.md` with a "what this does not prove" section. Keep it honest; it is
-  the only record of which claims are actually tested.
-- `docs/spec-api-v1.md` FR-A-4 was amended in session 14. §2.2 was **not** amended this session — the code follows it
-  and `docs/spec.md` §6 is now the stale one. If the owner answers Q-61 the other way, the spec needs the edit, not
-  a quiet code change.
+## 9. The final report (last agent only)
+
+When T-914 is done, do not start anything else. Write `docs/M9-COMPLETE.md` with: what M9 delivered route by
+route; the full list of open questions with the conservative behaviour each one currently has; **everything that
+needs the owner or the server**, including the T-903 checklist, T-802/803/804, and a new direct-post server
+checklist (dry run → one real batch → undo it); and an honest list of what is implemented but never run against a
+real QuickBooks — which, today, is all of T-907…T-910.
+
+## 10. What no agent can do
+
+The server-verification work needs a person at the QuickBooks machine and **must not be attempted or claimed**:
+T-903's 8-item SDK checklist; the T-904/T-905 confirmations; T-802 dry run, T-803 shadow week, T-804 go-live;
+finishing the POC post/undo; and the direct-post checklist above. Leave them `ready-for-human` and describe
+exactly what a person should do.
