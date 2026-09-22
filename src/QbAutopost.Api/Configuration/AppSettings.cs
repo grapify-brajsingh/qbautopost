@@ -44,6 +44,9 @@ public sealed class ApiSettings
     /// use is logged. Set false once no caller uses them (Q-53), after which they are deleted.
     /// </summary>
     public bool LegacyRoutes { get; set; } = true;
+
+    /// <summary>FR-A-4: the largest <c>timeoutSeconds</c> a caller may ask for; above it the request is a 400.</summary>
+    public int MaxConnectionTestTimeoutSeconds { get; set; } = 600;
 }
 
 public sealed class CompanySettings
@@ -70,6 +73,22 @@ public sealed class QuickBooksSettings
 
     /// <summary>FR-11 pause before the one retry (5 s). Configurable only so tests do not wait.</summary>
     public double RetryDelaySeconds { get; set; } = 5;
+
+    /// <summary>
+    /// T-904 / FR-A-4: budget for <c>POST /quickbooks/connection/test</c>, deliberately longer than
+    /// <see cref="BusyTimeoutSeconds"/>. On the owner's server the certificate dialog held the first call 101 s, past
+    /// the 60 s busy timeout, so the connection looked broken while the session was in fact fine.
+    /// </summary>
+    public int ConnectionTestTimeoutSeconds { get; set; } = 180;
+
+    /// <summary>
+    /// T-904 / Q-50: may a request name its own company file? Default false — one installation serves one company
+    /// (Q-44), and an override would post into another company file without anyone choosing that.
+    /// </summary>
+    public bool AllowCompanyFileOverride { get; set; }
+
+    /// <summary>Folders an overridden company file must sit inside, when the override is allowed at all.</summary>
+    public IList<string> AllowedCompanyFolders { get; set; } = [];
 }
 
 public sealed class HermesSettings

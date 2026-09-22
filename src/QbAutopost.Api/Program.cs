@@ -101,18 +101,33 @@ builder.Services.AddSingleton<IQbSdkProbe>(sp =>
         ? new QbSdkProbe(s.QuickBooks.QbXmlVersion)
         : new UnavailableQbSdkProbe(s.QuickBooks.QbXmlVersion, $"the QuickBooks gateway is {mode.ToString().ToLowerInvariant()}, not the Desktop SDK");
 });
-builder.Services.AddSingleton<IQbGateway>(sp =>
+// One instance, registered twice: the interface for everything that posts, the concrete type for the connection test
+// (FR-A-4 needs its own timeout and the lock-wait event). Two instances would mean two locks and two sessions.
+builder.Services.AddSingleton(sp =>
 {
     var qb = sp.GetRequiredService<IOptions<AppSettings>>().Value.QuickBooks;
     var busyTimeout = TimeSpan.FromSeconds(qb.BusyTimeoutSeconds);
     var logged = new LoggingQbGateway(
         sp.GetRequiredService<QbConnection>().Gateway, sp.GetRequiredService<ILogger<LoggingQbGateway>>(), busyTimeout);
-    return new ResilientQbGateway(logged, new QbGatewayPolicy
+    var gateway = new ResilientQbGateway(logged, new QbGatewayPolicy
     {
         BusyTimeout = busyTimeout,
         RetryDelay = TimeSpan.FromSeconds(qb.RetryDelaySeconds),
     });
+    // T-904 (server defect 2): the log was silent while a call queued behind another, so a wait looked like a slow
+    // QuickBooks. Below a second it is noise, so only a real wait is reported.
+    var waitLog = sp.GetRequiredService<ILoggerFactory>().CreateLogger("QbAutopost.Core.Gateway.ResilientQbGateway");
+    gateway.Waited += waited =>
+    {
+        if (waited > TimeSpan.FromSeconds(1))
+        {
+            waitLog.LogInformation("Waiting for QuickBooks: {WaitMs} ms behind another call", (long)waited.TotalMilliseconds);
+        }
+    };
+    return gateway;
 });
+builder.Services.AddSingleton<IQbGateway>(sp => sp.GetRequiredService<ResilientQbGateway>());
+builder.Services.AddSingleton<QbConnectionCheck>();
 builder.Services.AddSingleton(sp =>
 {
     var s = sp.GetRequiredService<IOptions<AppSettings>>().Value;
