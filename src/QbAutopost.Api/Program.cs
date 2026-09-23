@@ -240,6 +240,17 @@ try
 
     RequireApiKey(app);
 
+    // FR-A-18 ships "send request" off so a reader of the documentation is never one click from posting a live
+    // transaction. The owner turned it on (2026-09-24), which is the deliberate act that requirement asks for — so
+    // the server says so at startup, the way Api:AllowInsecureRemote does.
+    if (settings.Api.Reference.Enabled && settings.Api.Reference.AllowTryIt)
+    {
+        app.Logger.LogWarning(
+            "The API reference at {Path} can SEND LIVE REQUESTS (Api:Reference:AllowTryIt is true). A reader holding a "
+            + "valid key is one click from posting a transaction. Set it false on any machine where that is not acceptable.",
+            ApiRoutes.V1Prefix + ApiRoutes.ReferencePath);
+    }
+
     // T-918 (Q-66): Development serves the documentation without a key, so an operator who has set the environment
     // wrongly on a real machine is told once, loudly, rather than discovering it from someone else's browser.
     if (settings.Api.Reference.Enabled && app.Environment.IsDevelopment())
