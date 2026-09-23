@@ -47,7 +47,7 @@ public interface IClock        { DateTime UtcNow { get; } DateOnly Today { get; 
 ```
 
 NuGet (only these): `PdfPig`, `ClosedXML`, `Serilog.AspNetCore`, `Serilog.Sinks.File`, `Tesseract` (optional, M3, behind `Ocr.Enabled`), `Microsoft.AspNetCore.Mvc.Testing` (tests).
-M9 asks for one more, `Scalar.AspNetCore`, for the reference UI only — **pending Q-46**, and it buys nothing else: the OpenAPI document is hand-authored and drift-tested. `Swashbuckle.AspNetCore` is **excluded by the owner** (2026-09-22), as a UI and as a generator. Everything else M9 needs (rate limiting, TLS, CORS, static files) is in the ASP.NET Core 8 shared framework.
+M9 asks for one more, `Scalar.AspNetCore`, for the reference UI only — **approved by the owner on 2026-09-23 (Q-46)** and referenced in `src/QbAutopost.Api/QbAutopost.Api.csproj` at version 2.13.13, and it buys nothing else: the OpenAPI document is hand-authored and drift-tested. `Swashbuckle.AspNetCore` is **excluded by the owner** (2026-09-22), as a UI and as a generator. Everything else M9 needs (rate limiting, TLS, CORS, static files) is in the ASP.NET Core 8 shared framework.
 
 ## 2. Milestones
 

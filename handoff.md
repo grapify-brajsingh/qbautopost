@@ -1,11 +1,13 @@
 # Session Handoff — QbAutopost
 
 **This is an unattended relay. The owner is away and will answer nothing mid-run.**
-Written: 2026-09-23 (session 19) · **M9 (API v1): 14 of 14 done**, branch `m9-api-v1` · **Next: the final report (§9). Nothing else.**
+Written: 2026-09-23 · **M9 (API v1): 14 of 14 done and the final report written**, branch `m9-api-v1`
+· **There is nothing left for an agent. The relay is over.**
 
-> **If you are an agent starting fresh: read §0, do the one task named in §3 as "NEXT", then §5 before you finish.**
-> Do not read ahead and do not do two tasks. The next agent has no memory of you — this file is the only thing
-> that carries forward, so leaving it accurate is part of the task, not paperwork after it.
+> **If you are an agent starting fresh: there is no task for you here.** §3 is empty. Everything that remains is in
+> §10 — server verification on the QuickBooks machine — and it needs a person, not an agent. Read
+> `docs/M9-COMPLETE.md` (§3 consolidates every server and owner item, §4 is the honest list of what has never run
+> against a real QuickBooks) and then stop. Do **not** start M10; the owner decided the run stops at the end of M9.
 
 ---
 
@@ -64,29 +66,34 @@ The usual rules (`CLAUDE.md`) all still apply. These matter more when nobody is 
 | Item | State |
 |---|---|
 | Repo | `D:\qb_post`, branch **`m9-api-v1`**, tracking `origin/m9-api-v1` (pushed 2026-09-23; credentials cached, so `git push` works unattended) |
-| Build | `dotnet build -warnaserror` → 0 warnings |
-| Tests | **Core 859, Api 487** (1346), green twice on Windows |
-| Milestones | M0–M7 done; M8 agent work done (`ready-for-human`); **M9 14/14 — the agent work of M9 is finished** |
-| Packages | **7**: the six plus `Scalar.AspNetCore` **2.13.13**, added by T-913 under Q-46. That is the whole allowance — the final report needs no package |
-| Owner | **Away. Answers nothing.** Q-1…Q-45, Q-47…Q-61, Q-63…Q-70 outstanding; each already has a conservative behaviour. **Q-62 is answered** (see §7b) |
+| Build | `dotnet build -warnaserror` → **Build succeeded. 0 Warning(s), 0 Error(s)** — measured 2026-09-23 after the final-report commit |
+| Tests | `dotnet test` → **Core 859 passed / 0 failed / 0 skipped · Api 487 passed / 0 failed / 0 skipped** (1346 total) — measured 2026-09-23 on Windows after the final-report commit. That commit touched documentation only, so this is a regression check, not new coverage |
+| Milestones | M0–M7 done; M8 agent work done (`ready-for-human`); **M9 complete: 14/14 rows (13 `done`, T-903 `ready-for-human`) and `docs/M9-COMPLETE.md` written** |
+| Packages | **7**: the six plus `Scalar.AspNetCore` **2.13.13**, added by T-913 under Q-46. That is the whole allowance, and nothing remaining needs a package |
+| Owner | **Away. Answers nothing.** 68 questions outstanding — Q-1…Q-45, Q-47…Q-61, Q-63…Q-70 — each with a conservative behaviour, all listed with that behaviour in `docs/M9-COMPLETE.md` §2. **Answered: Q-0, Q-46 (owner, yes), Q-62 (by T-912)** |
 
 ## 3. The task queue
 
+**Empty. There is no task here for an agent.**
+
 | Task | Status | One line |
 |---|---|---|
-| T-901…T-914 | **done** | Routes, health, SDK probe, connection test, company-file validate, direct model, validate, post, idempotency, clients+scopes, transport+limits+input hardening, audit trail + `requestId`, OpenAPI document + Scalar reference, the list/validate routes + the documentation catch-up |
-| **The final report** | **NEXT** | Write `docs/M9-COMPLETE.md` exactly as §9 describes. Nothing else — see §4 |
-| *(then)* | **STOP** | Do not start M10. Do not attempt the server tasks (§10) |
+| T-901…T-914 | **done** (T-903 `ready-for-human`) | Routes, health, SDK probe, connection test, company-file validate, direct model, validate, post, idempotency, clients+scopes, transport+limits+input hardening, audit trail + `requestId`, OpenAPI document + Scalar reference, the list/validate routes + the documentation catch-up |
+| The final report | **done** | `docs/M9-COMPLETE.md` — routes, the 68 open questions with today's behaviour, everything needing the owner or the server, and what has never met a real QuickBooks |
+| *(nothing follows)* | **STOP** | Do not start M10 (owner decision, Decisions table). Do not attempt or claim the §10 server tasks |
 
-## 4. The last task, in detail
+## 4. What is left, and who does it
 
-**There is no code task left in M9.** T-914 closed it. The one thing left for an agent is the report in §9, and
-§9 says exactly what goes in it. Read `docs/tracker.md` (the M9 rows T-901…T-914, the Questions table, the T-903
-and T-609 checklists) and `docs/testing/T-9*.tdd.md` §8/§9 — the "what this does not prove" sections are the honest
-list the report's last part asks for, already written, one per task.
+**The remaining work is the §10 server verification, and it needs a person at the QuickBooks machine.** No agent can
+do it, and no agent may claim it. It is: T-903's 8-item SDK checklist, T-609's round trip on a copy of the company
+file, T-802's deploy and auto-start dry run, T-803's shadow week, T-804's go-live, T-806's POC company and IIF
+import, the new direct-post checklist (dry run → one real batch → undo it), and the TLS/transport checks T-911 could
+not make (no certificate has ever been loaded, no HSTS header ever emitted, `AddServerHeader` unverified on a real
+socket, no production rate limit has ever throttled anything).
 
-Do **not** treat the report as an excuse to touch code. If you find something wrong while writing it, record it as
-a question in the tracker and say so in the report; fixing it is the next task, not this one.
+All of it, with the owner decisions that have to land first, is consolidated in **`docs/M9-COMPLETE.md` §3**, and
+what has never run against a real QuickBooks — all of T-907…T-914, plus T-903's COM probe — is **§4** of that file.
+Start there rather than reassembling it from the tracker.
 
 *(Route policy — `IsHealth`, `IsIdempotent`, `IsMutating`, `IsReference`, `ScopeFor` — all lives in
 `Api/Endpoints/ApiRoutes.cs`; startup rules live in `Api/Security/TransportGuard.cs` as pure functions.)*
@@ -297,9 +304,13 @@ STATE: <what is committed, what is half-done, what is safe to delete>
 NEXT AGENT SHOULD: <the single next action>
 ```
 
-## 9. The final report (last agent only — that is you)
+## 9. The final report — **DONE, 2026-09-23**
 
-T-914 is done, so this is the whole remaining job. Write `docs/M9-COMPLETE.md` with: what M9 delivered route by
+`docs/M9-COMPLETE.md` is written. It contains all four parts asked for below, plus the two session-19 findings
+(Q-61 and Q-67) in its §3.6 "decisions the owner has to make before this build is deployed". Nothing here is
+outstanding; the brief is kept for the record.
+
+*(Original brief.)* T-914 is done, so this is the whole remaining job. Write `docs/M9-COMPLETE.md` with: what M9 delivered route by
 route; the full list of open questions (**Q-1…Q-70**, minus the answered Q-46 and Q-62) with the conservative
 behaviour each one currently has; **everything that needs the owner or the server**, including the T-903
 checklist, T-802/803/804, and a new direct-post server checklist (dry run → one real batch → undo it); and an
