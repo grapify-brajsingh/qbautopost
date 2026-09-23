@@ -240,6 +240,16 @@ try
 
     RequireApiKey(app);
 
+    // T-918 (Q-66): Development serves the documentation without a key, so an operator who has set the environment
+    // wrongly on a real machine is told once, loudly, rather than discovering it from someone else's browser.
+    if (settings.Api.Reference.Enabled && app.Environment.IsDevelopment())
+    {
+        app.Logger.LogWarning(
+            "The API reference at {Path} and the OpenAPI document are served WITHOUT a key because the environment is Development. "
+            + "It lists every route, scope and request shape. Set ASPNETCORE_ENVIRONMENT to Production on a real server.",
+            ApiRoutes.V1Prefix + ApiRoutes.ReferencePath);
+    }
+
     // T-911 (FR-A-14): refuse to serve a configuration that would expose keys and amounts, before a socket is opened.
     foreach (var warning in TransportGuard
                  .Require(settings.Api, settings.Paths, TransportGuard.CameFromFile(app.Configuration, "Api:Tls:PfxPassword"))

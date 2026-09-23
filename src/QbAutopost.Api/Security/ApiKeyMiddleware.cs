@@ -33,10 +33,11 @@ public sealed class ApiKeyMiddleware(RequestDelegate next, IOptions<AppSettings>
         ApiClientResolver clients,
         IClock clock,
         AuthBrake brake,
+        IHostEnvironment environment,
         IProblemDetailsService problems,
         ILogger<ApiKeyMiddleware> log)
     {
-        var scope = ApiRoutes.ScopeFor(context.Request.Method, context.Request.Path);
+        var scope = ApiRoutes.ScopeFor(context.Request.Method, context.Request.Path, environment.IsDevelopment());
         if (scope is null)
         {
             // Liveness and readiness carry no key, so there is no key here to guess; applying the brake would only

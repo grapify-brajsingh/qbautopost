@@ -95,7 +95,7 @@ public static class ApiRoutes
     /// failure everybody survives.
     /// </para>
     /// </summary>
-    public static string? ScopeFor(string method, PathString path)
+    public static string? ScopeFor(string method, PathString path, bool isDevelopment = false)
     {
         if (!path.HasValue)
         {
@@ -103,12 +103,18 @@ public static class ApiRoutes
         }
 
         // T-913 (FR-A-18): the documentation, before the prefix is stripped — it exists on the versioned surface
-        // only. api-v1 asks for health:read "in Production"; this asks for it everywhere, because a page that lists
-        // every route, every scope and every request shape is not something to hand out by environment.
-        // SPEC-GAP T-913 (Q-66): the stricter reading, as rule 4 requires when the spec allows two.
+        // only. T-913 asked for health:read in every environment, the stricter of the two readings the spec allows.
+        //
+        // T-918 (Q-66, ANSWERED by the owner 2026-09-23): the spec's literal rule instead — health:read "in
+        // Production", nothing in Development. The strictness had a cost Q-66 had already written down and the live
+        // run then confirmed: the key travels in a header, so a browser cannot attach it, and the one page whose
+        // entire purpose is to be opened in a browser answered 401 to every browser. Development is the developer's
+        // own machine, and TransportGuard still refuses a non-loopback bind there without TLS.
+        //
+        // This opens the documentation and nothing else: every other route keeps its scope in every environment.
         if (IsReference(path))
         {
-            return ApiScopes.HealthRead;
+            return isDevelopment ? null : ApiScopes.HealthRead;
         }
 
         var p = Flat(path.Value!).TrimEnd('/');
