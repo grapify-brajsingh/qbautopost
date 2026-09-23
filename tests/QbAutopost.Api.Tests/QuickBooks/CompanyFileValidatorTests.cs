@@ -152,6 +152,65 @@ public sealed class CompanyFileValidatorTests : IDisposable
         Assert.True(result.Ok);
     }
 
+    /// <summary>
+    /// SPEC-GAP T-917 / Q-72: FR-A-5's example request carries <c>requireBackup: true</c> and the spec never says
+    /// what it does. It was read by nothing at all until now. The conservative reading — the only one that makes the
+    /// flag mean anything — is that a caller asking for a backup is told <b>no</b> when there is not a fresh one,
+    /// rather than handed a warning they have to notice.
+    /// </summary>
+    [Fact]
+    public async Task Should_FailTheValidation_When_TheBackupIsStaleAndTheCallerRequiredOne()
+    {
+        var file = CompanyFile();
+        var backups = _dir.Combine("backups");
+        Directory.CreateDirectory(backups);
+        var backup = Path.Combine(backups, "Tropicana.QBB");
+        File.WriteAllText(backup, "old backup");
+        File.SetLastWriteTimeUtc(backup, DateTime.UtcNow.AddHours(-52));
+        var validator = Build(new StubGateway(file), backups);
+
+        var result = await validator.ValidateAsync(file, requireBackup: true, CancellationToken.None);
+
+        var backupCheck = Check(result, "backupFreshness");
+        Assert.False(backupCheck.Ok);
+        Assert.Equal(CompanyFileValidator.Error, backupCheck.Severity);
+        Assert.False(result.Ok);
+    }
+
+    [Fact]
+    public async Task Should_StayOk_When_TheBackupIsFreshAndTheCallerRequiredOne()
+    {
+        var file = CompanyFile();
+        var backups = _dir.Combine("backups");
+        Directory.CreateDirectory(backups);
+        File.WriteAllText(Path.Combine(backups, "Tropicana.QBB"), "fresh backup");
+        var validator = Build(new StubGateway(file), backups);
+
+        var result = await validator.ValidateAsync(file, requireBackup: true, CancellationToken.None);
+
+        // Raising the severity must not change the verdict when the check passes.
+        Assert.Equal(CompanyFileValidator.Error, Check(result, "backupFreshness").Severity);
+        Assert.True(result.Ok);
+    }
+
+    /// <summary>
+    /// The riskiest case, and the reason this is an error rather than a warning: a caller who requires a backup and
+    /// has configured no backup folder must not be told everything is fine.
+    /// </summary>
+    [Fact]
+    public async Task Should_FailTheValidation_When_NoBackupFolderIsConfiguredAndTheCallerRequiredOne()
+    {
+        var file = CompanyFile();
+        var validator = Build(new StubGateway(file));
+
+        var result = await validator.ValidateAsync(file, requireBackup: true, CancellationToken.None);
+
+        var backupCheck = Check(result, "backupFreshness");
+        Assert.False(backupCheck.Ok);
+        Assert.Equal(CompanyFileValidator.Error, backupCheck.Severity);
+        Assert.False(result.Ok);
+    }
+
     [Fact]
     public async Task Should_ReportUnavailable_When_QuickBooksCannotBeReached()
     {

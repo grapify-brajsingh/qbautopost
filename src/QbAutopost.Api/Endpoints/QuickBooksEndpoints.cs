@@ -221,7 +221,8 @@ public static class QuickBooksEndpoints
         CompanyFileValidation result;
         try
         {
-            result = await validator.ValidateAsync(companyFile, ct);
+            // T-917: the caller's requireBackup reaches the validator. Until now it was accepted and dropped.
+            result = await validator.ValidateAsync(companyFile, request?.RequireBackup == true, ct);
         }
         catch (Exception ex) when (QuickBooksProblem(ex) is { } problem)
         {

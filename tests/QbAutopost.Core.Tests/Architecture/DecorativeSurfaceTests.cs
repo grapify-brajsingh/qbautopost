@@ -46,6 +46,9 @@ public sealed class DecorativeSurfaceTests
         Assert.Empty(unread);
     }
 
+    // T-917 extends this rule to the request bodies the endpoints declare; those types live in the Api assembly,
+    // which Core.Tests does not reference, so that guard is Api.Tests/Hardening/EndpointSurfaceTests.cs.
+
     [Fact]
     public void Should_UseEveryScope_When_ScanningProductionSources()
     {

@@ -27,7 +27,11 @@ public sealed class CompanyFileValidator(PipelineOptions options, IQbGateway gat
 
     private const string Extension = ".QBW";
 
-    public async Task<CompanyFileValidation> ValidateAsync(string? companyFile, CancellationToken ct)
+    public async Task<CompanyFileValidation> ValidateAsync(string? companyFile, CancellationToken ct) =>
+        await ValidateAsync(companyFile, requireBackup: false, ct);
+
+    /// <inheritdoc cref="ValidateAsync(string?, CancellationToken)"/>
+    public async Task<CompanyFileValidation> ValidateAsync(string? companyFile, bool requireBackup, CancellationToken ct)
     {
         var checks = new List<CompanyFileCheck>();
         if (string.IsNullOrWhiteSpace(companyFile))
@@ -60,7 +64,7 @@ public sealed class CompanyFileValidator(PipelineOptions options, IQbGateway gat
         }
 
         checks.Add(await OpenInQuickBooksAsync(full, ct));
-        checks.Add(Backup());
+        checks.Add(Backup(requireBackup));
         checks.Add(ListsSynced());
         return Result(checks, full);
     }
@@ -134,20 +138,37 @@ public sealed class CompanyFileValidator(PipelineOptions options, IQbGateway gat
     }
 
     /// <summary>
-    /// FR-11's own guard, so validating and posting can never disagree about the same backup. A warning here: posting
+    /// FR-11's own guard, so validating and posting can never disagree about the same backup. A warning by default: posting
     /// still refuses outright, and this call must not become the thing that blesses a stale backup.
     /// </summary>
-    private CompanyFileCheck Backup()
+    /// <param name="requireBackup">
+    /// SPEC-GAP T-917 / Q-72: FR-A-5's example request carries <c>requireBackup</c> and the spec never says what it
+    /// does; until T-917 it was read by nothing. The only reading that makes the flag mean anything is that the
+    /// caller is told <b>no</b> when there is no fresh backup, rather than handed a warning they have to notice — so
+    /// it raises this one check from <see cref="Warning"/> to <see cref="Error"/>, which makes <c>ok</c> false.
+    /// <para>
+    /// An unset <c>QuickBooks:BackupFolder</c> then fails too. "I cannot check" is not "yes" to somebody who asked
+    /// for a guarantee, and it is the case most likely to be wrong on a fresh install.
+    /// </para>
+    /// </param>
+    private CompanyFileCheck Backup(bool requireBackup)
     {
+        var severity = requireBackup ? Error : Warning;
         if (string.IsNullOrWhiteSpace(options.BackupFolder))
         {
-            return new CompanyFileCheck("backupFreshness", true, Warning, "QuickBooks:BackupFolder is not set; backup age is not checked");
+            return new CompanyFileCheck(
+                "backupFreshness",
+                !requireBackup,
+                severity,
+                requireBackup
+                    ? "requireBackup was asked for but QuickBooks:BackupFolder is not set, so no backup can be confirmed"
+                    : "QuickBooks:BackupFolder is not set; backup age is not checked");
         }
 
         var problem = BackupGuard.Check(options.BackupFolder, options.BackupMaxAgeHours, DateTime.UtcNow);
         return problem is null
-            ? new CompanyFileCheck("backupFreshness", true, Warning, $"a .QBB newer than {options.BackupMaxAgeHours} h is present")
-            : new CompanyFileCheck("backupFreshness", false, Warning, problem);
+            ? new CompanyFileCheck("backupFreshness", true, severity, $"a .QBB newer than {options.BackupMaxAgeHours} h is present")
+            : new CompanyFileCheck("backupFreshness", false, severity, problem);
     }
 
     private CompanyFileCheck ListsSynced() =>

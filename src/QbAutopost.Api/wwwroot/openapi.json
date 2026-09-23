@@ -769,7 +769,7 @@
         "type": "object",
         "properties": {
           "companyFile": { "type": "string", "nullable": true },
-          "requireBackup": { "type": "boolean", "nullable": true }
+          "requireBackup": { "type": "boolean", "nullable": true, "default": false, "description": "Ask for a guarantee rather than a warning (T-917). `true` raises the `backupFreshness` check from warning to error, so a stale backup — or a server with no `QuickBooks:BackupFolder` configured, which cannot confirm one — makes `ok` false and the response 422. What the flag should mean was never specified; see Q-72." }
         }
       },
       "CompanyFileValidation": {
