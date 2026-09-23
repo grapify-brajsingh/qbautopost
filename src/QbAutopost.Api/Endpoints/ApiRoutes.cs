@@ -44,6 +44,31 @@ public static class ApiRoutes
     }
 
     /// <summary>
+    /// T-912 (FR-A-16): the routes whose answer changes something, and which therefore leave an audit line.
+    /// <para>
+    /// A safe method never does. Three POSTs do not either, and they are named rather than inferred: a validate, a
+    /// connection test and a company-file check all answer questions without writing anything, and burying the
+    /// postings among them would make the audit file harder to read, not safer. A route nobody has listed is
+    /// audited — the same way <see cref="ScopeFor"/> closes an unmapped route rather than opening it.
+    /// </para>
+    /// </summary>
+    public static bool IsMutating(string method, PathString path)
+    {
+        if (HttpMethods.IsGet(method) || HttpMethods.IsHead(method) || HttpMethods.IsOptions(method))
+        {
+            return false;
+        }
+
+        if (!path.HasValue)
+        {
+            return true;
+        }
+
+        var p = Flat(path.Value!).TrimEnd('/');
+        return !ReadOnlyPosts.Contains(p);
+    }
+
+    /// <summary>
     /// T-910 (FR-A-13): the scope a route needs, or null when it needs no key at all (liveness and readiness).
     /// <para>
     /// Scopes name what a caller may <i>do</i>, so the mapping is by effect, not by URL shape: anything that sends a
@@ -105,6 +130,15 @@ public static class ApiRoutes
         path.StartsWith(V1Prefix, Ordinal) ? path[V1Prefix.Length..] : path;
 
     private const StringComparison Ordinal = StringComparison.OrdinalIgnoreCase;
+
+    /// <summary>The POSTs that answer a question without changing anything (see <see cref="IsMutating"/>).</summary>
+    private static readonly HashSet<string> ReadOnlyPosts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "/quickbooks/transactions/validate",
+        "/quickbooks/connection/test",
+        "/quickbooks/company-file/validate",
+        "/jobs/validate",
+    };
 
     /// <summary>True for the flat path and its <c>/api/v1</c> form, and for neither of their longer relatives.</summary>
     private static bool Is(string path, string route) =>

@@ -1,7 +1,7 @@
 # Session Handoff — QbAutopost
 
 **This is an unattended relay. The owner is away and will answer nothing mid-run.**
-Written: 2026-09-23 (session 16) · **M9 (API v1): 11 of 14 done**, branch `m9-api-v1` · **Next task: T-912.**
+Written: 2026-09-23 (session 17) · **M9 (API v1): 12 of 14 done**, branch `m9-api-v1` · **Next task: T-913.**
 
 > **If you are an agent starting fresh: read §0, do the one task named in §3 as "NEXT", then §5 before you finish.**
 > Do not read ahead and do not do two tasks. The next agent has no memory of you — this file is the only thing
@@ -65,33 +65,26 @@ The usual rules (`CLAUDE.md`) all still apply. These matter more when nobody is 
 |---|---|
 | Repo | `D:\qb_post`, branch **`m9-api-v1`**, tracking `origin/m9-api-v1` (pushed 2026-09-23; credentials cached, so `git push` works unattended) |
 | Build | `dotnet build -warnaserror` → 0 warnings |
-| Tests | **Core 834, Api 405** (1239), green twice on Windows |
-| Milestones | M0–M7 done; M8 agent work done (`ready-for-human`); **M9 11/14** |
-| Packages | 6 + `Scalar.AspNetCore` **approved** for T-913 (Q-46 answered 2026-09-23). T-911 added **no** package — the limiter is shared framework |
-| Owner | **Away. Answers nothing.** Q-1…Q-45, Q-47…Q-63 outstanding; each already has a conservative behaviour |
+| Tests | **Core 834, Api 447** (1281), green twice on Windows |
+| Milestones | M0–M7 done; M8 agent work done (`ready-for-human`); **M9 12/14** |
+| Packages | 6 + `Scalar.AspNetCore` **approved** for T-913 (Q-46 answered 2026-09-23). T-911 and T-912 added **no** package |
+| Owner | **Away. Answers nothing.** Q-1…Q-45, Q-47…Q-61, Q-63…Q-65 outstanding; each already has a conservative behaviour. **Q-62 is answered** (see §7b) |
 
 ## 3. The task queue
 
 | Task | Status | One line |
 |---|---|---|
-| T-901…T-911 | **done** | Routes, health, SDK probe, connection test, company-file validate, direct model, validate, post, idempotency, clients+scopes, transport+limits+input hardening |
-| **T-912** | **NEXT** | FR-A-16 audit trail (`audit-yyyyMMdd.jsonl`) + the `requestId` of §2.6, which does not exist yet — see §4 |
-| T-913 | queued | FR-A-18 OpenAPI document + Scalar reference UI. **Unblocked**: the package is approved |
+| T-901…T-912 | **done** | Routes, health, SDK probe, connection test, company-file validate, direct model, validate, post, idempotency, clients+scopes, transport+limits+input hardening, audit trail + `requestId` |
+| **T-913** | **NEXT** | FR-A-18 OpenAPI document + Scalar reference UI. **Unblocked**: the package is approved — see §4 |
 | T-914 | queued | Move docs, runbook and the POC package to the v1 routes and the new auth rules |
 | *(then)* | **STOP** | Write the final report (§9). Do not start M10. Do not attempt the server tasks |
 
 ## 4. The next three tasks, in detail
 
-*(T-911 is done. Its shape is worth one line before you read on: the startup rules live in
-`Api/Security/TransportGuard.cs` as pure functions, not inline in `Program.cs`, so they are testable — copy that if
-T-912 adds any startup decision of its own.)*
-
-**T-912 — FR-A-16 audit.** One JSON line per authenticated mutating request to `Paths:Logs/audit-yyyyMMdd.jsonl`:
-`utc, requestId, clientId, remoteIp, method, path, idempotencyKey, outcome, status, batchId, jobId, counts,
-totalAmount`. **Never the key, never the body, never statement text.** Retention `Api:AuditRetentionDays` (400 —
-longer than the 31-day operational log, because this is money evidence). §2.6's `requestId` does not exist yet;
-this is the place to add it (26-char sortable, echoed as `X-Request-Id`, honoured inbound when it matches
-`^[A-Za-z0-9_-]{8,64}$`).
+*(T-911 and T-912 are done. Two shapes worth one line each before you read on: startup rules live in
+`Api/Security/TransportGuard.cs` as pure functions, not inline in `Program.cs`, so they are testable; and route
+policy — `IsHealth`, `IsIdempotent`, `IsMutating`, `ScopeFor` — all lives in `Api/Endpoints/ApiRoutes.cs`. **T-913's
+drift test will need a fifth question answered there or nearby, not in a new place.**)*
 
 **T-913 — FR-A-18.** Two separate things on purpose: the **document** (`GET /api/v1/openapi.json`, hand-authored,
 with a drift test that fails when a route exists without a matching entry) and the **UI** (`GET /api/v1/reference`,
@@ -145,9 +138,41 @@ Scalar, behind `Api:Reference:Enabled` default **false**). Swagger/Swashbuckle s
     brute-force brake (`Api/Security/AuthBrake.cs`) is separate and lives inside `ApiKeyMiddleware`. If T-912's audit
     must record refused requests, remember it has the same problem: the audit middleware cannot sit behind a check
     that returns early.
-18. **`Q-62` is an unexplained single test failure** — one run reported `Failed: 1, Passed: 404` and it did not
-    recur in 11 more runs; the name was not captured. If you see a one-off failure, **capture the name** before
-    re-running, and update Q-62 with it.
+18. ~~**`Q-62` is an unexplained single test failure**~~ **Answered in session 17** — it was teardown, not the
+    application: `TempDir.Dispose` deleted its folder while Serilog still held `qbautopost-yyyyMMdd.log`, so a test
+    that had already passed failed in its own `Dispose`. `TempDir.Dispose` now retries for a second. If you see a
+    *different* one-off failure, still capture the name before re-running.
+19. **The audit middleware sits in FRONT of `ApiKeyMiddleware`** (see trap 17 for why) and **buffers the response**
+    of every mutating request so it can read `batchId`/`counts` back out of it. Two middlewares now buffer the
+    response on a post: this one and `IdempotencyMiddleware` inside it. If you add a route that streams a body
+    rather than returning JSON, it will be buffered — add it to `ApiRoutes.ReadOnlyPosts` or teach the audit to skip
+    it, and say so in the tracker.
+20. **The log output template now has three columns, not one**: `[{jobId}] [{requestId}] [{clientId}]`. A test that
+    greps a whole bracketed column (`LoggingApiTests` does, for `[2026-08-tropicana]`) still works; a test that
+    matched the old prefix character-for-character would not. Nothing in the suite did.
+21. **`Paths:Logs` now holds two kinds of file**: `qbautopost-*.log` and `audit-*.jsonl`. Anything that enumerates
+    that folder must filter — `AuditLog.Sweep` deletes only files it could have written itself, and `LoggingApiTests`
+    filters by prefix.
+
+## 7b. What changed underneath you in session 17 (T-912)
+
+1. **Every request now has an id before anything else runs.** `RequestIdMiddleware` is the **first** middleware,
+   ahead of `UseExceptionHandler`. It sets `X-Request-Id` through `OnStarting`, pushes `requestId` onto Serilog's
+   `LogContext`, and `Program.cs`'s `AddProblemDetails` adds it to every problem detail. If you add a middleware in
+   front of it, those three stop being true for whatever it answers.
+2. **`ApiKeyMiddleware` pushes `clientId` onto `LogContext`** as soon as a caller resolves — before the CIDR and
+   scope checks, so the two 403 log lines name the client. The per-request line gets it instead from
+   `RequestLog.EnrichDiagnosticContext`, because that line is written after the push has gone.
+3. **`ApiRoutes.IsMutating`** is the new route question, and `ApiRoutes.ReadOnlyPosts` is the list of POSTs that
+   change nothing (`…/transactions/validate`, `…/connection/test`, `…/company-file/validate`, `/jobs/validate`). An
+   unlisted route **is** audited — closed by default, like `ScopeFor`.
+4. **New config: `Api:AuditRetentionDays`** (400) in `appsettings.json`. Zero or less means *keep everything*, not
+   *keep nothing*. `AuditLog` is a singleton built from `Paths:Logs`, which `ApiFactory` already pins, so trap 4
+   does not bite — but if you add a path setting of your own, pin it.
+5. **`TempDir.Dispose` retries.** See trap 18. It is the only existing test file this session touched, and only its
+   teardown.
+6. **Two new SPEC-GAPs, Q-64 and Q-65**, both about what FR-A-16 leaves undefined: an unknown key is not audited,
+   and `outcome`/`totalAmount` were given meanings (`totalAmount` = `totals.posted`, the money that moved).
 
 ## 7a. What changed underneath you in session 16 (T-911)
 

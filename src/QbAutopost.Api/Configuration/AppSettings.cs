@@ -73,6 +73,13 @@ public sealed class ApiSettings
     public int IdempotencyRetentionDays { get; set; } = 30;
 
     /// <summary>
+    /// T-912 / FR-A-16: how long <c>audit-yyyyMMdd.jsonl</c> is kept. Far longer than the 31-day operational log,
+    /// because this is the record of money moving and is asked for long after anybody cares why a job was slow.
+    /// Zero or less keeps every file for ever, so a misconfigured number can never delete the evidence.
+    /// </summary>
+    public int AuditRetentionDays { get; set; } = 400;
+
+    /// <summary>
     /// T-911 / FR-A-14: bind somewhere strangers can reach without TLS. Default false, and startup <b>refuses</b>
     /// rather than serving keys and amounts in the clear; turning it on warns at startup and on every request, so a
     /// temporary arrangement cannot quietly become the permanent one.

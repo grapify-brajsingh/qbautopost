@@ -5,6 +5,7 @@ using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Endpoints;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Security;
+using Serilog.Context;
 
 namespace QbAutopost.Api.Security;
 
@@ -23,6 +24,9 @@ public sealed class ApiKeyMiddleware(RequestDelegate next, IOptions<AppSettings>
 
     /// <summary>Where the resolved caller is put, for the endpoints and (T-912) the audit trail to read.</summary>
     public const string ClientItemKey = "QbAutopost.Client";
+
+    /// <summary>T-912 (api-v1 §8): the log property every line carries once the caller is known.</summary>
+    public const string ClientIdProperty = "clientId";
 
     public async Task InvokeAsync(
         HttpContext context,
@@ -73,6 +77,10 @@ public sealed class ApiKeyMiddleware(RequestDelegate next, IOptions<AppSettings>
         }
 
         context.Items[ClientItemKey] = client;
+
+        // T-912 (api-v1 §8): from here to the end of the request, every line names the caller — including the two
+        // refusals below, which are exactly the lines an operator reads when an integration stops working.
+        using var named = LogContext.PushProperty(ClientIdProperty, client.Id);
 
         // The key belongs to somebody, so whatever happens next — wrong network, missing scope — is not guessing.
         brake.RecordSuccess(address);

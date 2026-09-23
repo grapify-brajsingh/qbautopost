@@ -57,7 +57,15 @@ builder.Services.AddOptions<AppSettings>()
 
 const string CorsPolicyName = "QbAutopostCallers";
 
-builder.Services.AddProblemDetails();
+// T-912 (api-v1 §2.6): the correlation id is part of every problem detail, so a caller reporting a failure can
+// quote one id that appears in the header, the log and the audit file.
+builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = ctx =>
+{
+    if (RequestId.Of(ctx.HttpContext) is { } id)
+    {
+        ctx.ProblemDetails.Extensions[RequestId.PropertyName] = id;
+    }
+});
 // T-911 (FR-A-14): CORS stays off until an origin is named; '*' never gets this far (TransportGuard refuses it).
 var corsOrigins = builder.Configuration.GetSection("Api:Cors:AllowedOrigins").Get<string[]>() ?? [];
 if (corsOrigins.Length > 0)
@@ -79,6 +87,12 @@ builder.Services.AddRateLimiter(RateLimitPolicy.Configure);
 builder.Services.AddSingleton(sp => new AuthBrake(
     sp.GetRequiredService<IClock>(),
     sp.GetRequiredService<IOptions<AppSettings>>().Value.Api.RateLimits));
+// T-912 (FR-A-16): beside the operational log, but not a sink of it — no level, no filter, no formatter to lose it to.
+builder.Services.AddSingleton(sp =>
+{
+    var s = sp.GetRequiredService<IOptions<AppSettings>>().Value;
+    return new AuditLog(s.Paths.Logs, s.Api.AuditRetentionDays);
+});
 builder.Services.AddSingleton<LegacyRouteLog>();
 builder.Services.AddSingleton<AppHealth>();
 builder.Services.AddSingleton<IJobStore, JobStore>();
@@ -256,6 +270,9 @@ try
         app.UseHsts();
     }
 
+    // T-912 (api-v1 §2.6): first of all, so the id exists for the exception handler's problem detail and for the
+    // request line, and so it is echoed even on an answer written by a middleware that returns early.
+    app.UseMiddleware<RequestIdMiddleware>();
     app.UseExceptionHandler();
     app.UseStatusCodePages();
     app.UseQbAutopostRequestLogging();
@@ -268,6 +285,9 @@ try
         app.UseCors(CorsPolicyName);
     }
 
+    // T-912 (FR-A-16): in front of the key check on purpose — a 403 is a refusal by an identified caller, and an
+    // audit that sat behind the check would never see it (handoff trap 17). It records once the answer is known.
+    app.UseMiddleware<AuditMiddleware>();
     app.UseMiddleware<ApiKeyMiddleware>();
     // T-911 (FR-A-15): behind the key check, so a partition can be the caller rather than whatever address they
     // happen to be calling from today.

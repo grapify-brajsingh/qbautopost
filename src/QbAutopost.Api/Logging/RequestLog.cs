@@ -1,4 +1,5 @@
 using QbAutopost.Api.Endpoints;
+using QbAutopost.Api.Security;
 using Serilog;
 using Serilog.Events;
 
@@ -26,6 +27,13 @@ public static class RequestLog
                 if (http.Request.RouteValues.TryGetValue("id", out var id) && id is string value)
                 {
                     context.Set(JobIdEnricher.PropertyName, value.Split('#')[0]);
+                }
+
+                // T-912 (api-v1 §8): this line is written after the key check's LogContext scope has gone, so the
+                // caller has to be put on it here — otherwise the one line per request is the one without a client.
+                if (ApiKeyMiddleware.ClientOf(http) is { } client)
+                {
+                    context.Set(ApiKeyMiddleware.ClientIdProperty, client.Id);
                 }
             };
         });
