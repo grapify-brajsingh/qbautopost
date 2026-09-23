@@ -67,7 +67,7 @@ The usual rules (`CLAUDE.md`) all still apply. These matter more when nobody is 
 |---|---|
 | Repo | `D:\qb_post`, branch **`m9-api-v1`**, tracking `origin/m9-api-v1` (pushed 2026-09-23; credentials cached, so `git push` works unattended) |
 | Build | `dotnet build -warnaserror` → **Build succeeded. 0 Warning(s), 0 Error(s)** — measured 2026-09-23 after the final-report commit |
-| Tests | `dotnet test` → **Core 862 passed · Api 492 passed** (1354 total) — measured 2026-09-23 on Windows after T-915, twice in a row |
+| Tests | `dotnet test` → **Core 866 passed · Api 492 passed** (1358 total) — measured 2026-09-23 on Windows after T-916, twice in a row |
 | Milestones | M0–M7 done; M8 agent work done (`ready-for-human`); **M9 complete: 14/14 rows (13 `done`, T-903 `ready-for-human`) and `docs/M9-COMPLETE.md` written** |
 | Packages | **7**: the six plus `Scalar.AspNetCore` **2.13.13**, added by T-913 under Q-46. That is the whole allowance, and nothing remaining needs a package |
 | Owner | **Away. Answers nothing.** 69 questions outstanding — Q-1…Q-45, Q-47…Q-61, Q-63…Q-71 — each with a conservative behaviour, all listed with that behaviour in `docs/M9-COMPLETE.md` §2. **Answered: Q-0, Q-46 (owner, yes), Q-62 (by T-912)** |
@@ -79,6 +79,7 @@ The usual rules (`CLAUDE.md`) all still apply. These matter more when nobody is 
 | Task | Status | One line |
 |---|---|---|
 | **T-915** | **done** (after the close-out) | `allowModelAccounts` / `qb:post:ai` were documented, scoped and **read by nothing**. Now refused with 400 from `DirectRequestReader`, so validate and post agree. Deliberately *not* implemented — Q-51 is unanswered and a model must not choose where money lands. `docs/spec-api-v1.md` §6.1 is knowingly out of step now: **Q-71** |
+| **T-916** | **done** (after the close-out) | The guard T-915 said was missing: no request field or scope may be decorative. `Core.Tests/Architecture/DecorativeSurfaceTests.cs`, no production file touched. A no-op now costs writing your name into `ReservedScopes` with a tracker question beside it |
 | T-901…T-914 | **done** (T-903 `ready-for-human`) | Routes, health, SDK probe, connection test, company-file validate, direct model, validate, post, idempotency, clients+scopes, transport+limits+input hardening, audit trail + `requestId`, OpenAPI document + Scalar reference, the list/validate routes + the documentation catch-up |
 | The final report | **done** | `docs/M9-COMPLETE.md` — routes, the open questions with today's behaviour (68 at the time of writing; T-915 later added Q-71), everything needing the owner or the server, and what has never met a real QuickBooks |
 | *(nothing follows)* | **STOP** | Do not start M10 (owner decision, Decisions table). Do not attempt or claim the §10 server tasks |
