@@ -27,6 +27,22 @@ public sealed partial class DirectRequestReader(DirectLimits limits)
             errors.Add($"reference '{request.Reference}' may contain only letters, digits, '.', '_' and '-' (1-64 characters)");
         }
 
+        if (request.AllowModelAccounts)
+        {
+            // SPEC-GAP T-915: api-v1 §6.1 says true "permits tier 3-4 (Hermes) account choice", and nothing ever
+            // implemented it — the flag, and the qb:post:ai scope minted for it, were read by no line of code. Until
+            // now a caller could ask for it, be granted the scope, and simply watch every unresolved row be held as
+            // unknown-account, never told the model had not been asked.
+            //
+            // Refusing is the honest reading while Q-51 is unanswered, and the safe one: building it unattended would
+            // put a model in charge of which account money lands in (CLAUDE.md rules 3 and 4). A caller who omits the
+            // flag loses nothing they have today.
+            errors.Add(
+                "allowModelAccounts is not implemented on the direct path: tiers 3-4 never run here, so the flag "
+                + "would silently do nothing. Omit it and give each row a lineAccount, or add a rule for its last four "
+                + "(Q-51 records the decision the owner still has to make)");
+        }
+
         if (rows.Count == 0)
         {
             errors.Add("at least one transaction is required");

@@ -800,7 +800,7 @@
           "allowModelAccounts": {
             "type": "boolean",
             "default": false,
-            "description": "Let the model choose an account for a row no rule resolves. Needs the `qb:post:ai` scope as well."
+            "description": "NOT IMPLEMENTED (T-915). Sending `true` is refused with 400: tiers 3-4 never run on the direct path, so the flag would silently do nothing. Give each row a `lineAccount`, or add a rule for its last four. Whether this is ever implemented is open question Q-51; the `qb:post:ai` scope is reserved for it and is checked nowhere today."
           },
           "transactions": { "type": "array", "items": { "$ref": "#/components/schemas/DirectRow" } }
         }

@@ -214,4 +214,45 @@ public sealed class DirectRequestReaderTests
         Assert.Equal("1042", line.CheckNo);
         Assert.Equal("4521", line.Last4);
     }
+
+    /// <summary>
+    /// T-915: <c>allowModelAccounts</c> was carried on the request, documented in <c>openapi.json</c> and given its own
+    /// <c>qb:post:ai</c> scope — and read by nothing. A caller could set it, hold the scope, and watch every row a rule
+    /// could not resolve be held as <c>unknown-account</c> with no hint that the model was never asked.
+    /// <para>
+    /// Refusing is the honest answer while Q-51 is unanswered. Implementing it unattended would mean a model choosing
+    /// which account money lands in, which is exactly what <c>CLAUDE.md</c> rule 4 exists to prevent.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Should_RefuseTheBatch_When_TheCallerAsksForModelChosenAccounts()
+    {
+        var request = Request(Row()) with { AllowModelAccounts = true };
+
+        var result = Read(request);
+
+        var error = Assert.Single(result.Errors);
+        Assert.Contains("allowModelAccounts", error, StringComparison.Ordinal);
+        Assert.Contains("Q-51", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_ReadNothing_When_TheBatchIsRefusedForModelChosenAccounts()
+    {
+        // A refused request yields no lines at all: partial results invite partial posting.
+        var result = Read(Request(Row()) with { AllowModelAccounts = true });
+
+        Assert.Empty(result.Lines);
+        Assert.Empty(result.Held);
+    }
+
+    [Fact]
+    public void Should_ReadNormally_When_TheCallerLeavesModelAccountsAlone()
+    {
+        // The default must stay untouched: this is the path every existing caller uses.
+        var result = Read(Request(Row()));
+
+        Assert.Empty(result.Errors);
+        Assert.Single(result.Lines);
+    }
 }
