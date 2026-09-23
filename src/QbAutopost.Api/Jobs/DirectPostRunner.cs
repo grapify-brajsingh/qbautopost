@@ -87,7 +87,6 @@ public sealed class DirectPostRunner(
                 log.LogWarning("Batch {BatchId}: refused before sending anything: {Problem}", batchId, backupProblem);
                 return Finish(opening with
                 {
-                    Status = JobStatus.Failed,
                     Error = backupProblem,
                     Unavailable = true,
                     Held = [.. held, .. toPost.Select(t => Row(plan, t, HoldReasons.BackupTooOld, backupProblem))],
@@ -110,7 +109,6 @@ public sealed class DirectPostRunner(
                 log.LogWarning("Batch {BatchId}: duplicate check (G4) failed, nothing posted: {Error}", batchId, ex.Message);
                 return Finish(opening with
                 {
-                    Status = JobStatus.Partial,
                     Error = $"nothing posted: duplicate check (G4) failed: {ex.Message}",
                     Unavailable = true,
                     Held = [.. held, .. toPost.Select(t => Row(plan, t, HoldReasons.DuplicateCheckFailed, ex.Message))],
@@ -124,7 +122,6 @@ public sealed class DirectPostRunner(
             log.LogInformation("Batch {BatchId}: nothing to post ({Held} held, {Skipped} skipped)", batchId, held.Count, skipped.Count);
             return Finish(opening with
             {
-                Status = held.Count == 0 ? JobStatus.Posted : JobStatus.Partial,
                 Held = held,
                 Skipped = skipped,
             });
@@ -147,7 +144,6 @@ public sealed class DirectPostRunner(
             log.LogWarning("Batch {BatchId}: QuickBooks unavailable, nothing posted: {Error}", batchId, ex.Message);
             return Finish(opening with
             {
-                Status = JobStatus.Partial,
                 Error = $"nothing posted: QuickBooks unavailable ({ex.Message})",
                 Unavailable = true,
                 Held = [.. held, .. toPost.Select(t => Row(plan, t, HoldReasons.QuickBooksUnavailable, ex.Message))],
@@ -180,7 +176,6 @@ public sealed class DirectPostRunner(
 
         return Finish(opening with
         {
-            Status = held.Count == 0 && error is null ? JobStatus.Posted : JobStatus.Partial,
             Error = error,
             Posted = [.. posted.Select(p => Posted(plan, p))],
             Held = held,
@@ -197,9 +192,26 @@ public sealed class DirectPostRunner(
             Counts = new DirectPostCounts(result.Counts.Submitted, result.Posted.Count, result.Held.Count, result.Skipped.Count),
             Totals = result.Totals with { Posted = result.Posted.Sum(p => p.Amount) },
         };
+        final = final with { Status = Outcome(final) };
         batches.SaveResult(final);
         return final;
     }
+
+    /// <summary>
+    /// T-919 (api-v1 §6.1): <c>posted</c> (nothing held) · <c>partial</c> (some held) · <c>failed</c> (nothing
+    /// posted). Derived once, from the counts, because the four exits above cannot then disagree — three of them
+    /// used to answer <c>partial</c> beside an empty <c>posted</c> list, which tells an operator that some of their
+    /// money landed when none of it did.
+    /// <para>
+    /// A <b>skipped</b> row does not make a batch fail. G4 skips what QuickBooks already holds, so an all-duplicate
+    /// re-send posted nothing because nothing needed posting — that is the gate working, not a failure. Only a
+    /// <b>held</b> row (one refused) or an error turns an empty batch into <c>failed</c>.
+    /// </para>
+    /// </summary>
+    private static JobStatus Outcome(DirectPostResult result) =>
+        result.Held.Count == 0 && result.Error is null ? JobStatus.Posted
+        : result.Posted.Count == 0 ? JobStatus.Failed
+        : JobStatus.Partial;
 
     private DirectPostResult Describe(
         string batchId, DirectRequest request, DirectPlan plan, bool dryRun, JobStatus status) => new()

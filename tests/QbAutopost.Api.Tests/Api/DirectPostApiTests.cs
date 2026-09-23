@@ -121,7 +121,9 @@ public sealed class DirectPostApiTests : IDisposable
         Assert.Contains("payroll-2026-09", File.ReadAllText(Path.Combine(BatchesRoot, batchId, ApiBatchStore.RequestFile)));
         // Nothing reached QuickBooks, so nothing is in the ledger and the batch can simply be re-sent.
         Assert.Empty(new LedgerStore(_factory.LedgerFile).Load().Posted);
-        Assert.Equal("partial", body.GetProperty("status").GetString());
+        // T-919: nothing posted, so `failed` — this assertion read `partial` until the status was derived from the
+        // counts. The ordering and ledger assertions above are what this test is for and are unchanged.
+        Assert.Equal("failed", body.GetProperty("status").GetString());
     }
 
     [Fact]
@@ -160,6 +162,55 @@ public sealed class DirectPostApiTests : IDisposable
         Assert.Equal(1, body.GetProperty("counts").GetProperty("held").GetInt32());
         // The held row is reported with its reason, not silently dropped.
         Assert.Equal("row-2", body.GetProperty("held").EnumerateArray().Single().GetProperty("externalId").GetString());
+    }
+
+    /// <summary>
+    /// T-919 / api-v1 §6.1: the enum is <c>posted</c> (nothing held) · <c>partial</c> (some held) · <c>failed</c>
+    /// (<b>nothing posted</b>). A batch where every row was refused posted nothing, so it is <c>failed</c> — reporting
+    /// it <c>partial</c> tells an operator some of their money landed when none of it did.
+    /// </summary>
+    [Fact]
+    public async Task Should_ReportFailed_When_EveryRowIsHeld()
+    {
+        var first = Row(externalId: "row-1", payee: "NEVER HEARD OF THEM", memo: "NEVER HEARD OF THEM LLC");
+        var second = Row(externalId: "row-2", payee: "NOR THEM EITHER", memo: "NOR THEM EITHER LLC");
+
+        var (status, body) = await PostAsync(Request(false, first, second));
+
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal("failed", body.GetProperty("status").GetString());
+        Assert.Equal(0, body.GetProperty("counts").GetProperty("posted").GetInt32());
+        Assert.Equal(2, body.GetProperty("counts").GetProperty("held").GetInt32());
+    }
+
+    /// <inheritdoc cref="Should_ReportFailed_When_EveryRowIsHeld"/>
+    [Fact]
+    public async Task Should_ReportFailed_When_QuickBooksIsUnavailable()
+    {
+        _factory.Gateway.Throw = new QuickBooksUnavailableException("simulated");
+
+        var (_, body) = await PostAsync(Request(false, Row()));
+
+        Assert.Equal("failed", body.GetProperty("status").GetString());
+        Assert.Equal(0, body.GetProperty("counts").GetProperty("posted").GetInt32());
+    }
+
+    /// <summary>
+    /// The deliberate carve-out. "Nothing posted" is not a failure when nothing *needed* posting: a batch QuickBooks
+    /// already holds is a duplicate caught by G4, which is the gate working. Only a <b>held</b> row — one refused —
+    /// makes an empty batch a failure, so re-sending a batch is never reported as an error.
+    /// </summary>
+    [Fact]
+    public async Task Should_ReportPosted_When_EveryRowWasAlreadyInQuickBooks()
+    {
+        await PostAsync(Request(false, Row()));
+        new LedgerStore(_factory.LedgerFile).Save(Ledger.Empty);
+
+        var (_, second) = await PostAsync(Request(false, Row()));
+
+        Assert.Equal("posted", second.GetProperty("status").GetString());
+        Assert.Equal(0, second.GetProperty("counts").GetProperty("posted").GetInt32());
+        Assert.Equal(1, second.GetProperty("counts").GetProperty("skipped").GetInt32());
     }
 
     [Fact]
