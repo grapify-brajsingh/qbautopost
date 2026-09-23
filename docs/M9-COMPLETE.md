@@ -7,9 +7,13 @@ Verified for this document, on this machine, today:
 
 ```
 dotnet build -warnaserror   → Build succeeded. 0 Warning(s), 0 Error(s)
-dotnet test                 → Core  859 passed, 0 failed, 0 skipped
-                              Api   487 passed, 0 failed, 0 skipped   (1346 total)
+dotnet test                 → Core  866 passed, 0 failed, 0 skipped
+                              Api   492 passed, 0 failed, 0 skipped   (1358 total)
 ```
+
+*(Counts re-measured 2026-09-23 after T-915 and T-916, both of which landed after this document was first written.
+At the time of writing they were Core 859 / Api 487 / 1346.)*
+
 
 Read §4 before you deploy anything. It is the section that says what has never been run.
 
@@ -265,6 +269,10 @@ Use `scripts/qb-server-check.ps1`. `post` and `undo` need `-ConfirmCopy`.
 and would have stopped at step 1 with a `401` since session 15. It now sends the key — but the script itself has
 never been executed against a live host.
 
+**What has since been checked, 2026-09-23** (see §3.9): all nine operator scripts parse cleanly under Windows
+PowerShell 5.1, and every command they invoke resolves there. That rules out a syntax error or a PowerShell 7-only
+cmdlet stopping you on the first line. It does **not** mean any of them does the right thing.
+
 ### 3.3 T-802 — deploy and auto-start (`ready-for-human`)
 
 On the server, as the auto-logon account:
@@ -423,6 +431,29 @@ Three further limits worth knowing before you expose the port:
   meaningless.
 
 ---
+
+### 3.9 Operator scripts — what was checked without a server, 2026-09-23
+
+Two of the scripts a person will run on the server had **never been executed**, and one of them
+(`qb-server-check.ps1 -Step health`) was silently broken from session 15 to T-914: it called a route that had begun
+requiring a key, so it would have stopped at step 1 with a `401`. T-914 fixed that by inspection. The existing
+`DeployScriptsTests` check script *content* by string matching — ASCII only, `-WhatIf` supported, no secrets, no
+service installed, loopback only — and **none of them would notice a syntax error**.
+
+So the scripts were put through PowerShell's own parser and command resolver:
+
+| Check | Result |
+|---|---|
+| All nine `.ps1` under `deploy/` and `scripts/` parse | **Clean**, 0 errors, Windows PowerShell 5.1 |
+| Every command each script invokes resolves on 5.1 | **Clean** — no PowerShell 7-only cmdlet, no typo'd command name |
+
+That is a real result and a narrow one. **It proves only that they start.** It does not prove any script does the
+right thing, that its arguments are correct, that a path it names exists on the server, or that it behaves against a
+live host — and the parser cannot see a wrong URL, a missing key or a mistaken parameter value, which is precisely
+the class of bug T-914 had to fix by reading. There is also **no regression test** for this: `dotnet test` must pass
+on Linux (`CLAUDE.md` rule 1) and these scripts only parse under Windows PowerShell, so the check was run by hand
+and its result recorded here rather than pinned by a test. **Re-run it after editing any script**, with the parser
+snippet in the session log for 2026-09-23 (session 23).
 
 ## 4. What is implemented but has **never** run against a real QuickBooks
 
