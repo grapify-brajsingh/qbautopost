@@ -141,7 +141,7 @@ Goal: the same engine behind a versioned, documented, authenticated API a remote
 - T-910 `clients.json`: per-caller keys (hash + salt only), scopes, expiry, rotation, CIDR; `scripts/new-api-client.ps1`; the legacy shared key as an implicit all-scopes client.
 - T-911 TLS (refuse a non-loopback bind without it), HSTS/CORS/headers, rate limiting (framework, no package), body and field limits, path allow-lists.
 - T-912 Audit trail `audit-yyyyMMdd.jsonl` (400 days) + `requestId`/`clientId` on every log line.
-- T-913 Hand-authored `wwwroot/openapi.json` + drift test against `EndpointDataSource`; then the **Scalar** reference UI at `/api/v1/reference` (pending Q-46). **No Swagger/Swashbuckle** — owner decision 2026-09-22.
+- T-913 Hand-authored `wwwroot/openapi.json` + drift test against `EndpointDataSource`; then the **Scalar** reference UI at `/api/v1/reference` (approved by the owner 2026-09-23, Q-46; `Scalar.AspNetCore` 2.13.13). **No Swagger/Swashbuckle** — owner decision 2026-09-22.
 - T-914 `GET /api/v1/quickbooks/lists`, `POST /api/v1/jobs/validate`; runbook, POC package, `steps.md`, `qb-server-check.ps1`, `start-all.ps1` and `spec.md` §6 moved to v1 paths.
 
 Order: T-901 first (everything lands in the new group); T-906 before T-907/T-908; T-910 before T-911.
