@@ -10,7 +10,10 @@ Related: `spec.md` (the contract), `tracker.md` (open questions Q-1…Q-41 and t
 
 ## 1. What it does
 
-QbAutopost is one Windows program with an HTTP API on `http://127.0.0.1:5080`. You give it a **job folder**:
+QbAutopost is one Windows program with an HTTP API on `http://127.0.0.1:5080`. Every route is served under
+**`/api/v1`** (`docs/spec-api-v1.md` is the route contract). The flat paths of the first release (`jobs`,
+`health/…` without the prefix) still answer while `Api:LegacyRoutes` is `true`, and each use is logged as a warning; write new callers
+against `/api/v1`. You give it a **job folder**:
 
 ```
 C:\qb-jobs\2026-08-tropicana\
@@ -48,9 +51,11 @@ Job states: `queued → analysing → ready → posting → posted | partial`, o
 | `C:\qb-autopost\ledger.json` | every posted line and batch (do not edit by hand) |
 | `C:\qb-autopost\qb-lists.json` | cached QuickBooks accounts / vendors / customers |
 | `C:\qb-autopost\jobs.json` | index of known job folders |
+| `C:\qb-autopost\clients.json` | API callers: id, name, scopes and a **salted hash** of each key, never a key (§3.4) |
+| `C:\qb-autopost\api-batches\` | one folder per direct post: its request, state and qbXML, plus `idempotency.json` |
 | `C:\qb-autopost\qb-audit\` | qbXML copies of list syncs and undos without a job folder |
-| `C:\qb-autopost\logs\` | `qbautopost-yyyyMMdd.log`, one per day, 31 kept |
-| `C:\qb-jobs\` | job folders (any location works; the API takes an absolute path) |
+| `C:\qb-autopost\logs\` | `qbautopost-yyyyMMdd.log`, one per day, 31 kept, **and** `audit-yyyyMMdd.jsonl`, 400 days (§8.7) |
+| `C:\qb-jobs\` | job folders (any location works; the API takes an absolute path — see `Paths:AllowedJobRoots`, §3.5) |
 
 ### 2.3 Publish the program
 
@@ -66,7 +71,7 @@ Copy `rules.json` (start from `samples/rules.json`) to `C:\qb-autopost\rules.jso
 ### 2.4 Start at logon
 
 1. Start Hermes and check it: `deploy/README-hermes.md`.
-2. `deploy/start-all.ps1` starts Docker (`-DockerMode Wsl` on Windows Server, the default, with `-WslDistro Ubuntu`; `-DockerMode Desktop` on Windows 10/11), runs `docker compose up -d` in `deploy\hermes`, waits until Hermes accepts connections on `127.0.0.1:8642`, starts `C:\qb-autopost\app\QbAutopost.Api.exe` (`-AppExe`) unless it already runs, then waits for `GET /health/hermes` = 200. If Hermes stays down, the API is still started (undo and `/health/quickbooks` work; new jobs fail at T1) and the script exits 2. Exit 1 = Docker, compose or the API could not be started. It writes `C:\qb-autopost\logs\start-all-yyyyMMdd.log` and never reads a key.
+2. `deploy/start-all.ps1` starts Docker (`-DockerMode Wsl` on Windows Server, the default, with `-WslDistro Ubuntu`; `-DockerMode Desktop` on Windows 10/11), runs `docker compose up -d` in `deploy\hermes`, waits until Hermes accepts connections on `127.0.0.1:8642`, starts `C:\qb-autopost\app\QbAutopost.Api.exe` (`-AppExe`) unless it already runs, then waits for `GET /api/v1/health/ready` = 200. The script holds no key, so it can only call the two key-free routes; Hermes is proved by its own port, not through the API (`/api/v1/health/hermes` needs `health:read` — use `scripts\qb-server-check.ps1 -Step health` for the dependency checks). If Hermes stays down, the API is still started (undo and `/api/v1/health/quickbooks` work; new jobs fail at T1) and the script exits 2. Exit 1 = Docker, compose or the API could not be started, or it never became ready. It writes `C:\qb-autopost\logs\start-all-yyyyMMdd.log` and never reads a key.
 3. `deploy/install-task.ps1` (run once as the auto-logon account, in an elevated PowerShell) registers the task `QbAutopost`: at logon of that account, 60 s delay, **interactive** session, limited rights, no password stored, no time limit, a second start ignored. Pass start-all options with `-StartAllArguments '-DockerMode Desktop'`; remove it with `-Unregister`.
 4. Both scripts accept `-WhatIf` (prints what would happen, changes nothing). Test the task with `Start-ScheduledTask -TaskName QbAutopost`, then sign out and in once.
 
@@ -81,8 +86,20 @@ Copy `rules.json` (start from `samples/rules.json`) to `C:\qb-autopost\rules.jso
 
 | Key | Default | Meaning |
 |---|---|---|
-| `Api:Bind` | `http://127.0.0.1:5080` | Keep it on loopback |
-| `Api:ApiKey` | `change-me` | **Required.** The host refuses to start with an empty key, or with `change-me` outside Development |
+| `Api:Bind` | `http://127.0.0.1:5080` | Keep it on loopback. A non-loopback bind without TLS **stops startup** unless `Api:AllowInsecureRemote` is on (§3.5) |
+| `Api:ApiKey` | `change-me` | The shared all-scopes key. The host refuses to start when no caller can authenticate at all — see `Api:AllowLegacyKey` and §3.4 |
+| `Api:AllowLegacyKey` | `true` | Accept `Api:ApiKey` as an implicit all-scopes caller. Set **false** once every caller has its own key (§3.4) |
+| `Api:LegacyRoutes` | `true` | Also answer the pre-M9 flat paths beside `/api/v1/*`; each use logs a warning once per route per hour |
+| `Api:Reference:Enabled` | `false` | Serve `GET /api/v1/openapi.json` and the reference page at `/api/v1/reference` (§3.6) |
+| `Api:Reference:AllowTryIt` / `UseCdn` | `false` / `false` | Show the page's "send request" buttons; load its script from a public CDN instead of the package's own copy |
+| `Api:RateLimits:*` | see §3.5 | Requests a minute per caller, and the brute-force brake on wrong keys |
+| `Api:MaxRequestBodyBytes` | `2097152` | Largest request body (2 MB); over it is `413` |
+| `Api:MaxTransactionsPerRequest` | `500` | Rows in one `POST /api/v1/quickbooks/transactions`; over it the **whole batch is refused**, never truncated |
+| `Api:SyncPostTimeoutSeconds` | `120` | How long a direct post holds the caller's connection before it answers `202` and a batch to poll |
+| `Api:IdempotencyRetentionDays` | `30` | How long an `Idempotency-Key` is remembered |
+| `Api:AuditRetentionDays` | `400` | How long `audit-yyyyMMdd.jsonl` is kept; `0` or less keeps everything for ever (§8.7) |
+| `Api:Tls:PfxPath` / `StoreThumbprint` | empty | Serve HTTPS from a `.pfx` or a certificate in the machine store. The password is **environment only**: `QBAUTOPOST__Api__Tls__PfxPassword` |
+| `Api:Cors:AllowedOrigins` | `[]` | Browser origins allowed to call the API. `*` is refused at startup, not ignored |
 | `DryRunDefault` | `true` | A job without `dryRun` stops at `ready` |
 | `Company:Name` | | Must match the company named in `requirement.txt` (case and punctuation ignored), or the job fails G2 |
 | `Company:FilePath` | | Full path of the `.QBW`. Empty → QuickBooks is treated as unavailable |
@@ -98,7 +115,12 @@ Copy `rules.json` (start from `samples/rules.json`) to `C:\qb-autopost\rules.jso
 | `Hermes:BaseUrl` / `Model` / `TimeoutSeconds` | `http://127.0.0.1:8642` / `default` / `120` | |
 | `Hermes:ApiKey` | empty | Hermes' `API_SERVER_KEY` |
 | `Ocr:Enabled` / `TessDataPath` | `false` / empty | Scanned PDFs and invoice images need OCR (`eng.traineddata`) |
-| `Paths:Ledger`, `QbLists`, `Logs`, `JobIndex` | | See §2.2. Relative paths are relative to the program folder |
+| `QuickBooks:MaxLineAmount` | `100000.00` | A bigger line on the direct path is **held**, not refused |
+| `QuickBooks:AllowedDateWindow:MaxAgeDays` / `MaxFutureDays` | `730` / `1` | A direct line dated outside this is held |
+| `QuickBooks:AllowCompanyFileOverride` | `false` | Let a request name its own company file. Keep it off: one installation serves one company |
+| `QuickBooks:AllowedCompanyFolders` | `[]` | Folders an overridden company file must sit inside. Empty = unrestricted |
+| `Paths:Ledger`, `QbLists`, `Logs`, `JobIndex`, `Clients`, `ApiBatches` | | See §2.2. Relative paths are relative to the program folder |
+| `Paths:AllowedJobRoots` | `[]` | Folders a job may come from (§3.5). Empty = unrestricted, and a non-loopback bind then **refuses to start** |
 | `Serilog:MinimumLevel:Default` | `Information` | Also `Serilog:MinimumLevel:Override:<category>` |
 
 ### 3.2 Secrets
@@ -130,6 +152,78 @@ Keys are masked (`***`) in logs and are never written to `output\`. Do not add l
 A change applies to the next job or re-post. Prefer the teaching endpoints (§6); they validate names and write safely.
 Note: the first taught rule rewrites the file **without its `//` comments**.
 
+### 3.4 API callers: keys and scopes
+
+Every caller has its own key. `clients.json` (`Paths:Clients`, §2.2) holds the id, name, scopes and a **salted hash**
+of the key — never the key itself. Issue one with:
+
+```powershell
+.\scripts\new-api-client.ps1 -Id acme-erp -Name 'Acme ERP' -Scopes qb:read,qb:post -ClientsFile C:\qb-autopost\clients.json
+```
+
+It prints the key **once** and stores only the hash; it cannot be recovered, only replaced. The caller sends it as
+`X-Api-Key: <key>` on every request. (`Authorization: Bearer` is *not* accepted by this build — tracker Q-67.)
+
+| Scope | Lets the caller |
+|---|---|
+| `health:read` | `GET /api/v1/health/sdk`, `/api/v1/health/quickbooks`, `/api/v1/health/hermes`, and read the API reference (§3.6) |
+| `qb:read` | Read-only QuickBooks work: the connection test, the company-file check, `POST …/transactions/validate`, `GET /api/v1/quickbooks/lists`, `POST …/lists/sync`, `GET /api/v1/batches/{id}` |
+| `qb:post` | **Move money**: `POST /api/v1/quickbooks/transactions` and `POST /api/v1/batches/{id}/undo` |
+| `qb:debug` | Get the qbXML body back from a validate (`?includeQbXml=true`). It contains every amount and name |
+| `jobs:read` | `GET /api/v1/jobs`, `GET /api/v1/jobs/{id}`, `POST /api/v1/jobs/validate` |
+| `jobs:write` | `POST /api/v1/jobs` and `POST /api/v1/jobs/{id}/post` — also money |
+| `rules:write` | `POST /api/v1/rules/alias`, `POST /api/v1/rules/account` |
+| `admin` | Anything not mapped above. A new route is closed until someone decides otherwise |
+
+A key that is not recognised is `401`; a recognised key without the scope is `403`, and the answer names the scope.
+Revoking a caller (`enabled: false`, or delete the entry) takes effect on their **next request** — the file is
+re-read each time, no restart.
+
+**Turning the shared key off.** `Api:AllowLegacyKey` is `true` while callers migrate, and the shared `Api:ApiKey`
+then carries *every* scope — it outranks every decision in `clients.json`, and startup warns about it on every
+boot. Once each caller has its own key: set `Api:AllowLegacyKey` to `false`, restart, and check the log says
+`shared Api:ApiKey not accepted`. `scripts\qb-server-check.ps1` needs a key with `health:read, qb:read, jobs:read,
+jobs:write, qb:post`.
+
+### 3.5 Limits, refusals and where jobs may come from
+
+- **`Paths:AllowedJobRoots`** — the folders a caller's `folder` may sit inside, for `POST /api/v1/jobs` and
+  `POST /api/v1/jobs/validate`. Empty means *unconfigured* = unrestricted, which is only tolerable on a loopback
+  bind: with a remote bind and this list empty the app **refuses to start**. Set it to `["C:\\qb-jobs"]` before
+  anything outside the machine can reach the API.
+- **Rate limits** (`Api:RateLimits`, on by default): `PostPerMinute` 10 for anything that writes to QuickBooks
+  (including `POST /api/v1/jobs`), `DefaultPerMinute` 120 for every other authenticated route, `HealthPerMinute`
+  600 per address for the two key-free health routes. Over the limit the answer is **`429` with a `Retry-After`
+  header in seconds** — wait that long and retry; it is not an error to report. The limit is per caller, so one
+  busy integration cannot starve another. **Never raise a limit to make a failing caller work** without deciding
+  that the new number is safe.
+- **Wrong keys**: more than `FailedAuthPerMinute` (10) unrecognised keys from one address and that address is
+  refused outright for `FailedAuthBlockMinutes` (5). A `403` for a missing scope does **not** count, so a
+  legitimate caller cannot lock itself out.
+- **Body and field sizes**: over `Api:MaxRequestBodyBytes` is `413`; a `memo` over 4096 characters or a name over
+  255 refuses the whole batch with `400`, because that is a broken mapping, not a caller meaning what they said.
+
+### 3.6 The API reference
+
+`Api:Reference:Enabled` (default **false**) serves two routes:
+
+| Route | What |
+|---|---|
+| `GET /api/v1/openapi.json` | The OpenAPI 3.0 document: every route, its request and response shape, and the scope it needs |
+| `GET /api/v1/reference` | The page that renders it |
+
+Both need a key with `health:read`, which means **a browser address bar gets a 401** — the key travels in a header.
+Read the document with a client that sets one:
+
+```powershell
+$h = @{ 'X-Api-Key' = $env:QBAUTOPOST__Api__ApiKey }
+Invoke-RestMethod http://127.0.0.1:5080/api/v1/openapi.json -Headers $h | ConvertTo-Json -Depth 8 > openapi.json
+```
+
+Disabled means **not mapped**: the answer is `404`, not `403`. Leave it off on the QuickBooks server unless somebody
+is actively integrating; a page that lists every way to move money is not something to leave open. The page pulls
+nothing from the internet (`UseCdn` false) and its "send request" buttons are off (`AllowTryIt` false).
+
 ## 4. First run
 
 1. Open QuickBooks on the server, in the auto-logon session, as the QuickBooks **Admin**, with the company file
@@ -153,14 +247,36 @@ The script reads the key from `QBAUTOPOST__Api__ApiKey` and never prints it.
 
 ```powershell
 $h = @{ 'X-Api-Key' = $env:QBAUTOPOST__Api__ApiKey }
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:5080/jobs -Headers $h -ContentType 'application/json' `
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:5080/api/v1/jobs -Headers $h -ContentType 'application/json' `
   -Body '{ "folder": "C:\\qb-jobs\\2026-08-tropicana", "dryRun": true }'
-Invoke-RestMethod http://127.0.0.1:5080/jobs/2026-08-tropicana -Headers $h
-Invoke-RestMethod 'http://127.0.0.1:5080/jobs?status=ready' -Headers $h
+Invoke-RestMethod http://127.0.0.1:5080/api/v1/jobs/2026-08-tropicana -Headers $h
+Invoke-RestMethod 'http://127.0.0.1:5080/api/v1/jobs?status=ready' -Headers $h
 ```
 
 The folder name is the job id (letters, digits, `.`, `_`, `-` only). A folder that was already posted is refused with
 409; add `"force": true` only after checking QuickBooks (lines already in the ledger are still skipped).
+
+To check a folder **without** taking a job id or writing anything into it — a missing `requirement.txt`, a statement
+that will not reconcile — ask first:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:5080/api/v1/jobs/validate -Headers $h -ContentType 'application/json' `
+  -Body '{ "folder": "C:\\qb-jobs\\2026-08-tropicana" }'
+```
+
+`200` means it would run, `422` means it would not, and the body is the same either way: `{ ok, errors[],
+statements[{ file, last4, kind, rows, reconcile }], unreadable[] }`. It stops before the requirement, the mapper and
+the duplicate check, so a folder that passes here can still hold lines when it runs.
+
+The names the mapper will accept come from the cached lists:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:5080/api/v1/quickbooks/lists -Headers $h          # accounts, vendors, customers
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:5080/api/v1/quickbooks/lists/sync -Headers $h
+```
+
+The read never opens a QuickBooks session, so it answers while QuickBooks is shut down; a `syncedUtc` of `null`
+means the sync has not run yet.
 
 ### 5.2 Review a dry run
 
@@ -180,7 +296,7 @@ Fix held lines (§6), then post. Posting re-reads the folder and re-applies the 
 ### 5.3 Post
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:5080/jobs/2026-08-tropicana/post -Headers $h
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:5080/api/v1/jobs/2026-08-tropicana/post -Headers $h
 ```
 
 Only a `ready` job can be posted (409 otherwise). Before sending, the app checks the backup age (if configured) and
@@ -199,7 +315,7 @@ Only one job or QuickBooks operation runs at a time; others wait in the queue.
 | `unknown-payee` | No vendor/customer found; `candidates` lists the closest names | Teach an alias (below), re-run |
 | `no-account-rule`, `low-confidence`, `no-prior-posting` | No rule for the expense account, or the AI suggestion is not trusted yet; `candidates` has suggestions | Teach a vendor account (below) |
 | `no-accounts` | `qb-lists.json` empty | Sync lists |
-| `hermes-failed` | Hermes did not give a valid answer | Check `/health/hermes`, re-run |
+| `hermes-failed` | Hermes did not give a valid answer | Check `/api/v1/health/hermes`, re-run |
 | `unknown-account` | No `BankAccounts`/`CardAccounts` entry for the last four, or none detected | Add it to `rules.json`, or put the last four in the file name |
 | `unknown-csv-layout`, `ambiguous-csv-layout`, `unparsable-rows` | The CSV/XLSX export does not match exactly one layout, or a row cannot be read | Fix `CsvLayouts` or the export |
 | `reconcile-failed` | The statement's balances do not add up (G1) | Check the file is complete; the whole statement is held |
@@ -224,10 +340,10 @@ Unmatched invoices (`unmatchedInvoices[]`) never hold a line; they only mean no 
 
 ```powershell
 # alias: kind is "vendor" or "customer"; fragment is matched in the statement description (at least 3 characters)
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:5080/rules/alias -Headers $h -ContentType 'application/json' `
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:5080/api/v1/rules/alias -Headers $h -ContentType 'application/json' `
   -Body '{ "fragment": "UNKNOWN PLUMBER", "name": "Unknown Plumber LLC", "kind": "vendor" }'
 # vendor → expense account
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:5080/rules/account -Headers $h -ContentType 'application/json' `
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:5080/api/v1/rules/account -Headers $h -ContentType 'application/json' `
   -Body '{ "vendor": "Unknown Plumber LLC", "account": "Repairs and Maintenance" }'
 ```
 
@@ -238,7 +354,7 @@ The answer shows the previous value when a rule was replaced. Then submit the fo
 ## 7. Undo
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:5080/batches/2026-08-tropicana%231/undo' -Headers $h
+Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:5080/api/v1/batches/2026-08-tropicana%231/undo' -Headers $h
 ```
 
 The batch id is `<job id>#<attempt>` (shown as `batchId` on the job); write `#` as `%23`. The answer is
@@ -256,9 +372,17 @@ the job becomes `undone`. To post the folder again, submit it with `"force": tru
 ### 8.1 Health
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:5080/health/quickbooks   # no key needed
-Invoke-RestMethod http://127.0.0.1:5080/health/hermes
+$h = @{ 'X-Api-Key' = $env:QBAUTOPOST__Api__ApiKey }
+Invoke-RestMethod http://127.0.0.1:5080/api/v1/health               # liveness, no key
+Invoke-RestMethod http://127.0.0.1:5080/api/v1/health/ready         # readiness, no key
+Invoke-RestMethod http://127.0.0.1:5080/api/v1/health/quickbooks -Headers $h
+Invoke-RestMethod http://127.0.0.1:5080/api/v1/health/hermes -Headers $h
+Invoke-RestMethod http://127.0.0.1:5080/api/v1/health/sdk -Headers $h
 ```
+
+Only `/api/v1/health` and `/api/v1/health/ready` answer without a key. The other three open a QuickBooks session or
+probe the SDK, so they need a key with the `health:read` scope (§3.4). **Point your monitoring at
+`/api/v1/health/ready`**, which needs nothing and does not touch QuickBooks.
 
 ### 8.2 QuickBooks not reachable (503, "nothing posted", `quickbooks-unavailable`)
 
@@ -298,8 +422,13 @@ A job found `posting` after a crash or restart becomes `partial` with
 | Job `failed`: company name / last four (G2) | `requirement.txt` names another company, lists a last four with no statement, or a statement's last four is not listed and not in `rules.json` |
 | Job `failed`: `backup-too-old` | Make a QuickBooks backup (`.QBB`) into `QuickBooks:BackupFolder`, submit again |
 | Job `failed`: rules | `rules.json` is not valid JSON or has a bad value (see the error); teaching returns 500 in that case and does not touch the file |
-| 401 | Missing or wrong `X-Api-Key` |
-| 409 on `POST /jobs` | The job is running, or already in the ledger (use `force` only after checking QuickBooks) |
+| 401 | Missing or unrecognised `X-Api-Key` (or the caller was disabled; the list is re-read per request) |
+| 403 | The key is known but lacks the scope the route needs; the answer names it (§3.4) |
+| 429 | Rate limited, or the address is in the wrong-key block. Wait the seconds in `Retry-After` (§3.5) |
+| 413 | The body is over `Api:MaxRequestBodyBytes` |
+| Host does not start: `No API caller can authenticate` | No enabled client in `clients.json` **and** no usable shared key. Issue one with `scripts\new-api-client.ps1`, or set `QBAUTOPOST__Api__ApiKey` with `Api:AllowLegacyKey` true |
+| Host does not start: a transport refusal | A non-loopback `Api:Bind` without TLS (`Api:AllowInsecureRemote`), a CORS `*`, or a remote bind with `Paths:AllowedJobRoots` empty (§3.5) |
+| 409 on `POST /api/v1/jobs` | The job is running, or already in the ledger (use `force` only after checking QuickBooks) |
 | Host does not start | Read the console or the last `[FTL] QbAutopost stopped:` line in the log: empty API key, `QuickBooks:Fake` outside Development, missing OCR data, or a missing prompt file |
 
 ### 8.6 Logs
@@ -318,7 +447,7 @@ What is logged (Information unless noted):
 | When | Lines to look for |
 |---|---|
 | Startup | `starting:` (version, **x64/x86 process**, Windows session, user), `Settings:` (API address, `DryRunDefault`, company, company file and rules file with `found`/`missing`), `Data files:`, `QuickBooks:` (qbXML version, busy timeout, backup folder), `Hermes:` (URL, model, key `set`/`not set`), `QuickBooks gateway:`, `Startup recovery:`, `ready, listening on`. Warnings for a missing company or rules file and for Windows session 0. A startup failure ends with `[FTL] QbAutopost stopped:` |
-| Every API request | `HTTP POST /jobs responded 202 in 12 ms` (4xx Warning, 5xx Error; a healthy `/health/*` poll is Debug). A wrong or missing key: `refused: invalid X-Api-Key header` (the key itself is never logged). Job, post, undo and sync-lists requests also log what was accepted or refused and why |
+| Every API request | `HTTP POST /api/v1/jobs responded 202 in 12 ms` (4xx Warning, 5xx Error; a healthy `/api/v1/health/*` poll is Debug). A wrong or missing key: `refused: invalid X-Api-Key header` (the key itself is never logged). Job, post, undo and sync-lists requests also log what was accepted or refused and why |
 | A job | `accepted`, `analysing`, `requirement read`, one line per statement (rows, reconcile) or `held (reason)`, invoices, `N lines: … to post, … held (reason xN), … skipped`, one line per held or skipped line (`file:line date amount direction`, reason, note), `posting batch …`, the final status |
 | QuickBooks | `QuickBooks SDK:` each session step (`creating …`, `OpenConnection2`, `BeginSession on '…'`, `session open`, `session closed`). **A log that stops after `BeginSession` means QuickBooks is showing a dialog** (certificate, login, single-user). `QuickBooks call N: sending CheckAddRq x5 …`, `answered in … ms with N responses: … ok, … with errors`, a Warning per refused request with its status code and message, `took … s, longer than the busy timeout` |
 | Posting | `posted Check file:line … as TxnID …` per transaction, `not posted … reason` per rejected line, `batch <id>: N posted, M not posted`, `duplicate check (G4) changed …` |
@@ -327,6 +456,29 @@ What is logged (Information unless noted):
 Statement text (descriptions, memos), prompts and qbXML bodies are not logged at Information (spec §14): lines are named
 by file, line number, date and amount. At Debug each line's description and full mapping, and every QuickBooks response
 with its TxnID, are added. The full qbXML and Hermes exchanges stay in the job's `output\` folder.
+
+### 8.7 The audit trail
+
+Beside the operational log, in the same folder, the app writes `audit-yyyyMMdd.jsonl` — **one JSON line per
+request that changed something**, kept for `Api:AuditRetentionDays` (400 days; `0` or less keeps everything for
+ever). It is not a Serilog sink: no level, no filter and no formatter can lose a line from it.
+
+```powershell
+Get-Content C:\qb-autopost\logs\audit-20260923.jsonl -Tail 5 | ForEach-Object { $_ | ConvertFrom-Json }
+```
+
+Each line carries the time, the `requestId`, the `clientId` who asked, the method and route, the status, and — for
+a post — the `batchId`/`jobId`, the counts and the money that actually moved. It never carries a payee, a memo, an
+account name or a key: those stay in the job's `output\` folder and in the ledger.
+
+- A request that **read** something (any `GET`, and the validates, the connection test and the company-file check)
+  leaves no line; only changes do.
+- A `403` and a `429` **are** recorded, under the caller who was refused. A request with an **unknown** key is not
+  (tracker Q-64): a stranger must not be able to grow this file.
+- Quote the `requestId` when reporting a problem — the same id is in the `X-Request-Id` response header, on every
+  log line of that request, and in the problem detail.
+
+Back it up with the ledger (§9). This is the record that answers "who posted this, and when".
 
 ## 9. Backing up the app's own state
 

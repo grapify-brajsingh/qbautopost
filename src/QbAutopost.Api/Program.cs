@@ -215,6 +215,8 @@ builder.Services.AddSingleton(sp =>
     return new IdempotencyStore(Path.Combine(s.Paths.ApiBatches, "idempotency.json"), s.Api.IdempotencyRetentionDays);
 });
 builder.Services.AddSingleton<DirectPostRunner>();
+// T-914 (FR-A-7): the same StatementReader the job uses, so a validate and the job it predicts cannot disagree.
+builder.Services.AddSingleton<FolderValidator>();
 builder.Services.AddSingleton<JobPipeline>();
 builder.Services.AddSingleton<QbListSync>();
 builder.Services.AddSingleton<BatchUndo>();

@@ -1,7 +1,7 @@
 # Session Handoff — QbAutopost
 
 **This is an unattended relay. The owner is away and will answer nothing mid-run.**
-Written: 2026-09-23 (session 18) · **M9 (API v1): 13 of 14 done**, branch `m9-api-v1` · **Next task: T-914 — the last one.**
+Written: 2026-09-23 (session 19) · **M9 (API v1): 14 of 14 done**, branch `m9-api-v1` · **Next: the final report (§9). Nothing else.**
 
 > **If you are an agent starting fresh: read §0, do the one task named in §3 as "NEXT", then §5 before you finish.**
 > Do not read ahead and do not do two tasks. The next agent has no memory of you — this file is the only thing
@@ -65,44 +65,31 @@ The usual rules (`CLAUDE.md`) all still apply. These matter more when nobody is 
 |---|---|
 | Repo | `D:\qb_post`, branch **`m9-api-v1`**, tracking `origin/m9-api-v1` (pushed 2026-09-23; credentials cached, so `git push` works unattended) |
 | Build | `dotnet build -warnaserror` → 0 warnings |
-| Tests | **Core 834, Api 472** (1306), green twice on Windows |
-| Milestones | M0–M7 done; M8 agent work done (`ready-for-human`); **M9 13/14** |
-| Packages | **7**: the six plus `Scalar.AspNetCore` **2.13.13**, added by T-913 under Q-46. That is the whole allowance — T-914 needs no package |
-| Owner | **Away. Answers nothing.** Q-1…Q-45, Q-47…Q-61, Q-63…Q-67 outstanding; each already has a conservative behaviour. **Q-62 is answered** (see §7b) |
+| Tests | **Core 859, Api 487** (1346), green twice on Windows |
+| Milestones | M0–M7 done; M8 agent work done (`ready-for-human`); **M9 14/14 — the agent work of M9 is finished** |
+| Packages | **7**: the six plus `Scalar.AspNetCore` **2.13.13**, added by T-913 under Q-46. That is the whole allowance — the final report needs no package |
+| Owner | **Away. Answers nothing.** Q-1…Q-45, Q-47…Q-61, Q-63…Q-70 outstanding; each already has a conservative behaviour. **Q-62 is answered** (see §7b) |
 
 ## 3. The task queue
 
 | Task | Status | One line |
 |---|---|---|
-| T-901…T-913 | **done** | Routes, health, SDK probe, connection test, company-file validate, direct model, validate, post, idempotency, clients+scopes, transport+limits+input hardening, audit trail + `requestId`, OpenAPI document + Scalar reference |
-| **T-914** | **NEXT** | Move the docs, the runbook and the POC package to the v1 routes and the new auth rules — see §4 |
-| *(then)* | **STOP** | Write the final report (§9). Do not start M10. Do not attempt the server tasks |
+| T-901…T-914 | **done** | Routes, health, SDK probe, connection test, company-file validate, direct model, validate, post, idempotency, clients+scopes, transport+limits+input hardening, audit trail + `requestId`, OpenAPI document + Scalar reference, the list/validate routes + the documentation catch-up |
+| **The final report** | **NEXT** | Write `docs/M9-COMPLETE.md` exactly as §9 describes. Nothing else — see §4 |
+| *(then)* | **STOP** | Do not start M10. Do not attempt the server tasks (§10) |
 
 ## 4. The last task, in detail
 
-*(T-913 is done. Route policy — `IsHealth`, `IsIdempotent`, `IsMutating`, `ScopeFor` and now `IsReference` — all
-lives in `Api/Endpoints/ApiRoutes.cs`; startup rules live in `Api/Security/TransportGuard.cs` as pure functions.)*
+**There is no code task left in M9.** T-914 closed it. The one thing left for an agent is the report in §9, and
+§9 says exactly what goes in it. Read `docs/tracker.md` (the M9 rows T-901…T-914, the Questions table, the T-903
+and T-609 checklists) and `docs/testing/T-9*.tdd.md` §8/§9 — the "what this does not prove" sections are the honest
+list the report's last part asks for, already written, one per task.
 
-**T-914 — the documentation catch-up. No new behaviour; this is the task that stops the docs lying.** Everything
-written before M9 describes the flat routes (`/jobs`, `/health/…`) and one shared `Api:ApiKey`. Nine sessions of
-work later the surface is `/api/v1/*`, per-caller keys with scopes, TLS rules, rate limits, an audit file and an
-OpenAPI document. What needs moving, as far as session 18 can see from the repository (**read each file before you
-believe this list** — it was compiled by grep, not by doing the task):
+Do **not** treat the report as an excuse to touch code. If you find something wrong while writing it, record it as
+a question in the tracker and say so in the report; fixing it is the next task, not this one.
 
-- `docs/runbook.md` — every URL, plus new sections the operator now needs: issuing a key with
-  `scripts/new-api-client.ps1` and what each scope allows; `Api:AllowLegacyKey` and when to turn it off; the audit
-  file beside the log (`audit-*.jsonl`, 400 days); `Api:Reference:Enabled` and how to read the API reference;
-  the rate limits and what a `429` with `Retry-After` means; `Paths:AllowedJobRoots`.
-- `docs/spec.md` §6 — **stale on purpose and still wrong**: it leaves every `/health/*` open (see §7 item 1).
-- `samples/poc/README-POC.md`, `scripts/*.ps1`, `deploy/*.ps1`, `scripts/qb-server-check.ps1`,
-  `scripts/shadow-diff.ps1` — anything that calls the API by URL or sends a key.
-- The POC package (`scripts/build-poc-package.ps1`) — it ships `appsettings.json`, which gained `Api:Reference`,
-  `Api:RateLimits`, `Api:AuditRetentionDays`, `Paths:AllowedJobRoots` and the rest.
-- `Api:LegacyRoutes` stays **true** (Q-53 is unanswered): moving the documentation is not the same as switching the
-  flat routes off, and nobody is here to confirm which callers still use them. Do not turn it off.
-
-Two traps for this one specifically: `DeployScriptsTests` enforces **ASCII** in scripts (trap 10), and
-`GoLiveConfigApiTests` asserts what the shipped `appsettings.json` contains — if you edit that file, read it first.
+*(Route policy — `IsHealth`, `IsIdempotent`, `IsMutating`, `IsReference`, `ScopeFor` — all lives in
+`Api/Endpoints/ApiRoutes.cs`; startup rules live in `Api/Security/TransportGuard.cs` as pure functions.)*
 
 ## 5. Before you finish — the checklist
 
@@ -177,6 +164,42 @@ Two traps for this one specifically: `DeployScriptsTests` enforces **ASCII** in 
     written down** in `wwwroot/openapi.json`. When you are about to grep the endpoint files to find out what a route
     accepts, read that document first — and if it turns out to be wrong, the drift test did not catch it (it checks
     routes, scopes and shape, never a schema's field names: see §8.3 of `docs/testing/T-913.tdd.md`).
+
+25. **Five operator files are now checked by a test.** `Core.Tests/Architecture/OperatorDocsTests.cs` reads
+    `docs/runbook.md`, `steps.md`, `samples/poc/README-POC.md`, `scripts/qb-server-check.ps1` and
+    `deploy/start-all.ps1` and fails when a route is named without `/api/v1` in front of it, when any of them
+    contains "no key needed" / "No API key needed" / "needs no key for /health", or when one of seven M9 subjects
+    is missing from the runbook. **If you write `/jobs` or `/health/…` in one of those files, the build goes red.**
+    Write the versioned path, or word the sentence without a leading slash (the runbook does this once, on purpose,
+    where it describes the legacy surface itself).
+26. **`deploy/start-all.ps1` may never hold a key.** `DeployScriptsTests.Should_NotTouchSecrets_When_Reading…`
+    forbids the string `ApiKey` (case-insensitive) anywhere in it, because it runs unattended at logon. That is why
+    it waits on `/api/v1/health/ready` and not on `/api/v1/health/hermes`. Do not "fix" it by adding a parameter.
+
+## 7d. What changed underneath you in session 19 (T-914)
+
+1. **Three routes were added**: `GET /api/v1/quickbooks/lists` (reads `qb-lists.json`, never opens a session),
+   `POST /api/v1/quickbooks/lists/sync` (the v1 spelling of `/qb/sync-lists`, **same handler**), and
+   `POST /api/v1/jobs/validate` (FR-A-7). `ApiRoutes` needed no change at all: `ScopeFor` already mapped
+   `/quickbooks/*` → `qb:read` and `/jobs/…/validate` → `jobs:read`, and `ReadOnlyPosts` already listed
+   `/jobs/validate`. That is T-910's and T-912's "closed by default" design paying off — but it also means a new
+   route can be live and scoped before anybody has thought about it, so check `ScopeFor` when you add one.
+2. **`/qb/sync-lists` was kept, not renamed away.** Both spellings answer. The OpenAPI document marks the old one
+   `deprecated` with operationId `syncListsFlat`. **Q-69** asks when it goes; it is a *versioned* path, so Q-53
+   (the flat paths) does not cover it.
+3. **`FolderReader.Read` has a second parameter**, `createOutput = true`. Only the validator passes `false`. If you
+   add a caller that must not touch the folder, pass it.
+4. **G1 moved out of `JobPipeline` into `Core/Pipeline/StatementCheck.cs`** (`Reconcile(parsed, file)`), verbatim.
+   Both the job and the folder validate call it. **Change it and you change both** — that is deliberate, and the
+   reason the validate can be trusted to predict the job.
+5. **`docs/spec.md` §6 is no longer stale.** It now carries the v1 table with scopes, and a banner saying
+   `docs/spec-api-v1.md` wins. §12 gained a paragraph listing the M9 settings and pointing at the runbook.
+6. **`samples/poc/appsettings.json` gained every M9 setting** with the shipped defaults. `scripts/build-poc-package.ps1`
+   copies it over `app\appsettings.json` on the server, so a value you put there reaches the POC machine.
+7. **The runbook has three new sections** — §3.4 (keys and scopes, the scope table, turning `AllowLegacyKey` off),
+   §3.5 (job roots, rate limits, the 429 and its `Retry-After`, the wrong-key brake, body/field caps) and §3.6 (the
+   reference page) — plus §8.7 (the audit file). `OperatorDocsTests` keeps the subjects present; only a person can
+   keep them true.
 
 ## 7c. What changed underneath you in session 18 (T-913)
 
@@ -274,13 +297,26 @@ STATE: <what is committed, what is half-done, what is safe to delete>
 NEXT AGENT SHOULD: <the single next action>
 ```
 
-## 9. The final report (last agent only)
+## 9. The final report (last agent only — that is you)
 
-When T-914 is done, do not start anything else. Write `docs/M9-COMPLETE.md` with: what M9 delivered route by
-route; the full list of open questions with the conservative behaviour each one currently has; **everything that
-needs the owner or the server**, including the T-903 checklist, T-802/803/804, and a new direct-post server
-checklist (dry run → one real batch → undo it); and an honest list of what is implemented but never run against a
-real QuickBooks — which, today, is all of T-907…T-913.
+T-914 is done, so this is the whole remaining job. Write `docs/M9-COMPLETE.md` with: what M9 delivered route by
+route; the full list of open questions (**Q-1…Q-70**, minus the answered Q-46 and Q-62) with the conservative
+behaviour each one currently has; **everything that needs the owner or the server**, including the T-903
+checklist, T-802/803/804, and a new direct-post server checklist (dry run → one real batch → undo it); and an
+honest list of what is implemented but never run against a real QuickBooks — which, today, is all of
+T-907…T-914.
+
+Two things session 19 found that belong in the report's "needs the owner" part, because they are decisions, not
+bugs:
+
+- **Q-61 is now urgent, not theoretical.** Any monitoring pointed at `/health/quickbooks`, `/health/sdk` or
+  `/health/hermes` starts getting `401` on this upgrade. The runbook now tells the operator to point it at
+  `/api/v1/health/ready` instead, but somebody has to actually do that before the upgrade.
+- **Q-67**: `Authorization: Bearer` does not work and never did, though api-v1 §2.2 calls it preferred. Either the
+  middleware grows a second header or the spec is corrected; the document and the runbook currently say what the
+  code does.
+
+This report is text only. Do not change code to make it tidier.
 
 ## 10. What no agent can do
 

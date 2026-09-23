@@ -23,7 +23,12 @@ public static class QuickBooksEndpoints
 
     public static IEndpointRouteBuilder MapQuickBooksEndpoints(this IEndpointRouteBuilder app)
     {
+        // T-914 (api-v1 §3): the versioned spelling of the sync, and the read of what it cached. The flat
+        // /qb/sync-lists stays mapped while Api:LegacyRoutes is true (api-v1 §9.1) so no caller is broken by the
+        // rename; the documentation now names the route on the right — see Q-69.
         app.MapPost("/qb/sync-lists", SyncLists);
+        app.MapPost("/quickbooks/lists/sync", SyncLists);
+        app.MapGet("/quickbooks/lists", GetLists);
         app.MapPost("/quickbooks/connection/test", ConnectionTest);
         app.MapPost("/quickbooks/company-file/validate", ValidateCompanyFile);
         app.MapPost("/quickbooks/transactions/validate", ValidateTransactions);
@@ -306,6 +311,18 @@ public static class QuickBooksEndpoints
             Results.Problem(statusCode: StatusCodes.Status502BadGateway, title: "QuickBooks refused the request", detail: ex.Message),
         _ => null,
     };
+
+    /// <summary>
+    /// T-914 (api-v1 §3): the cached QuickBooks names, so a caller can pick an account or a vendor that exists
+    /// instead of guessing and having the row held.
+    /// <para>
+    /// It reads <c>qb-lists.json</c> and never opens a QuickBooks session: filling a drop-down must not queue
+    /// behind a post, and must still answer while QuickBooks is shut down. A file that is not there is not an
+    /// error — it means the sync has not run, which the empty lists and the null <c>syncedUtc</c> say plainly.
+    /// </para>
+    /// </summary>
+    private static IResult GetLists(PipelineOptions pipeline) =>
+        Results.Ok(new QbListsStore(pipeline.QbListsFile).Load());
 
     private static async Task<IResult> SyncLists(JobQueue queue, QbListSync sync, ILoggerFactory loggers, CancellationToken ct)
     {

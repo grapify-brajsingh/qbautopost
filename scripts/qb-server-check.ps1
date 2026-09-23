@@ -7,7 +7,11 @@
   Steps, in order: health -> sync -> dryrun -> post -> undo.
   Run it on the QuickBooks server, in the interactive session of the account QuickBooks runs under,
   with Company:FilePath pointing at a COPY of the company file.
+  Every call goes to the versioned routes (/api/v1/...) and carries a key.
   The API key is read from the QBAUTOPOST__Api__ApiKey environment variable (or -ApiKey) and never printed.
+  With per-caller keys (clients.json, scripts\new-api-client.ps1) the key needs the scopes
+  health:read, qb:read, jobs:read, jobs:write and qb:post; the shared Api:ApiKey carries all of them
+  while Api:AllowLegacyKey is true.
 
 .EXAMPLE
   .\scripts\qb-server-check.ps1 -Step health
@@ -56,7 +60,7 @@ function Invoke-Api([string] $Method, [string] $Path, $Body) {
 function Wait-Job([string] $Id) {
     $deadline = (Get-Date).AddSeconds($WaitSeconds)
     while ($true) {
-        $view = Invoke-Api GET "/jobs/$([uri]::EscapeDataString($Id))" $null
+        $view = Invoke-Api GET "/api/v1/jobs/$([uri]::EscapeDataString($Id))" $null
         if (@('queued', 'analysing', 'posting') -notcontains $view.status) {
             return $view
         }
@@ -75,9 +79,10 @@ function Require-Copy {
 
 switch ($Step) {
     'health' {
-        # No API key needed; a 503 still carries the JSON body with the reason.
+        # T-910/T-914: the QuickBooks health route opens a QuickBooks session, so it needs a key with the health:read scope.
+        # Only /api/v1/health and /api/v1/health/ready answer without one. A 503 still carries the JSON body.
         try {
-            Show (Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/health/quickbooks'))
+            Show (Invoke-Api GET '/api/v1/health/quickbooks' $null)
         }
         catch {
             Write-Warning "QuickBooks is not healthy: $($_.ErrorDetails.Message)"
@@ -86,11 +91,11 @@ switch ($Step) {
         Write-Host 'Record the API process bitness in the tracker (Task Manager > Details > Platform column).'
     }
     'sync' {
-        Show (Invoke-Api POST '/qb/sync-lists' $null)
+        Show (Invoke-Api POST '/api/v1/quickbooks/lists/sync' $null)
     }
     'dryrun' {
         if (-not $Folder) { throw 'Pass -Folder <absolute job folder>.' }
-        $created = Invoke-Api POST '/jobs' @{ folder = $Folder; dryRun = $true; force = [bool] $Force }
+        $created = Invoke-Api POST '/api/v1/jobs' @{ folder = $Folder; dryRun = $true; force = [bool] $Force }
         $view = Wait-Job $created.jobId
         Show $view
         Write-Host "Review $Folder\output\analysis.json before posting."
@@ -98,7 +103,7 @@ switch ($Step) {
     'post' {
         Require-Copy
         if (-not $JobId) { throw 'Pass -JobId <job id in ready state>.' }
-        [void] (Invoke-Api POST "/jobs/$([uri]::EscapeDataString($JobId))/post" $null)
+        [void] (Invoke-Api POST "/api/v1/jobs/$([uri]::EscapeDataString($JobId))/post" $null)
         $view = Wait-Job $JobId
         Show $view
         Write-Host "Batch: $($view.batchId). Check the transactions in QuickBooks, then undo with -Step undo -BatchId '$($view.batchId)'."
@@ -106,6 +111,6 @@ switch ($Step) {
     'undo' {
         Require-Copy
         if (-not $BatchId) { throw "Pass -BatchId '<jobId>#<attempt>'." }
-        Show (Invoke-Api POST "/batches/$([uri]::EscapeDataString($BatchId))/undo" $null)
+        Show (Invoke-Api POST "/api/v1/batches/$([uri]::EscapeDataString($BatchId))/undo" $null)
     }
 }

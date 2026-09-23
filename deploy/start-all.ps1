@@ -8,8 +8,11 @@
     1. Docker up: WSL 2 + Docker Engine (-DockerMode Wsl, Windows Server) or Docker Desktop (-DockerMode Desktop).
     2. docker compose up -d in deploy/hermes (the file publishes 127.0.0.1:8642 only).
     3. Wait until Hermes accepts connections on 127.0.0.1:8642.
-    4. Start the API (unless it already runs), then wait for GET /health/hermes to answer 200.
-  The API needs no key for /health, so this script never reads or prints a key.
+    4. Start the API (unless it already runs), then wait for GET /api/v1/health/ready to answer 200.
+  This script holds no secret of any kind, so it can only call routes that need no key: since T-910 those are
+  /api/v1/health and /api/v1/health/ready only. /api/v1/health/hermes needs the health:read scope, so Hermes is
+  proved here by its own port (step 3) rather than through the API. Use
+  scripts\qb-server-check.ps1 -Step health, which does carry a key, for the dependency checks.
   If Hermes does not come up in time, the API is still started (undo and QuickBooks health do not need Hermes;
   a new job fails at T1 and posts nothing) and the script exits 2. SPEC-GAP T-802, tracker Q-43.
   Use -WhatIf for a dry run: it prints every step and changes nothing.
@@ -183,9 +186,9 @@ function Start-Api {
     return $true
 }
 
-function Wait-HermesHealth {
+function Wait-ApiReady {
     param([string] $BaseUrl, [int] $TimeoutSeconds)
-    $url = $BaseUrl.TrimEnd('/') + '/health/hermes'
+    $url = $BaseUrl.TrimEnd('/') + '/api/v1/health/ready'
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $last = 'no answer'
     while ((Get-Date) -lt $deadline) {
@@ -202,7 +205,7 @@ function Wait-HermesHealth {
         }
         Start-Sleep -Seconds 10
     }
-    Write-Step "GET $url not healthy within $TimeoutSeconds s (last: $last)." 'WRN'
+    Write-Step "GET $url not ready within $TimeoutSeconds s (last: $last)." 'WRN'
     return $false
 }
 
@@ -222,7 +225,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $ComposeDir '.env'))) {
 }
 
 if (-not $PSCmdlet.ShouldProcess("Docker ($DockerMode)", 'Start and wait')) {
-    Write-Step "Dry run: would start Docker ($DockerMode), run docker compose up -d in '$ComposeDir', wait for 127.0.0.1:$HermesPort, start '$AppExe' and wait for $ApiBaseUrl/health/hermes."
+    Write-Step "Dry run: would start Docker ($DockerMode), run docker compose up -d in '$ComposeDir', wait for 127.0.0.1:$HermesPort, start '$AppExe' and wait for $ApiBaseUrl/api/v1/health/ready."
     if (-not (Test-Path -LiteralPath $AppExe)) {
         Write-Step "Dry run: '$AppExe' does not exist yet." 'WRN'
     }
@@ -234,11 +237,15 @@ if (-not (Start-Hermes -Directory $ComposeDir)) { exit 1 }
 $hermesUp = Wait-HermesPort -Port $HermesPort -TimeoutSeconds $HermesWaitSeconds
 
 if (-not (Start-Api -Exe $AppExe)) { exit 1 }
-$healthy = Wait-HermesHealth -BaseUrl $ApiBaseUrl -TimeoutSeconds $ApiWaitSeconds
+$ready = Wait-ApiReady -BaseUrl $ApiBaseUrl -TimeoutSeconds $ApiWaitSeconds
 
-if ($hermesUp -and $healthy) {
+if ($hermesUp -and $ready) {
     Write-Step 'All up.'
     exit 0
+}
+if (-not $ready) {
+    Write-Step "The API did not become ready at $ApiBaseUrl/api/v1/health/ready; read C:\qb-autopost\logs\qbautopost-*.log." 'ERR'
+    exit 1
 }
 Write-Step 'The API runs, but Hermes is not healthy: new jobs will fail at T1 until it is (README-hermes.md section 3).' 'WRN'
 exit 2

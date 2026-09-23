@@ -247,12 +247,51 @@
         }
       }
     },
-    "/api/v1/qb/sync-lists": {
+    "/api/v1/quickbooks/lists": {
+      "get": {
+        "tags": ["QuickBooks"],
+        "operationId": "getLists",
+        "summary": "The cached QuickBooks account, vendor and customer names.",
+        "description": "Read from `qb-lists.json`, so it answers while QuickBooks is shut down and never queues behind a post. A `syncedUtc` of `null` with empty lists means the sync has not run yet; it is not an error.",
+        "x-required-scope": "qb:read",
+        "responses": {
+          "200": {
+            "description": "The names as the last sync left them.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/QbLists" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      }
+    },
+    "/api/v1/quickbooks/lists/sync": {
       "post": {
         "tags": ["QuickBooks"],
         "operationId": "syncLists",
         "summary": "Read the QuickBooks account, vendor and customer lists into qb-lists.json.",
-        "description": "One read-only message set (active records only). It runs on the single job worker, so it cannot overlap a job or a post.",
+        "description": "One read-only message set (active records only). It runs on the single job worker, so it cannot overlap a job or a post. This is the v1 spelling; `POST /api/v1/qb/sync-lists` is the same handler under the pre-M9 name and will go when the legacy routes do (Q-53, Q-69).",
+        "x-required-scope": "qb:read",
+        "responses": {
+          "200": {
+            "description": "The lists were read and written.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ListSyncResult" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "502": { "$ref": "#/components/responses/QuickBooksError" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/api/v1/qb/sync-lists": {
+      "post": {
+        "tags": ["QuickBooks"],
+        "operationId": "syncListsFlat",
+        "summary": "Deprecated spelling of POST /api/v1/quickbooks/lists/sync; same handler, same body.",
+        "description": "Kept because callers written before M9 use it. Move to `/api/v1/quickbooks/lists/sync`; this path goes when `Api:LegacyRoutes` is turned off (Q-53).",
+        "deprecated": true,
         "x-required-scope": "qb:read",
         "responses": {
           "200": {
@@ -360,6 +399,33 @@
           "401": { "$ref": "#/components/responses/Unauthorized" },
           "403": { "$ref": "#/components/responses/Forbidden" },
           "409": { "$ref": "#/components/responses/Conflict" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      }
+    },
+    "/api/v1/jobs/validate": {
+      "post": {
+        "tags": ["Jobs"],
+        "operationId": "validateFolder",
+        "summary": "Would this folder run? F1, the statement parse and the G1 reconcile gate, with no job queued.",
+        "description": "Nothing is written into the folder (not even `output/`), no job id is taken and QuickBooks is never called. It stops short of the requirement, the mapper and the duplicate check, so a folder that passes here may still hold lines when it runs.",
+        "x-required-scope": "jobs:read",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ValidateFolderRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "The folder would run.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FolderValidation" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "422": {
+            "description": "The folder would not run; the body is the same shape as the 200.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FolderValidation" } } }
+          },
           "429": { "$ref": "#/components/responses/TooManyRequests" }
         }
       }
@@ -917,6 +983,68 @@
             "description": "Names QuickBooks has that `rules.json` says nothing about.",
             "items": { "type": "string" }
           }
+        }
+      },
+      "QbLists": {
+        "type": "object",
+        "description": "The cached QuickBooks names (`qb-lists.json`). Empty lists with a null `syncedUtc` mean the sync has not run.",
+        "properties": {
+          "syncedUtc": { "type": "string", "format": "date-time", "nullable": true },
+          "accounts": { "type": "array", "items": { "$ref": "#/components/schemas/QbAccount" } },
+          "vendors": { "type": "array", "items": { "type": "string" } },
+          "customers": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "QbAccount": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "The QuickBooks `FullName` (`Utilities:Electric` for a sub-account)." },
+          "type": { "type": "string", "nullable": true, "description": "QuickBooks `AccountType`, e.g. `Expense`." }
+        }
+      },
+      "ValidateFolderRequest": {
+        "type": "object",
+        "required": ["folder"],
+        "properties": {
+          "folder": { "type": "string", "description": "An absolute path inside `Paths:AllowedJobRoots`." }
+        }
+      },
+      "FolderValidation": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean", "description": "The folder would become a job and no statement was held." },
+          "folder": { "type": "string" },
+          "errors": {
+            "type": "array",
+            "description": "Why the folder cannot become a job (F1). Empty when it can.",
+            "items": { "type": "string" }
+          },
+          "statements": { "type": "array", "items": { "$ref": "#/components/schemas/StatementCheck" } },
+          "unreadable": {
+            "type": "array",
+            "description": "Files that will not be read, and why (F4).",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file": { "type": "string" },
+                "reason": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
+      "StatementCheck": {
+        "type": "object",
+        "properties": {
+          "file": { "type": "string" },
+          "last4": { "type": "string", "nullable": true },
+          "kind": { "type": "string", "nullable": true, "description": "`bank` or `card`." },
+          "layout": { "type": "string", "nullable": true, "description": "The `CsvLayouts` name, or `hermes-t2` for a PDF." },
+          "rows": { "type": "integer", "format": "int32" },
+          "reconcile": { "type": "object", "nullable": true, "description": "The G1 verdict: `{ ok, verified, message }`." },
+          "totals": { "type": "object", "nullable": true, "description": "The statement's own printed figures (PDF only)." },
+          "holdReason": { "type": "string", "nullable": true },
+          "errors": { "type": "array", "items": { "type": "string" } }
         }
       },
       "CreateJobRequest": {

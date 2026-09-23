@@ -48,12 +48,20 @@ Copy-Item C:\qb-autopost\poc\rules.json       C:\qb-autopost\rules.json -Force
 New-Item -ItemType Directory -Force C:\qb-jobs | Out-Null
 Copy-Item C:\qb-autopost\poc\jobs\2026-09-tropicana C:\qb-jobs\ -Recurse -Force
 
-# an API key of your choice, for this Windows user (the app refuses to start without one)
+# an API key of your choice, for this Windows user
+# (the app refuses to start when no caller can authenticate at all)
 [Environment]::SetEnvironmentVariable('QBAUTOPOST__Api__ApiKey', 'poc-' + [guid]::NewGuid().ToString('N'), 'User')
 ```
 
 Close PowerShell and open a new one so the key is visible. If you saved the company file elsewhere, edit
 `Company:FilePath` in `C:\qb-autopost\app\appsettings.json`.
+
+**About the key and the routes.** The API serves everything under `http://127.0.0.1:5080/api/v1` and
+`scripts\qb-server-check.ps1` calls those paths. For the POC one shared key is enough: `Api:AllowLegacyKey` is
+`true` in `poc\appsettings.json`, so the key above counts as a caller with every permission. A real installation
+gives each caller its own key with only the permissions it needs — `scripts\new-api-client.ps1` in the repository,
+and `docs\runbook.md` §3.4. Only `GET /api/v1/health` and `GET /api/v1/health/ready` answer without a key; the
+QuickBooks and Hermes health routes need one, which is why the step script sends it.
 
 ## 3. Run
 
@@ -91,7 +99,8 @@ Look at the last lines of `C:\qb-autopost\logs\qbautopost-<date>.log`.
 | `could not open a QuickBooks session` | QuickBooks not open, other company open, or certificate refused | Open the file in `Company:FilePath`; re-allow the app in *Edit → Preferences → Integrated Applications → Company Preferences* |
 | `requirement check (G2) failed … company` | Company name differs | Keep `Company:Name` = `Tropicana Properties LLC` (and in `requirement.txt`) |
 | `missingInRules` not empty | A list name is missing or spelled differently | Create it in QuickBooks with exactly that name |
-| `Api:ApiKey is not set` | No key | Step 2, open a new PowerShell |
+| `No API caller can authenticate` | No key in the environment | Step 2, then open a new PowerShell |
+| `429` with a `Retry-After` header | You sent more than 10 posting or 120 other requests in a minute | Wait the seconds it names and run the step again |
 | A line `held … hermes-failed` | A line no rule resolves (AI is off) | Add a rule to `C:\qb-autopost\rules.json` (see `docs/runbook.md` §3.3) |
 
 Your own statements: put a folder like the sample under `C:\qb-jobs\` (a `requirement.txt` naming the company and
