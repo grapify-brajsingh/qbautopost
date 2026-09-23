@@ -67,7 +67,7 @@ The usual rules (`CLAUDE.md`) all still apply. These matter more when nobody is 
 |---|---|
 | Repo | `D:\qb_post`, branch **`m9-api-v1`**, tracking `origin/m9-api-v1` (pushed 2026-09-23; credentials cached, so `git push` works unattended) |
 | Build | `dotnet build -warnaserror` → **Build succeeded. 0 Warning(s), 0 Error(s)** — measured 2026-09-23 after the final-report commit |
-| Tests | `dotnet test` → **Core 866 passed · Api 507 passed** (1373 total) — measured 2026-09-23 on Windows after T-918 |
+| Tests | `dotnet test` → **Core 866 passed · Api 507 passed** (1373 total) — measured 2026-09-24 on Windows, Hermes now ships disabled |
 | Milestones | M0–M7 done; M8 agent work done (`ready-for-human`); **M9 complete: 14/14 rows (13 `done`, T-903 `ready-for-human`) and `docs/M9-COMPLETE.md` written** |
 | Packages | **7**: the six plus `Scalar.AspNetCore` **2.13.13**, added by T-913 under Q-46. That is the whole allowance, and nothing remaining needs a package |
 | Owner | **Away. Answers nothing.** 69 questions outstanding — Q-1…Q-45, Q-47…Q-61, Q-63…Q-71 — each with a conservative behaviour, all listed with that behaviour in `docs/M9-COMPLETE.md` §2. **Answered: Q-0, Q-46 (owner, yes), Q-62 (by T-912)** |

@@ -77,6 +77,10 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             // requests a minute to these same routes. Tests that need the limiter turn it on themselves; that it
             // ships *on* is asserted by RateLimitTests.Should_ShipEnabled_When_NobodyConfiguresIt.
             ["Api:RateLimits:Enabled"] = "false",
+            // The shipped appsettings.json now ships Hermes OFF (T-806 POC mode), and the test host inherits it
+            // (trap 4). Most of this suite exercises the Hermes path against FakeHermesClient, so the flag is pinned
+            // on here, and PocModeApiTests turns it back off for the one host that tests the disabled mode.
+            ["Hermes:Enabled"] = "true",
             // Rule 1: even a real HermesClient built by mistake cannot reach a Hermes on this machine (.invalid never resolves).
             ["Hermes:BaseUrl"] = "http://hermes.invalid:8642",
             ["Hermes:ApiKey"] = "",
