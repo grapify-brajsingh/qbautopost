@@ -1,7 +1,7 @@
 # Session Handoff — QbAutopost
 
 **This is an unattended relay. The owner is away and will answer nothing mid-run.**
-Written: 2026-09-23 (session 17) · **M9 (API v1): 12 of 14 done**, branch `m9-api-v1` · **Next task: T-913.**
+Written: 2026-09-23 (session 18) · **M9 (API v1): 13 of 14 done**, branch `m9-api-v1` · **Next task: T-914 — the last one.**
 
 > **If you are an agent starting fresh: read §0, do the one task named in §3 as "NEXT", then §5 before you finish.**
 > Do not read ahead and do not do two tasks. The next agent has no memory of you — this file is the only thing
@@ -65,31 +65,44 @@ The usual rules (`CLAUDE.md`) all still apply. These matter more when nobody is 
 |---|---|
 | Repo | `D:\qb_post`, branch **`m9-api-v1`**, tracking `origin/m9-api-v1` (pushed 2026-09-23; credentials cached, so `git push` works unattended) |
 | Build | `dotnet build -warnaserror` → 0 warnings |
-| Tests | **Core 834, Api 447** (1281), green twice on Windows |
-| Milestones | M0–M7 done; M8 agent work done (`ready-for-human`); **M9 12/14** |
-| Packages | 6 + `Scalar.AspNetCore` **approved** for T-913 (Q-46 answered 2026-09-23). T-911 and T-912 added **no** package |
-| Owner | **Away. Answers nothing.** Q-1…Q-45, Q-47…Q-61, Q-63…Q-65 outstanding; each already has a conservative behaviour. **Q-62 is answered** (see §7b) |
+| Tests | **Core 834, Api 472** (1306), green twice on Windows |
+| Milestones | M0–M7 done; M8 agent work done (`ready-for-human`); **M9 13/14** |
+| Packages | **7**: the six plus `Scalar.AspNetCore` **2.13.13**, added by T-913 under Q-46. That is the whole allowance — T-914 needs no package |
+| Owner | **Away. Answers nothing.** Q-1…Q-45, Q-47…Q-61, Q-63…Q-67 outstanding; each already has a conservative behaviour. **Q-62 is answered** (see §7b) |
 
 ## 3. The task queue
 
 | Task | Status | One line |
 |---|---|---|
-| T-901…T-912 | **done** | Routes, health, SDK probe, connection test, company-file validate, direct model, validate, post, idempotency, clients+scopes, transport+limits+input hardening, audit trail + `requestId` |
-| **T-913** | **NEXT** | FR-A-18 OpenAPI document + Scalar reference UI. **Unblocked**: the package is approved — see §4 |
-| T-914 | queued | Move docs, runbook and the POC package to the v1 routes and the new auth rules |
+| T-901…T-913 | **done** | Routes, health, SDK probe, connection test, company-file validate, direct model, validate, post, idempotency, clients+scopes, transport+limits+input hardening, audit trail + `requestId`, OpenAPI document + Scalar reference |
+| **T-914** | **NEXT** | Move the docs, the runbook and the POC package to the v1 routes and the new auth rules — see §4 |
 | *(then)* | **STOP** | Write the final report (§9). Do not start M10. Do not attempt the server tasks |
 
-## 4. The next three tasks, in detail
+## 4. The last task, in detail
 
-*(T-911 and T-912 are done. Two shapes worth one line each before you read on: startup rules live in
-`Api/Security/TransportGuard.cs` as pure functions, not inline in `Program.cs`, so they are testable; and route
-policy — `IsHealth`, `IsIdempotent`, `IsMutating`, `ScopeFor` — all lives in `Api/Endpoints/ApiRoutes.cs`. **T-913's
-drift test will need a fifth question answered there or nearby, not in a new place.**)*
+*(T-913 is done. Route policy — `IsHealth`, `IsIdempotent`, `IsMutating`, `ScopeFor` and now `IsReference` — all
+lives in `Api/Endpoints/ApiRoutes.cs`; startup rules live in `Api/Security/TransportGuard.cs` as pure functions.)*
 
-**T-913 — FR-A-18.** Two separate things on purpose: the **document** (`GET /api/v1/openapi.json`, hand-authored,
-with a drift test that fails when a route exists without a matching entry) and the **UI** (`GET /api/v1/reference`,
-Scalar, behind `Api:Reference:Enabled` default **false**). Swagger/Swashbuckle stays ruled out. Add
-`Scalar.AspNetCore` to `src/QbAutopost.Api/QbAutopost.Api.csproj` and note it in the tracker row.
+**T-914 — the documentation catch-up. No new behaviour; this is the task that stops the docs lying.** Everything
+written before M9 describes the flat routes (`/jobs`, `/health/…`) and one shared `Api:ApiKey`. Nine sessions of
+work later the surface is `/api/v1/*`, per-caller keys with scopes, TLS rules, rate limits, an audit file and an
+OpenAPI document. What needs moving, as far as session 18 can see from the repository (**read each file before you
+believe this list** — it was compiled by grep, not by doing the task):
+
+- `docs/runbook.md` — every URL, plus new sections the operator now needs: issuing a key with
+  `scripts/new-api-client.ps1` and what each scope allows; `Api:AllowLegacyKey` and when to turn it off; the audit
+  file beside the log (`audit-*.jsonl`, 400 days); `Api:Reference:Enabled` and how to read the API reference;
+  the rate limits and what a `429` with `Retry-After` means; `Paths:AllowedJobRoots`.
+- `docs/spec.md` §6 — **stale on purpose and still wrong**: it leaves every `/health/*` open (see §7 item 1).
+- `samples/poc/README-POC.md`, `scripts/*.ps1`, `deploy/*.ps1`, `scripts/qb-server-check.ps1`,
+  `scripts/shadow-diff.ps1` — anything that calls the API by URL or sends a key.
+- The POC package (`scripts/build-poc-package.ps1`) — it ships `appsettings.json`, which gained `Api:Reference`,
+  `Api:RateLimits`, `Api:AuditRetentionDays`, `Paths:AllowedJobRoots` and the rest.
+- `Api:LegacyRoutes` stays **true** (Q-53 is unanswered): moving the documentation is not the same as switching the
+  flat routes off, and nobody is here to confirm which callers still use them. Do not turn it off.
+
+Two traps for this one specifically: `DeployScriptsTests` enforces **ASCII** in scripts (trap 10), and
+`GoLiveConfigApiTests` asserts what the shipped `appsettings.json` contains — if you edit that file, read it first.
 
 ## 5. Before you finish — the checklist
 
@@ -153,6 +166,40 @@ Scalar, behind `Api:Reference:Enabled` default **false**). Swagger/Swashbuckle s
 21. **`Paths:Logs` now holds two kinds of file**: `qbautopost-*.log` and `audit-*.jsonl`. Anything that enumerates
     that folder must filter — `AuditLog.Sweep` deletes only files it could have written itself, and `LoggingApiTests`
     filters by prefix.
+22. **A new `/api/v1` route now breaks the build until it is documented.** `OpenApiDriftTests` walks
+    `EndpointDataSource`; add a route and `wwwroot/openapi.json` needs a matching operation with a summary, a 2xx
+    response schema and an `x-required-scope` equal to `ApiRoutes.ScopeFor`. This is deliberate (api-v1 §11.6), not
+    an obstacle to route around: do not exclude your route from the test.
+23. **The reference page cannot be opened in a plain browser.** The key travels in the `X-Api-Key` header and the
+    page needs `health:read`, so a browser address bar gets a 401 — for the page *and* for its script. Read it with
+    a client that sets the header (Q-66 records this and the one-line change that would relax it).
+24. **`Prefer: respond-async`, `Idempotency-Key`, query parameters and the rest of the request surface are now
+    written down** in `wwwroot/openapi.json`. When you are about to grep the endpoint files to find out what a route
+    accepts, read that document first — and if it turns out to be wrong, the drift test did not catch it (it checks
+    routes, scopes and shape, never a schema's field names: see §8.3 of `docs/testing/T-913.tdd.md`).
+
+## 7c. What changed underneath you in session 18 (T-913)
+
+1. **`ApiRoutes` has a fifth question, `IsReference`,** and `ScopeFor` asks it **before** it strips the `/api/v1`
+   prefix — the documentation exists only on the versioned surface. It returns `health:read` for
+   `/api/v1/openapi.json`, `/api/v1/reference` and everything Scalar serves under that prefix.
+2. **Two routes exist only when `Api:Reference:Enabled` is true**, and the setting ships **false**
+   (`appsettings.Development.json` sets it true). Disabled means **not mapped**: the answer is 404, not 403. If you
+   add a test that reads the document, turn it on with `WithSetting("Api:Reference:Enabled", "true")` — and
+   remember trap 13, that factory has no `CreateAuthorizedClient()`.
+3. **`src/QbAutopost.Api/wwwroot/openapi.json` is hand-authored and load-bearing.** A route added without an entry
+   there **fails the build** (`OpenApiDriftTests`), and so does an entry with no route, an operation with no summary
+   or no 2xx response schema, and an `x-required-scope` that does not **equal** `ApiRoutes.ScopeFor`. That is the
+   point of it: the document cannot quietly go stale. The csproj has a `Content Update` line that copies it beside
+   the executable; if you move the file, move that line.
+4. **`Authorization: Bearer` does not work and never did** (**Q-67**). api-v1 §2.2 calls it the preferred form;
+   `ApiKeyMiddleware` reads `X-Api-Key` and nothing else, so a bearer request is a `401`. T-913 did **not** change
+   that — it made the document say so. If T-914 writes `Bearer` into the runbook, the runbook will be wrong.
+5. **New settings: `Api:Reference:{Enabled,AllowTryIt,UseCdn}`**, all false, all in `appsettings.json`. They are not
+   paths, so trap 4 does not apply.
+6. **`Scalar.AspNetCore` 2.13.13 is the seventh and last package.** Its `CdnUrl` property is `[Obsolete]`, which
+   `-warnaserror` turns into a build failure — `BundleUrl` is the one to use. Its assets are embedded, so the page
+   fetches nothing from the internet; `Telemetry` and `DefaultFonts` are turned **off** in code because both would.
 
 ## 7b. What changed underneath you in session 17 (T-912)
 
@@ -233,7 +280,7 @@ When T-914 is done, do not start anything else. Write `docs/M9-COMPLETE.md` with
 route; the full list of open questions with the conservative behaviour each one currently has; **everything that
 needs the owner or the server**, including the T-903 checklist, T-802/803/804, and a new direct-post server
 checklist (dry run → one real batch → undo it); and an honest list of what is implemented but never run against a
-real QuickBooks — which, today, is all of T-907…T-910.
+real QuickBooks — which, today, is all of T-907…T-913.
 
 ## 10. What no agent can do
 

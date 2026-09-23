@@ -97,6 +97,32 @@ public sealed class ApiSettings
     public CorsSettings Cors { get; set; } = new();
 
     public RateLimitSettings RateLimits { get; set; } = new();
+
+    public ReferenceSettings Reference { get; set; } = new();
+}
+
+/// <summary>
+/// T-913 / FR-A-18: the API reference surface — the OpenAPI document and the Scalar page that renders it.
+/// <para>
+/// Every default is <b>off</b>, and deliberately so. This installation can post money into a real ledger, so an
+/// interactive explorer of every route is opt-in (<see cref="Enabled"/>); a reader of the documentation is not one
+/// click away from posting a live transaction (<see cref="AllowTryIt"/>); and the page pulls no script from a third
+/// party, because the QuickBooks server may have no outbound internet at all (<see cref="UseCdn"/>).
+/// </para>
+/// </summary>
+public sealed class ReferenceSettings
+{
+    /// <summary>
+    /// Serve <c>GET /api/v1/openapi.json</c> and <c>GET /api/v1/reference</c> at all. False in the shipped
+    /// <c>appsettings.json</c>; <c>appsettings.Development.json</c> turns it on, which is where a developer reads it.
+    /// </summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>Show Scalar's "send request" buttons, which post from the reader's browser with a real key.</summary>
+    public bool AllowTryIt { get; set; }
+
+    /// <summary>Load the page's script from a public CDN instead of from the package's own embedded copy.</summary>
+    public bool UseCdn { get; set; }
 }
 
 /// <summary>

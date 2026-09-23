@@ -13,6 +13,24 @@ public static class ApiRoutes
 
     public const string HealthPrefix = "/health";
 
+    /// <summary>T-913 (FR-A-18): the hand-authored OpenAPI document, under <see cref="V1Prefix"/> only.</summary>
+    public const string OpenApiPath = "/openapi.json";
+
+    /// <summary>T-913 (FR-A-18): the Scalar reference UI, under <see cref="V1Prefix"/> only.</summary>
+    public const string ReferencePath = "/reference";
+
+    /// <summary>
+    /// T-913 (FR-A-18): the documentation surface — the OpenAPI document, the Scalar page, and the page's own
+    /// assets, which Scalar serves under the same prefix.
+    /// <para>
+    /// Unlike every other route question here, this one does not fall back to the flat path: the documentation
+    /// describes <c>/api/v1</c> and is only ever served there, so the legacy surface of api-v1 §9 gains nothing new.
+    /// </para>
+    /// </summary>
+    public static bool IsReference(PathString path) =>
+        path.StartsWithSegments(V1Prefix + ReferencePath, StringComparison.OrdinalIgnoreCase)
+        || (path.HasValue && path.Value!.TrimEnd('/').Equals(V1Prefix + OpenApiPath, Ordinal));
+
     /// <summary>
     /// True for a health route under either prefix. Health needs no API key (spec §6) and a healthy poll is logged at
     /// Debug (spec §14), so both places ask here rather than testing one prefix and forgetting the other.
@@ -82,6 +100,15 @@ public static class ApiRoutes
         if (!path.HasValue)
         {
             return ApiScopes.Admin;
+        }
+
+        // T-913 (FR-A-18): the documentation, before the prefix is stripped — it exists on the versioned surface
+        // only. api-v1 asks for health:read "in Production"; this asks for it everywhere, because a page that lists
+        // every route, every scope and every request shape is not something to hand out by environment.
+        // SPEC-GAP T-913 (Q-66): the stricter reading, as rule 4 requires when the spec allows two.
+        if (IsReference(path))
+        {
+            return ApiScopes.HealthRead;
         }
 
         var p = Flat(path.Value!).TrimEnd('/');

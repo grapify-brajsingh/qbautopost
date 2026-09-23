@@ -297,7 +297,15 @@ try
     app.UseMiddleware<IdempotencyMiddleware>();
     // T-901 (api-v1 §3): the versioned surface. The flat paths of spec §6 are mapped as well while Api:LegacyRoutes
     // is true (api-v1 §9), so the POC package and the deploy scripts keep working until T-914 moves them.
-    MapAll(app.MapGroup(ApiRoutes.V1Prefix));
+    var v1 = app.MapGroup(ApiRoutes.V1Prefix);
+    MapAll(v1);
+    // T-913 (FR-A-18): the document and the Scalar page, on the versioned surface only and only when somebody asked
+    // for them. Disabled means not mapped, so a route that could describe every way to move money simply is not there.
+    if (settings.Api.Reference.Enabled)
+    {
+        v1.MapReferenceEndpoints(settings.Api.Reference, app.Environment);
+    }
+
     if (settings.Api.LegacyRoutes)
     {
         var legacy = app.MapGroup(string.Empty);

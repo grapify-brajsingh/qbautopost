@@ -5,11 +5,20 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- T-913 (FR-A-18): the hand-authored OpenAPI document must reach the executable's folder, because the content
+         root is AppContext.BaseDirectory on the server (api-v1 §12), not the folder the process was started in. -->
+    <Content Update="wwwroot\openapi.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\QbAutopost.Core\QbAutopost.Core.csproj" />
     <ProjectReference Include="..\QbAutopost.QuickBooks\QbAutopost.QuickBooks.csproj" />
   </ItemGroup>
 
   <ItemGroup>
+    <!-- T-913 / Q-46: approved 2026-09-23 for the FR-A-18 reference UI. net8.0, no dependencies of its own, and it
+         ships the reference's assets inside the package, so the page needs no outbound internet. -->
+    <PackageReference Include="Scalar.AspNetCore" Version="2.13.13" />
     <PackageReference Include="Serilog.AspNetCore" Version="8.0.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="5.0.0" />
     <PackageReference Include="Tesseract" Version="5.2.0" />

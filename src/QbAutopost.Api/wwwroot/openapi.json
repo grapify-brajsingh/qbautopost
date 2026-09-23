@@ -1,0 +1,1011 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "QbAutopost API",
+    "version": "1.0",
+    "description": "Turns a job folder or a batch of JSON rows into posted QuickBooks Desktop transactions.\n\nThis document is **hand-authored** (`src/QbAutopost.Api/wwwroot/openapi.json`): .NET 8 has no built-in OpenAPI generator and Swashbuckle is excluded, so nothing generates it from the code. It is kept honest by `OpenApiDriftTests`, which walks the application's own route table and fails the build when a route is undocumented, an operation has no route, or an operation is missing its summary, its response schema or the scope it needs. `x-required-scope` on each operation is the scope the middleware actually enforces, not a description of it.\n\nThe reference page and this document are served only when `Api:Reference:Enabled` is true, and both need the `health:read` scope."
+  },
+  "servers": [
+    { "url": "/", "description": "This installation" }
+  ],
+  "security": [
+    { "apiKeyAuth": [] }
+  ],
+  "tags": [
+    { "name": "Health", "description": "Liveness, readiness and dependency checks." },
+    { "name": "QuickBooks", "description": "Connection, company file, lists, and the direct transaction path." },
+    { "name": "Jobs", "description": "The job-folder path: a folder of statements and invoices." },
+    { "name": "Batches", "description": "The result of one direct post, and undoing it." },
+    { "name": "Rules", "description": "Teaching the mapper an alias or a vendor account." },
+    { "name": "Reference", "description": "This document and the page that renders it." }
+  ],
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "tags": ["Health"],
+        "operationId": "getHealth",
+        "summary": "Liveness and build facts; never calls QuickBooks or Hermes.",
+        "description": "Answers from in-process state only, so a monitor may poll it every few seconds and still get an answer while a post holds the QuickBooks gateway.",
+        "x-required-scope": "none",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The host is running.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AppHealth" } } }
+          },
+          "503": {
+            "description": "The host is shutting down.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AppHealth" } } }
+          }
+        }
+      }
+    },
+    "/api/v1/health/ready": {
+      "get": {
+        "tags": ["Health"],
+        "operationId": "getReadiness",
+        "summary": "Readiness: settings, prompts, rules, lists, log folder and the job worker.",
+        "description": "`ok` is false only when a check of severity `error` failed; a `warning` keeps `ok` true.",
+        "x-required-scope": "none",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Every error-severity check passed.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Readiness" } } }
+          },
+          "503": {
+            "description": "At least one error-severity check failed.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Readiness" } } }
+          }
+        }
+      }
+    },
+    "/api/v1/health/sdk": {
+      "get": {
+        "tags": ["Health"],
+        "operationId": "getSdkHealth",
+        "summary": "QuickBooks SDK registration, versions and bitness; no company file is opened.",
+        "description": "Answers while QuickBooks is closed, while another company is open, or while a certificate dialog is pending — this is the check that explains a failure that never reached QuickBooks.",
+        "x-required-scope": "health:read",
+        "responses": {
+          "200": {
+            "description": "The request processor is registered and the bitness matches.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SdkHealth" } } }
+          },
+          "503": {
+            "description": "The SDK is not usable; `message` says why.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SdkHealth" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/v1/health/quickbooks": {
+      "get": {
+        "tags": ["Health"],
+        "operationId": "getQuickBooksHealth",
+        "summary": "One round trip to QuickBooks: is the expected company file open?",
+        "description": "Opens an SDK session, so it waits behind a post in progress for at most `QuickBooks:BusyTimeoutSeconds`.",
+        "x-required-scope": "health:read",
+        "responses": {
+          "200": {
+            "description": "QuickBooks answered.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/QuickBooksHealth" } } }
+          },
+          "503": {
+            "description": "QuickBooks is unreachable or busy.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/QuickBooksHealth" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/v1/health/hermes": {
+      "get": {
+        "tags": ["Health"],
+        "operationId": "getHermesHealth",
+        "summary": "Hermes reachability, model name and round-trip latency.",
+        "description": "With `Hermes:Enabled` false the app runs with no model at all and this reports the disabled client.",
+        "x-required-scope": "health:read",
+        "responses": {
+          "200": {
+            "description": "Hermes answered.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HermesHealth" } } }
+          },
+          "503": {
+            "description": "Hermes is unreachable.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HermesHealth" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/v1/quickbooks/connection/test": {
+      "post": {
+        "tags": ["QuickBooks"],
+        "operationId": "testConnection",
+        "summary": "A full session round trip, timed step by step.",
+        "description": "Its own budget (`QuickBooks:ConnectionTestTimeoutSeconds`, default 180 s), deliberately longer than the busy timeout: on the owner's server a certificate dialog held the first session 101 s, and a slow answer is not a broken one. Changes nothing.",
+        "x-required-scope": "qb:read",
+        "requestBody": {
+          "required": false,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConnectionTestRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "The round trip finished; `ok` and `steps` say how it went.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConnectionTestResult" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/api/v1/quickbooks/company-file/validate": {
+      "post": {
+        "tags": ["QuickBooks"],
+        "operationId": "validateCompanyFile",
+        "summary": "Is this company file the configured one, open in QuickBooks, and backed up?",
+        "description": "Read-only: no qbXML is sent. A *different* company file open in QuickBooks is an error, not a warning — it is the one misconfiguration that posts real money into the wrong ledger.",
+        "x-required-scope": "qb:read",
+        "requestBody": {
+          "required": false,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CompanyFileRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Every error-severity check passed.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CompanyFileValidation" } } }
+          },
+          "422": {
+            "description": "A check of severity `error` failed; the body lists every check.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CompanyFileValidation" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/api/v1/quickbooks/transactions/validate": {
+      "post": {
+        "tags": ["QuickBooks"],
+        "operationId": "validateTransactions",
+        "summary": "Would these rows post? The same reader, mapper and gates, stopping short of the SDK call.",
+        "description": "Offline and never writes, so a batch can be checked while the QuickBooks server is shut down. 400 when the request contradicts itself (a control total that does not add up, no rows, too many); 422 when it was understood and a gate held a row.",
+        "x-required-scope": "qb:read",
+        "parameters": [
+          {
+            "name": "includeQbXml",
+            "in": "query",
+            "required": false,
+            "description": "Return the qbXML request body as well. It carries every amount and name in the batch, so it is served only to a key holding `qb:debug`; a caller without it is told so rather than left wondering.",
+            "schema": { "type": "boolean", "default": false }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DirectRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Every row would post.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ValidationResult" } } }
+          },
+          "422": {
+            "description": "The request was understood and at least one row was held or skipped.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ValidationResult" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/v1/quickbooks/transactions": {
+      "post": {
+        "tags": ["QuickBooks"],
+        "operationId": "postTransactions",
+        "summary": "Post JSON rows to QuickBooks and return the batch result.",
+        "description": "The only route that sends transactions to QuickBooks. The batch is on disk before it is queued, so there is always something to poll. `dryRun` (default `DryRunDefault`) ends in `ready` with nothing sent. If the work outlasts `Api:SyncPostTimeoutSeconds` the answer is 202 with a batch to poll and the work carries on; `Prefer: respond-async` asks for that immediately.",
+        "x-required-scope": "qb:post",
+        "parameters": [
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          {
+            "name": "Prefer",
+            "in": "header",
+            "required": false,
+            "description": "`respond-async` to be answered 202 without waiting.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DirectRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "The batch finished (or was a dry run).",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BatchResult" } } }
+          },
+          "202": {
+            "description": "Still posting; poll `location`.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BatchAccepted" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/api/v1/qb/sync-lists": {
+      "post": {
+        "tags": ["QuickBooks"],
+        "operationId": "syncLists",
+        "summary": "Read the QuickBooks account, vendor and customer lists into qb-lists.json.",
+        "description": "One read-only message set (active records only). It runs on the single job worker, so it cannot overlap a job or a post.",
+        "x-required-scope": "qb:read",
+        "responses": {
+          "200": {
+            "description": "The lists were read and written.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ListSyncResult" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "502": { "$ref": "#/components/responses/QuickBooksError" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/api/v1/batches/{id}": {
+      "get": {
+        "tags": ["Batches"],
+        "operationId": "getBatch",
+        "summary": "The batch as last recorded — the poll target for a post that outlasted its budget.",
+        "description": "Read from `result.json`, falling back to `status.json` while the batch is still running, so the answer survives a restart of this process.",
+        "x-required-scope": "qb:read",
+        "parameters": [{ "$ref": "#/components/parameters/BatchId" }],
+        "responses": {
+          "200": {
+            "description": "The batch.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BatchResult" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/batches/{id}/undo": {
+      "post": {
+        "tags": ["Batches"],
+        "operationId": "undoBatch",
+        "summary": "Delete the transactions this batch posted, one message set on the job worker.",
+        "description": "Each ledger entry is marked `undone` as QuickBooks confirms its delete, so a partial undo is recorded as exactly what happened.",
+        "x-required-scope": "qb:post",
+        "parameters": [
+          { "$ref": "#/components/parameters/BatchId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "responses": {
+          "200": {
+            "description": "What was deleted, and what would not delete.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UndoResult" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "502": { "$ref": "#/components/responses/QuickBooksError" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/api/v1/jobs": {
+      "get": {
+        "tags": ["Jobs"],
+        "operationId": "listJobs",
+        "summary": "Every known job, newest first, optionally filtered by status.",
+        "x-required-scope": "jobs:read",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Case-insensitive job status.",
+            "schema": { "$ref": "#/components/schemas/JobStatus" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The jobs.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/JobSummary" } }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      },
+      "post": {
+        "tags": ["Jobs"],
+        "operationId": "createJob",
+        "summary": "Queue a job folder for analysis (and posting, when it is not a dry run).",
+        "description": "The job id is derived from the folder, so re-submitting the same folder is the same job; `force` re-runs one that already finished.",
+        "x-required-scope": "jobs:write",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateJobRequest" } } }
+        },
+        "responses": {
+          "202": {
+            "description": "The job was accepted and queued.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateJobResponse" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      }
+    },
+    "/api/v1/jobs/{id}": {
+      "get": {
+        "tags": ["Jobs"],
+        "operationId": "getJob",
+        "summary": "One job: its status, its statements, and what was held, skipped or posted.",
+        "x-required-scope": "jobs:read",
+        "parameters": [{ "$ref": "#/components/parameters/JobId" }],
+        "responses": {
+          "200": {
+            "description": "The job.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JobView" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/jobs/{id}/post": {
+      "post": {
+        "tags": ["Jobs"],
+        "operationId": "postJob",
+        "summary": "Post a job that analysed cleanly and is waiting in `ready`.",
+        "x-required-scope": "jobs:write",
+        "parameters": [
+          { "$ref": "#/components/parameters/JobId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "responses": {
+          "202": {
+            "description": "The job was queued for posting.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateJobResponse" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      }
+    },
+    "/api/v1/rules/alias": {
+      "post": {
+        "tags": ["Rules"],
+        "operationId": "setAlias",
+        "summary": "Teach the mapper that a description fragment means a named vendor or customer.",
+        "description": "Written atomically into `rules.json` and picked up by the next job or re-post.",
+        "x-required-scope": "rules:write",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AliasRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "The rule as written, with what it replaced.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RuleChange" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/v1/rules/account": {
+      "post": {
+        "tags": ["Rules"],
+        "operationId": "setVendorAccount",
+        "summary": "Teach the mapper which expense account a vendor posts to.",
+        "description": "The account must exist in `qb-lists.json` when the lists have been synced, so a typo is refused here rather than by QuickBooks mid-batch.",
+        "x-required-scope": "rules:write",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AccountRuleRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "The rule as written, with what it replaced.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RuleChange" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "tags": ["Reference"],
+        "operationId": "getOpenApiDocument",
+        "summary": "This document.",
+        "description": "Served only when `Api:Reference:Enabled` is true; otherwise the route is not mapped at all and the answer is 404.",
+        "x-required-scope": "health:read",
+        "responses": {
+          "200": {
+            "description": "The OpenAPI document.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/reference": {
+      "get": {
+        "tags": ["Reference"],
+        "operationId": "getReference",
+        "summary": "The Scalar page that renders this document.",
+        "description": "Served only when `Api:Reference:Enabled` is true. Its script comes from the package, not a CDN, and the \"send request\" buttons are hidden unless `Api:Reference:AllowTryIt` is true.",
+        "x-required-scope": "health:read",
+        "responses": {
+          "200": {
+            "description": "The reference page.",
+            "content": { "text/html": { "schema": { "type": "string" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "apiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Api-Key",
+        "description": "`X-Api-Key: <key>` — the header this build reads, and the one every operation is secured with here. Each key belongs to one caller in `clients.json` and carries only the scopes that caller was given; `x-required-scope` on every operation names the one it needs."
+      },
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "`Authorization: Bearer <key>`. api-v1 §2.2 calls this the preferred form and FR-A-18 asks this document to declare it — but **this build does not accept it yet**: `ApiKeyMiddleware` reads only `X-Api-Key`. It is declared, not offered, so no reader is sent down a road the app refuses (Q-67)."
+      }
+    },
+    "parameters": {
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": false,
+        "description": "Replaying a request under the same key returns the stored answer and sends nothing to QuickBooks a second time; the same key with a different body is a 409.",
+        "schema": { "type": "string", "maxLength": 200 }
+      },
+      "BatchId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Batch id. It contains `#`, which must be sent percent-encoded as `%23`.",
+        "schema": { "type": "string" }
+      },
+      "JobId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Job id, derived from the job folder's name.",
+        "schema": { "type": "string" }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Malformed or self-inconsistent request. Nothing was posted.",
+        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+      },
+      "Unauthorized": {
+        "description": "No key, or a key no caller holds.",
+        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+      },
+      "Forbidden": {
+        "description": "The key is known but lacks the scope this operation needs.",
+        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+      },
+      "NotFound": {
+        "description": "No such id.",
+        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+      },
+      "Conflict": {
+        "description": "A state conflict, or an `Idempotency-Key` replayed with a different body.",
+        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+      },
+      "TooManyRequests": {
+        "description": "Rate limited; `Retry-After` says for how long.",
+        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+      },
+      "QuickBooksError": {
+        "description": "QuickBooks answered with an error.",
+        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+      },
+      "Unavailable": {
+        "description": "QuickBooks or Hermes is unreachable or busy, or the app is not ready.",
+        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+      }
+    },
+    "schemas": {
+      "Problem": {
+        "type": "object",
+        "description": "RFC 7807 problem details. `requestId` is the same id as the `X-Request-Id` header and every log line of that request.",
+        "properties": {
+          "type": { "type": "string" },
+          "title": { "type": "string" },
+          "status": { "type": "integer", "format": "int32" },
+          "detail": { "type": "string" },
+          "instance": { "type": "string" },
+          "traceId": { "type": "string" },
+          "requestId": { "type": "string" },
+          "errors": {
+            "type": "array",
+            "description": "Present when the failure is per item.",
+            "items": { "type": "string" }
+          }
+        }
+      },
+      "AppHealth": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "status": { "type": "string", "example": "healthy" },
+          "version": { "type": "string" },
+          "environment": { "type": "string" },
+          "process": {
+            "type": "object",
+            "properties": {
+              "bitness": { "type": "string", "example": "x64" },
+              "startedUtc": { "type": "string", "format": "date-time" },
+              "uptimeSeconds": { "type": "integer", "format": "int64" },
+              "windowsSession": { "type": "integer", "format": "int32" }
+            }
+          },
+          "quickbooksGateway": { "type": "string", "enum": ["sdk", "simulated", "unavailable", "test"] },
+          "hermes": { "type": "string", "enum": ["enabled", "disabled"] },
+          "worker": {
+            "type": "object",
+            "properties": {
+              "running": { "type": "boolean" },
+              "activeJobId": { "type": "string", "nullable": true },
+              "queueDepth": { "type": "integer", "format": "int32" }
+            }
+          }
+        }
+      },
+      "Readiness": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "checks": { "type": "array", "items": { "$ref": "#/components/schemas/Check" } }
+        }
+      },
+      "Check": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "ok": { "type": "boolean" },
+          "severity": { "type": "string", "enum": ["error", "warning"] },
+          "message": { "type": "string" }
+        }
+      },
+      "SdkHealth": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "requestProcessor": {
+            "type": "object",
+            "properties": {
+              "registered": { "type": "boolean" },
+              "progId": { "type": "string", "nullable": true },
+              "clsid": { "type": "string", "nullable": true },
+              "canOpenConnection": { "type": "boolean" }
+            }
+          },
+          "processBitness": { "type": "string" },
+          "quickBooks": {
+            "type": "object",
+            "properties": {
+              "running": { "type": "boolean" },
+              "name": { "type": "string", "nullable": true },
+              "bitness": { "type": "string", "nullable": true }
+            }
+          },
+          "bitnessMatch": { "type": "boolean" },
+          "qbXmlVersion": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      },
+      "QuickBooksHealth": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "companyFile": { "type": "string", "nullable": true },
+          "message": { "type": "string" }
+        }
+      },
+      "HermesHealth": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "model": { "type": "string" },
+          "latencyMs": { "type": "integer", "format": "int64" },
+          "message": { "type": "string", "nullable": true }
+        }
+      },
+      "ConnectionTestRequest": {
+        "type": "object",
+        "properties": {
+          "companyFile": {
+            "type": "string",
+            "nullable": true,
+            "description": "Refused unless `QuickBooks:AllowCompanyFileOverride` is on and the path is inside `QuickBooks:AllowedCompanyFolders`."
+          },
+          "timeoutSeconds": { "type": "integer", "format": "int32", "nullable": true },
+          "includeCompanyInfo": { "type": "boolean", "nullable": true }
+        }
+      },
+      "ConnectionTestResult": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "companyFile": { "type": "string", "nullable": true },
+          "product": { "type": "string", "nullable": true },
+          "qbXmlVersion": { "type": "string" },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string", "enum": ["waitForGateway", "hostQuery", "companyFile"] },
+                "ok": { "type": "boolean" },
+                "ms": { "type": "integer", "format": "int64" },
+                "message": { "type": "string", "nullable": true }
+              }
+            }
+          },
+          "totalMs": { "type": "integer", "format": "int64" },
+          "message": { "type": "string" }
+        }
+      },
+      "CompanyFileRequest": {
+        "type": "object",
+        "properties": {
+          "companyFile": { "type": "string", "nullable": true },
+          "requireBackup": { "type": "boolean", "nullable": true }
+        }
+      },
+      "CompanyFileValidation": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "companyFile": { "type": "string", "nullable": true },
+          "checks": { "type": "array", "items": { "$ref": "#/components/schemas/Check" } },
+          "message": { "type": "string" }
+        }
+      },
+      "DirectRequest": {
+        "type": "object",
+        "required": ["transactions"],
+        "properties": {
+          "reference": { "type": "string", "nullable": true, "description": "The caller's own name for this batch." },
+          "dryRun": {
+            "type": "boolean",
+            "nullable": true,
+            "description": "Omitted follows `DryRunDefault`, which ships true."
+          },
+          "controlTotal": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "description": "The caller's own sum over every submitted row. It is checked, never corrected: a mismatch refuses the whole batch and no amount is adjusted to make it agree."
+          },
+          "allowModelAccounts": {
+            "type": "boolean",
+            "default": false,
+            "description": "Let the model choose an account for a row no rule resolves. Needs the `qb:post:ai` scope as well."
+          },
+          "transactions": { "type": "array", "items": { "$ref": "#/components/schemas/DirectRow" } }
+        }
+      },
+      "DirectRow": {
+        "type": "object",
+        "required": ["kind", "date", "amount", "account"],
+        "properties": {
+          "externalId": { "type": "string", "nullable": true, "description": "The caller's key. Echoed and stored; never used to decide identity." },
+          "kind": { "$ref": "#/components/schemas/TxnKind" },
+          "date": { "type": "string", "format": "date" },
+          "amount": {
+            "type": "number",
+            "format": "double",
+            "description": "Positive, at most two decimals. The direction comes from `kind`."
+          },
+          "account": { "type": "string", "description": "The bank or credit-card account the money moves on." },
+          "lineAccount": { "type": "string", "nullable": true, "description": "The expense or income account; rules resolve it when it is left out." },
+          "payee": { "type": "string", "nullable": true },
+          "checkNo": { "type": "string", "nullable": true },
+          "refNumber": { "type": "string", "nullable": true },
+          "memo": { "type": "string", "nullable": true, "maxLength": 4096 },
+          "last4": { "type": "string", "nullable": true, "description": "Last four digits of the account; part of the fingerprint." }
+        }
+      },
+      "TxnKind": {
+        "type": "string",
+        "enum": ["check", "deposit", "creditCardCharge", "creditCardCredit", "transfer"]
+      },
+      "JobStatus": {
+        "type": "string",
+        "enum": ["queued", "analysing", "ready", "posting", "posted", "partial", "failed", "undone"]
+      },
+      "ValidationResult": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "counts": {
+            "type": "object",
+            "description": "`wouldPost + held + skipped` is `submitted`, so the arithmetic of the answer can be checked too. `duplicates` is part of `skipped`.",
+            "properties": {
+              "submitted": { "type": "integer", "format": "int32" },
+              "wouldPost": { "type": "integer", "format": "int32" },
+              "held": { "type": "integer", "format": "int32" },
+              "skipped": { "type": "integer", "format": "int32" },
+              "duplicates": { "type": "integer", "format": "int32" }
+            }
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "submitted": { "type": "number", "format": "double" },
+              "wouldPost": { "type": "number", "format": "double" },
+              "controlTotal": { "type": "number", "format": "double", "nullable": true },
+              "controlTotalOk": { "type": "boolean" }
+            }
+          },
+          "rows": { "type": "array", "items": { "$ref": "#/components/schemas/PlanRow" } },
+          "unknownNames": {
+            "type": "object",
+            "description": "Names in the batch that `qb-lists.json` does not have.",
+            "properties": {
+              "accounts": { "type": "array", "items": { "type": "string" } },
+              "payees": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "qbXml": {
+            "type": "object",
+            "properties": {
+              "requestCount": { "type": "integer", "format": "int32" },
+              "byType": { "type": "object", "additionalProperties": { "type": "integer", "format": "int32" } },
+              "request": { "type": "string", "nullable": true, "description": "Only with `includeQbXml=true` and the `qb:debug` scope." },
+              "note": { "type": "string", "nullable": true }
+            }
+          }
+        }
+      },
+      "PlanRow": {
+        "type": "object",
+        "description": "One submitted row and what would become of it.",
+        "properties": {
+          "index": { "type": "integer", "format": "int32" },
+          "externalId": { "type": "string", "nullable": true },
+          "requestId": { "type": "string", "nullable": true, "description": "First 16 characters of the row's fingerprint." },
+          "outcome": { "type": "string", "enum": ["wouldPost", "held", "skipped"] },
+          "kind": { "$ref": "#/components/schemas/TxnKind" },
+          "account": { "type": "string", "nullable": true },
+          "lineAccount": { "type": "string", "nullable": true },
+          "payee": { "type": "string", "nullable": true },
+          "amount": { "type": "number", "format": "double" },
+          "confidence": { "type": "string", "nullable": true },
+          "reason": { "type": "string", "nullable": true, "description": "The hold or skip code, e.g. `no-account-rule`, `already-in-quickbooks`." },
+          "note": { "type": "string", "nullable": true },
+          "candidates": { "type": "array", "nullable": true, "items": { "type": "string" } },
+          "batchId": { "type": "string", "nullable": true, "description": "The earlier batch this row already posted in." }
+        }
+      },
+      "BatchResult": {
+        "type": "object",
+        "properties": {
+          "batchId": { "type": "string" },
+          "reference": { "type": "string", "nullable": true },
+          "status": { "$ref": "#/components/schemas/JobStatus" },
+          "dryRun": { "type": "boolean" },
+          "companyFile": { "type": "string", "nullable": true },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "submitted": { "type": "integer", "format": "int32" },
+              "posted": { "type": "integer", "format": "int32" },
+              "held": { "type": "integer", "format": "int32" },
+              "skipped": { "type": "integer", "format": "int32" }
+            }
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "submitted": { "type": "number", "format": "double" },
+              "posted": { "type": "number", "format": "double", "description": "The money that actually moved; zero for a dry run." }
+            }
+          },
+          "posted": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": { "type": "integer", "format": "int32" },
+                "externalId": { "type": "string", "nullable": true },
+                "requestId": { "type": "string", "nullable": true },
+                "txnId": { "type": "string", "nullable": true },
+                "kind": { "$ref": "#/components/schemas/TxnKind" },
+                "amount": { "type": "number", "format": "double" }
+              }
+            }
+          },
+          "held": { "type": "array", "items": { "$ref": "#/components/schemas/PlanRow" } },
+          "skipped": { "type": "array", "items": { "$ref": "#/components/schemas/PlanRow" } },
+          "error": { "type": "string", "nullable": true },
+          "unavailable": {
+            "type": "boolean",
+            "description": "Nothing was sent: QuickBooks could not be reached, or the backup guard refused. Safe to retry."
+          },
+          "startedUtc": { "type": "string", "format": "date-time" },
+          "finishedUtc": { "type": "string", "format": "date-time", "nullable": true },
+          "isRunning": { "type": "boolean" }
+        }
+      },
+      "BatchAccepted": {
+        "type": "object",
+        "properties": {
+          "batchId": { "type": "string" },
+          "status": { "$ref": "#/components/schemas/JobStatus" },
+          "location": { "type": "string", "description": "Poll this for the finished batch." }
+        }
+      },
+      "UndoResult": {
+        "type": "object",
+        "properties": {
+          "deleted": { "type": "integer", "format": "int32" },
+          "failed": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "txnId": { "type": "string" },
+                "message": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
+      "ListSyncResult": {
+        "type": "object",
+        "properties": {
+          "accounts": { "type": "integer", "format": "int32" },
+          "vendors": { "type": "integer", "format": "int32" },
+          "customers": { "type": "integer", "format": "int32" },
+          "missingInRules": {
+            "type": "array",
+            "description": "Names QuickBooks has that `rules.json` says nothing about.",
+            "items": { "type": "string" }
+          }
+        }
+      },
+      "CreateJobRequest": {
+        "type": "object",
+        "properties": {
+          "folder": { "type": "string", "description": "An absolute path inside `Paths:AllowedJobRoots`." },
+          "dryRun": { "type": "boolean", "nullable": true },
+          "force": { "type": "boolean", "nullable": true, "description": "Re-run a folder that already finished." }
+        }
+      },
+      "CreateJobResponse": {
+        "type": "object",
+        "properties": {
+          "jobId": { "type": "string" },
+          "status": { "$ref": "#/components/schemas/JobStatus" }
+        }
+      },
+      "JobSummary": {
+        "type": "object",
+        "properties": {
+          "jobId": { "type": "string" },
+          "status": { "$ref": "#/components/schemas/JobStatus" },
+          "dryRun": { "type": "boolean" },
+          "folder": { "type": "string" },
+          "batchId": { "type": "string", "nullable": true },
+          "updatedUtc": { "type": "string", "format": "date-time" },
+          "error": { "type": "string", "nullable": true }
+        }
+      },
+      "JobView": {
+        "type": "object",
+        "properties": {
+          "jobId": { "type": "string" },
+          "status": { "$ref": "#/components/schemas/JobStatus" },
+          "dryRun": { "type": "boolean" },
+          "company": { "type": "string", "nullable": true },
+          "folder": { "type": "string" },
+          "statements": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file": { "type": "string" },
+                "last4": { "type": "string", "nullable": true },
+                "kind": { "type": "string", "nullable": true },
+                "rows": { "type": "integer", "format": "int32" },
+                "reconcile": { "type": "object", "nullable": true, "description": "The G1 opening/closing balance check." },
+                "holdReason": { "type": "string", "nullable": true }
+              }
+            }
+          },
+          "counts": { "type": "object" },
+          "totals": { "type": "object" },
+          "held": { "type": "array", "items": { "type": "object" } },
+          "skipped": { "type": "array", "items": { "type": "object" } },
+          "posted": { "type": "array", "items": { "type": "object" } },
+          "unreadable": { "type": "array", "items": { "type": "object" } },
+          "unmatchedInvoices": { "type": "array", "items": { "type": "object" } },
+          "batchId": { "type": "string", "nullable": true },
+          "error": { "type": "string", "nullable": true },
+          "updatedUtc": { "type": "string", "format": "date-time" }
+        }
+      },
+      "AliasRequest": {
+        "type": "object",
+        "required": ["fragment", "name", "kind"],
+        "properties": {
+          "fragment": { "type": "string", "description": "A fragment of the statement description, matched case-insensitively." },
+          "name": { "type": "string", "description": "The QuickBooks vendor or customer name." },
+          "kind": { "type": "string", "enum": ["vendor", "customer"] }
+        }
+      },
+      "AccountRuleRequest": {
+        "type": "object",
+        "required": ["vendor", "account"],
+        "properties": {
+          "vendor": { "type": "string" },
+          "account": { "type": "string", "description": "A QuickBooks account name; checked against `qb-lists.json` when it exists." }
+        }
+      },
+      "RuleChange": {
+        "type": "object",
+        "properties": {
+          "section": { "type": "string" },
+          "key": { "type": "string" },
+          "value": { "type": "string" },
+          "previous": { "type": "string", "nullable": true, "description": "What the rule said before; null when it is new." }
+        }
+      }
+    }
+  }
+}
