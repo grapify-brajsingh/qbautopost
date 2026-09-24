@@ -11,6 +11,13 @@ public static class ApiRoutes
 {
     public const string V1Prefix = "/api/v1";
 
+    /// <summary>
+    /// T-924 (ADR-0008): the synchronous validate-and-post, flat. It posts, so it is named in <see cref="ScopeFor"/>
+    /// and <see cref="IsIdempotent"/> and left out of <c>ReadOnlyPosts</c> — one constant, so the three cannot
+    /// disagree about which path they mean.
+    /// </summary>
+    public const string SyncPostRoute = "/quickbooks/transactions/validate-and-post";
+
     public const string HealthPrefix = "/health";
 
     /// <summary>T-913 (FR-A-18): the hand-authored OpenAPI document, under <see cref="V1Prefix"/> only.</summary>
@@ -55,7 +62,11 @@ public static class ApiRoutes
         }
 
         var value = path.Value!.TrimEnd('/');
+        // T-924: the synchronous post is here for two reasons at once. §3 honours Idempotency-Key on it — the only
+        // mechanism that returns the *original* txnIds after a lost response (§8) — and RateLimitPolicy reads this
+        // same predicate, so naming it here also puts it in the posting bucket rather than the cheaper default one.
         return Is(value, "/quickbooks/transactions")
+               || Is(value, SyncPostRoute)
                || Is(value, "/jobs")
                || (value.EndsWith("/post", Ordinal) && value.Contains("/jobs/", Ordinal))
                || (value.EndsWith("/undo", Ordinal) && value.Contains("/batches/", Ordinal));
@@ -147,9 +158,17 @@ public static class ApiRoutes
             return p.EndsWith("/undo", Ordinal) ? ApiScopes.QbPost : ApiScopes.QbRead;
         }
 
-        if (p == "/quickbooks/transactions")
+        if (p is "/quickbooks/transactions" or SyncPostRoute)
         {
-            // The only route that sends transactions to QuickBooks; its /validate sibling is caught below.
+            // The two routes that send transactions to QuickBooks; the /validate sibling is caught below.
+            //
+            // T-924: validate-and-post is named here because the fall-through beneath it *opens* rather than closes.
+            // Every unmapped path lands on admin — a new route is shut until somebody decides otherwise — but
+            // anything beginning /quickbooks/ resolves to qb:read, so a route that posts real money would have been
+            // gated behind the scope issued for reading lists: silently, with every test still green. It is matched
+            // by its exact path rather than by a shape such as EndsWith("/post"), because this name ends in "post"
+            // while the read-only /validate contains "validate" — any pattern clever enough to catch the one would
+            // misfile the other.
             return get ? ApiScopes.QbRead : ApiScopes.QbPost;
         }
 

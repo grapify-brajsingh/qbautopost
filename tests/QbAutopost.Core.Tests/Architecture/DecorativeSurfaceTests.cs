@@ -46,6 +46,25 @@ public sealed class DecorativeSurfaceTests
         Assert.Empty(unread);
     }
 
+    /// <summary>
+    /// T-924 brings the synchronous post's request under the same rule, and it is the case the rule was written
+    /// for: <c>dryRun</c> and <c>allowModelAccounts</c> exist on that record <i>only</i> so a caller who sends them
+    /// can be refused. That is a real read — by the refusal in <c>SyncPostRunner</c> — but if someone deleted the
+    /// refusal and left the fields, the route would silently accept <c>dryRun: true</c> and post anyway, which is
+    /// the T-915 defect wearing a different hat. This is what would notice.
+    /// </summary>
+    [Fact]
+    public void Should_ReadEverySyncPostField_When_ScanningProductionSources()
+    {
+        var sources = ProductionSources(except: "SyncPostRequest.cs");
+
+        var unread = Properties(typeof(SyncPostRequest))
+            .Where(name => !sources.Any(text => text.Contains("." + name, StringComparison.Ordinal)))
+            .ToList();
+
+        Assert.Empty(unread);
+    }
+
     // T-917 extends this rule to the request bodies the endpoints declare; those types live in the Api assembly,
     // which Core.Tests does not reference, so that guard is Api.Tests/Hardening/EndpointSurfaceTests.cs.
 

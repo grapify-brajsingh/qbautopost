@@ -32,8 +32,85 @@ public static class QuickBooksEndpoints
         app.MapPost("/quickbooks/connection/test", ConnectionTest);
         app.MapPost("/quickbooks/company-file/validate", ValidateCompanyFile);
         app.MapPost("/quickbooks/transactions/validate", ValidateTransactions);
+        app.MapPost("/quickbooks/transactions/validate-and-post", ValidateAndPostTransactions);
         app.MapPost("/quickbooks/transactions", PostTransactions);
         return app;
+    }
+
+    /// <summary>How long §6.4 asks a refused caller to wait.</summary>
+    private const int BusyRetryAfterSeconds = 5;
+
+    /// <summary>
+    /// T-924 (ADR-0008, <c>docs/validate-and-post-transaction-data.md</c>): validate the whole payload, and either
+    /// report every finding and post nothing, or post all of it and return the <c>TxnID</c>s — one request, one
+    /// response, no dry run, no batch to poll.
+    /// <para>
+    /// Five endings and no others (§5): 400 the request could not be read · 409 the QuickBooks session is in use,
+    /// nothing enqueued · 422 at least one row would be held, nothing sent · 503 the backup is stale or QuickBooks
+    /// is unreachable, nothing sent · 200 all of it posted. Every decision belongs to <see cref="SyncPostRunner"/>;
+    /// this method only chooses the status code.
+    /// </para>
+    /// <para>
+    /// The scope is <c>qb:post</c>, and <see cref="ApiRoutes.ScopeFor"/> names this path explicitly. That is not
+    /// decoration: the fallback for anything under <c>/quickbooks/</c> is <c>qb:read</c>, so without that branch
+    /// this route would move money for a key issued to look at lists.
+    /// </para>
+    /// </summary>
+    private static async Task<IResult> ValidateAndPostTransactions(
+        SyncPostRequest? request,
+        SyncPostRunner runner,
+        HttpContext http,
+        CancellationToken ct)
+    {
+        if (request is null)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "A request body is required",
+                detail: "Send the transactions to post as JSON (validate-and-post §4).");
+        }
+
+        var post = await runner.RunAsync(request, ct);
+        switch (post.Outcome)
+        {
+            case SyncPostOutcome.Refused:
+                return Results.Problem(
+                    statusCode: StatusCodes.Status400BadRequest,
+                    title: "The request could not be read",
+                    detail: string.Join("; ", post.Errors),
+                    extensions: new Dictionary<string, object?> { ["errors"] = post.Errors });
+
+            case SyncPostOutcome.Held:
+                // §6.2: every finding, because §5.1 refuses the batch on one of them — a caller fixing them one
+                // round trip at a time is the failure this format exists to avoid.
+                return Results.Problem(
+                    statusCode: StatusCodes.Status422UnprocessableEntity,
+                    title: "The transactions were not posted",
+                    detail: post.Findings!.Detail,
+                    extensions: new Dictionary<string, object?>
+                    {
+                        ["counts"] = post.Findings.Counts,
+                        ["validation"] = post.Findings.Validation,
+                        ["unknownNames"] = post.Findings.UnknownNames,
+                    });
+
+            case SyncPostOutcome.Busy:
+                // §6.4: the header as well as the field, so a client that retries automatically reads the same
+                // number a person would.
+                http.Response.Headers.RetryAfter = BusyRetryAfterSeconds.ToString();
+                return Results.Problem(
+                    statusCode: StatusCodes.Status409Conflict,
+                    title: "QuickBooks is busy with another operation",
+                    detail: "A folder job or another post is using the QuickBooks session. Nothing was sent. "
+                            + $"Retry in {BusyRetryAfterSeconds} seconds.",
+                    extensions: new Dictionary<string, object?> { ["retryAfterSeconds"] = BusyRetryAfterSeconds });
+
+            default:
+                return post.Unavailable
+                    // §6.5: the backup guard, or QuickBooks unreachable. Nothing was sent, so a retry is safe.
+                    ? Results.Json(post.Result, statusCode: StatusCodes.Status503ServiceUnavailable)
+                    : Results.Ok(post.Result);
+        }
     }
 
     /// <summary>

@@ -219,6 +219,9 @@ builder.Services.AddSingleton(sp =>
     return new IdempotencyStore(Path.Combine(s.Paths.ApiBatches, "idempotency.json"), s.Api.IdempotencyRetentionDays);
 });
 builder.Services.AddSingleton<DirectPostRunner>();
+// T-924 (ADR-0008): the synchronous validate-and-post. It owns no posting logic of its own — it is the all-or-nothing
+// gate in front of DirectPostRunner, plus the worker lock taken only if it is free.
+builder.Services.AddSingleton<SyncPostRunner>();
 // T-914 (FR-A-7): the same StatementReader the job uses, so a validate and the job it predicts cannot disagree.
 builder.Services.AddSingleton<FolderValidator>();
 builder.Services.AddSingleton<JobPipeline>();
@@ -382,6 +385,7 @@ static void MapAll(IEndpointRouteBuilder routes)
 // Fail closed (FR-A-13): without either a usable caller list or a real shared key, every route but liveness and
 // readiness would be open. Refusing to start is louder than serving an empty allow-list, and far louder than
 // silently admitting nobody while an operator wonders why their integration broke.
+
 static void RequireApiKey(WebApplication app)
 {
     var api = app.Services.GetRequiredService<IOptions<AppSettings>>().Value.Api;
@@ -396,6 +400,18 @@ static void RequireApiKey(WebApplication app)
         throw new InvalidOperationException(
             "No API caller can authenticate: clients.json has no enabled client and the shared Api:ApiKey is unusable. "
             + "Issue a key with scripts/new-api-client.ps1, or set QBAUTOPOST__Api__ApiKey with Api:AllowLegacyKey true.");
+    }
+
+    // The owner set the shipped Api:ApiKey to a short, well-known value (2026-09-24) so every environment shares one
+    // key. It is checked into the repository and the legacy client carries *every* scope, so outside Development it
+    // is a publicly readable credential that can post money. Refusing would override the owner's decision; saying
+    // nothing would hide it. So the server says it, every time it starts, the way it does for the other loaded guns.
+    if (legacyUsable && api.ApiKey is "change-me" or "dev" && !app.Environment.IsDevelopment())
+    {
+        app.Logger.LogWarning(
+            "Api:ApiKey is the well-known value shipped in appsettings.json and it carries every scope. Anyone who can "
+            + "read this repository can post transactions. Set QBAUTOPOST__Api__ApiKey on this machine, or issue "
+            + "per-caller keys with scripts/new-api-client.ps1 and set Api:AllowLegacyKey false.");
     }
 
     app.Logger.LogInformation(

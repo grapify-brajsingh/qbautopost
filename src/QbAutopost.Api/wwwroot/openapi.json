@@ -208,6 +208,45 @@
         }
       }
     },
+    "/api/v1/quickbooks/transactions/validate-and-post": {
+      "post": {
+        "tags": ["QuickBooks"],
+        "operationId": "validateAndPostTransactions",
+        "summary": "Validate the whole payload and, if nothing is held, post all of it — one request, one response.",
+        "description": "Synchronous: no `dryRun`, no `202`, no batch to poll. **All or nothing** — if any row would be held the answer is 422 listing every finding and not one byte reaches QuickBooks; otherwise every row posts and the `txnId`s come back in the same response. The QuickBooks session is taken only if it is free: when a folder job or another post holds it the answer is 409 with `Retry-After`, and nothing is enqueued. The caller holds the connection for the whole post, which for a large batch is minutes, so set a client timeout longer than the largest batch you send — and send an `Idempotency-Key`, because after a lost response it is the only way to get the original `txnId`s back rather than a second posting. `POST /api/v1/quickbooks/transactions` (FR-A-8) is unchanged and still offers `dryRun`, `202` and per-row holds.",
+        "x-required-scope": "qb:post",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SyncPostRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Every row posted. `postId` names the ledger row for `POST /api/v1/batches/{id}/undo`; it is not a resource to poll.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SyncPostResult" } } }
+          },
+          "400": {
+            "description": "The request could not be read: a control total that does not add up, too many rows, a malformed row, or `dryRun`/`allowModelAccounts` — neither exists on this route, and sending either is refused rather than ignored.",
+            "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": {
+            "description": "QuickBooks is busy with a folder job or another post. Nothing was sent and nothing was queued, so retrying is safe; `Retry-After` says when.",
+            "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+          },
+          "422": {
+            "description": "At least one row would be held, so none was posted. `validation` lists every finding, not the first.",
+            "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/SyncPostProblem" } } }
+          },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "503": {
+            "description": "The backup is too old (FR-11), QuickBooks is unreachable, or the rules file is missing. Nothing was posted in any of these cases.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SyncPostResult" } } }
+          }
+        }
+      }
+    },
     "/api/v1/quickbooks/transactions": {
       "post": {
         "tags": ["QuickBooks"],
@@ -803,6 +842,129 @@
             "description": "NOT IMPLEMENTED (T-915). Sending `true` is refused with 400: tiers 3-4 never run on the direct path, so the flag would silently do nothing. Give each row a `lineAccount`, or add a rule for its last four. Whether this is ever implemented is open question Q-51; the `qb:post:ai` scope is reserved for it and is checked nowhere today."
           },
           "transactions": { "type": "array", "items": { "$ref": "#/components/schemas/DirectRow" } }
+        }
+      },
+      "SyncPostRequest": {
+        "type": "object",
+        "required": ["controlTotal", "transactions"],
+        "description": "`DirectRequest` minus `dryRun` (validate-and-post §4). The rows are identical, so a caller can move between the two posting routes without rewriting one.",
+        "properties": {
+          "reference": { "type": "string", "nullable": true, "description": "The caller's own name for this post; it names the ledger row `api-<reference>`." },
+          "controlTotal": {
+            "type": "number",
+            "format": "double",
+            "description": "Required here. The caller's own sum over every submitted row: checked to the cent, never corrected. A mismatch refuses the whole request and no amount is adjusted to make it agree."
+          },
+          "dryRun": {
+            "type": "boolean",
+            "nullable": true,
+            "description": "NOT A FIELD OF THIS ROUTE. Sending any value, `false` included, is refused with 400 `dry-run-not-supported` — a caller who asks for a dry run and is answered `posted` would have moved money they believed they were only checking. Use `POST /api/v1/quickbooks/transactions/validate` to check a batch without sending it."
+          },
+          "allowModelAccounts": {
+            "type": "boolean",
+            "nullable": true,
+            "description": "NOT IMPLEMENTED, as on the direct path (T-915): tiers 3-4 never run here, so the flag would silently do nothing. Sending it is refused with 400. Give each row a `lineAccount`, or add a rule for its last four (Q-51)."
+          },
+          "transactions": { "type": "array", "items": { "$ref": "#/components/schemas/DirectRow" } }
+        }
+      },
+      "SyncPostResult": {
+        "type": "object",
+        "description": "What landed in QuickBooks (validate-and-post §6.1). There is no `batchId`, `dryRun` or `isRunning`: this route has no batch to poll and no mode to choose.",
+        "properties": {
+          "postId": {
+            "type": "string",
+            "description": "Names the ledger row, for `POST /api/v1/batches/{id}/undo`. It is NOT a polling resource — no `GET` accepts it. It contains `#`, which must be sent percent-encoded as `%23`."
+          },
+          "reference": { "type": "string", "nullable": true },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus",
+            "description": "`posted` on the ordinary path: a held row is a 422 before anything is sent. It can still read `partial` or `failed` if a gate that runs after the SDK was touched (G4's live half, G5) refused a row — a caller whose money half-moved is told, not reassured."
+          },
+          "companyFile": { "type": "string", "nullable": true },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "submitted": { "type": "integer", "format": "int32" },
+              "posted": { "type": "integer", "format": "int32" },
+              "held": { "type": "integer", "format": "int32" },
+              "skipped": { "type": "integer", "format": "int32", "description": "Rows a skip rule or G4 excluded; why `posted` can be below `submitted` on a clean post." }
+            }
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "submitted": { "type": "number", "format": "double" },
+              "posted": { "type": "number", "format": "double", "description": "The money that actually moved." }
+            }
+          },
+          "posted": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": { "type": "integer", "format": "int32", "description": "Position in the submitted `transactions` array." },
+                "externalId": { "type": "string", "nullable": true, "description": "The caller's own key, echoed so a batch can be reconciled against their records." },
+                "requestId": { "type": "string", "nullable": true },
+                "txnId": { "type": "string", "nullable": true, "description": "QuickBooks' own id for the transaction." },
+                "editSequence": { "type": "string", "nullable": true },
+                "kind": { "$ref": "#/components/schemas/TxnKind" },
+                "account": { "type": "string", "nullable": true },
+                "lineAccount": { "type": "string", "nullable": true },
+                "payee": { "type": "string", "nullable": true },
+                "amount": { "type": "number", "format": "double" }
+              }
+            }
+          },
+          "held": { "type": "array", "items": { "$ref": "#/components/schemas/PlanRow" }, "description": "Empty on the ordinary path; a held row is a 422 before anything is sent." },
+          "skipped": { "type": "array", "items": { "$ref": "#/components/schemas/PlanRow" } },
+          "error": { "type": "string", "nullable": true },
+          "startedUtc": { "type": "string", "format": "date-time" },
+          "finishedUtc": { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "SyncPostProblem": {
+        "type": "object",
+        "description": "The 422 of validate-and-post §6.2: RFC 7807, with every finding in `validation` — not the first, because one held row refuses the whole request and a caller must be able to fix them all in one pass.",
+        "properties": {
+          "type": { "type": "string" },
+          "title": { "type": "string" },
+          "status": { "type": "integer", "format": "int32" },
+          "detail": { "type": "string", "description": "e.g. `3 of 134 row(s) would be held; nothing was sent to QuickBooks.`" },
+          "requestId": { "type": "string" },
+          "counts": {
+            "type": "object",
+            "description": "`postable + held + skipped` is `submitted`.",
+            "properties": {
+              "submitted": { "type": "integer", "format": "int32" },
+              "postable": { "type": "integer", "format": "int32", "description": "Rows that would have posted — and did not, because of the ones below." },
+              "held": { "type": "integer", "format": "int32" },
+              "skipped": { "type": "integer", "format": "int32" }
+            }
+          },
+          "validation": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": { "type": "integer", "format": "int32" },
+                "externalId": { "type": "string", "nullable": true },
+                "reason": { "type": "string", "nullable": true, "description": "A hold code, e.g. `no-account-rule`, `unknown-payee`, `date-too-old`, `already-posted`." },
+                "detail": { "type": "string", "nullable": true },
+                "candidates": { "type": "array", "nullable": true, "items": { "type": "string" } },
+                "postedIn": { "type": "string", "nullable": true, "description": "For `already-posted`: the earlier batch that posted this row." }
+              }
+            }
+          },
+          "unknownNames": {
+            "type": "object",
+            "description": "Names this request would send that `qb-lists.json` does not have.",
+            "properties": {
+              "accounts": { "type": "array", "items": { "type": "string" } },
+              "vendors": { "type": "array", "items": { "type": "string" } },
+              "customers": { "type": "array", "items": { "type": "string" } }
+            }
+          }
         }
       },
       "DirectRow": {

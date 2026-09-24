@@ -139,15 +139,26 @@ public sealed class IdempotencyMiddleware(RequestDelegate next)
         return buffer.ToArray();
     }
 
-    /// <summary>FR-A-12 records the batch a key produced, so an operator can trace a replayed answer to a posting.</summary>
+    /// <summary>
+    /// FR-A-12 records the batch a key produced, so an operator can trace a replayed answer to a posting.
+    /// <para>
+    /// T-924: the synchronous post calls the same thing <c>postId</c> (validate-and-post §6.1), because it is not a
+    /// batch a caller can poll. It is still the ledger row that key produced, so it is recorded under the same name
+    /// rather than left null — being able to trace it is the whole point of the field.
+    /// </para>
+    /// </summary>
     private static string? BatchIdOf(string body)
     {
         try
         {
             using var json = JsonDocument.Parse(body);
-            return json.RootElement.ValueKind == JsonValueKind.Object
-                   && json.RootElement.TryGetProperty("batchId", out var id)
-                ? id.GetString()
+            if (json.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            return json.RootElement.TryGetProperty("batchId", out var batchId) ? batchId.GetString()
+                : json.RootElement.TryGetProperty("postId", out var postId) ? postId.GetString()
                 : null;
         }
         catch (JsonException)
