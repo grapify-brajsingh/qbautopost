@@ -110,7 +110,7 @@ public sealed class OpenApiDriftTests : IDisposable
     /// <para>
     /// Every other claim in this document is about routing or prose; an enum is a list of literals a reader copies
     /// straight into a request. <c>TxnKind</c> documented <c>creditCardCharge</c>, <c>creditCardCredit</c> and
-    /// <c>transfer</c> — three values the enum has never had — so a body built from the page was refused with an
+    /// <c>transfer</c> — three values the enum has never had — so a body sent from Postman was refused with an
     /// unhandled <c>BadHttpRequestException</c> naming one row, on an installation that was mid-post (2026-09-24).
     /// The comparison is by value rather than order, and the guard at the end stops the test passing quietly
     /// because a schema was renamed out from under it.
