@@ -63,8 +63,18 @@ public sealed record Rules
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
-    /// <summary>Reads through <see cref="AtomicFile"/>: <see cref="RulesEditor"/> may be replacing the file at the same time.</summary>
-    public static Rules Load(string path) => Parse(AtomicFile.ReadAllText(path));
+    /// <summary>
+    /// Reads through <see cref="AtomicFile"/>: <see cref="RulesEditor"/> may be replacing the file at the same time.
+    /// <para>
+    /// T-920: a missing file is <see cref="RulesFileNotFoundException"/> rather than whichever IO exception the path
+    /// happens to produce — a missing parent folder raises <c>DirectoryNotFoundException</c>, a missing file
+    /// <c>FileNotFoundException</c>, and a caller could tell neither from a real fault. Checked here, at the one
+    /// place the file is read, so every entrance is covered rather than whichever endpoint was noticed.
+    /// </para>
+    /// </summary>
+    public static Rules Load(string path) => File.Exists(path)
+        ? Parse(AtomicFile.ReadAllText(path))
+        : throw new RulesFileNotFoundException(path);
 
     public static Rules Parse(string json)
     {

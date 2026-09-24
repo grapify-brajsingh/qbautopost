@@ -10,6 +10,17 @@
     <Content Update="wwwroot\openapi.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup Condition="'$(Configuration)' == 'Debug'">
+    <!-- T-920: `dotnet run` reads appsettings.Development.json, whose relative paths resolve against the content
+         root - AppContext.BaseDirectory (T-901), not the project folder. The old "../../samples/rules.json" was
+         written for the project folder, so it landed inside bin\ and every route that loads rules threw. Copying
+         the sample rules beside the executable is what makes a relative path resolve at all, without climbing out
+         of the output folder with a depth that differs between Debug, Release and publish.
+         Debug only, and CopyToPublishDirectory="Never": a real server must never be handed sample rules. -->
+    <Content Include="..\..\samples\rules.json" Link="samples\rules.json"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\QbAutopost.Core\QbAutopost.Core.csproj" />
     <ProjectReference Include="..\QbAutopost.QuickBooks\QbAutopost.QuickBooks.csproj" />

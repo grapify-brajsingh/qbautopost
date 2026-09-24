@@ -66,6 +66,10 @@ builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = 
         ctx.ProblemDetails.Extensions[RequestId.PropertyName] = id;
     }
 });
+// T-920: a missing rules file is a misconfiguration the app is allowed to run in (startup warns, /health/ready
+// reports it) — so a request that needs the file answers 503 with problem details naming the resolved path, rather
+// than throwing into a bare 500. Anything else still reaches the default handler untouched.
+builder.Services.AddExceptionHandler<RulesFileExceptionHandler>();
 // T-911 (FR-A-14): CORS stays off until an origin is named; '*' never gets this far (TransportGuard refuses it).
 var corsOrigins = builder.Configuration.GetSection("Api:Cors:AllowedOrigins").Get<string[]>() ?? [];
 if (corsOrigins.Length > 0)
