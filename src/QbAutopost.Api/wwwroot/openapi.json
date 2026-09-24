@@ -990,7 +990,8 @@
       },
       "TxnKind": {
         "type": "string",
-        "enum": ["check", "deposit", "creditCardCharge", "creditCardCredit", "transfer"]
+        "enum": ["check", "ccCharge", "ccCredit", "deposit", "skip"],
+        "description": "`check` and `deposit` move money on a bank account; `ccCharge` and `ccCredit` on a credit card; `skip` leaves the row alone. Read case-insensitively."
       },
       "JobStatus": {
         "type": "string",

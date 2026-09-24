@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Endpoints;
 using QbAutopost.Api.Tests.TestSupport;
+using QbAutopost.Core.Models;
 using QbAutopost.Core.Security;
 
 namespace QbAutopost.Api.Tests.Api;
@@ -104,6 +105,53 @@ public sealed class OpenApiDriftTests : IDisposable
         Assert.Empty(wrong);
     }
 
+    /// <summary>
+    /// The values a caller may put in a body, checked against the type that body binds to.
+    /// <para>
+    /// Every other claim in this document is about routing or prose; an enum is a list of literals a reader copies
+    /// straight into a request. <c>TxnKind</c> documented <c>creditCardCharge</c>, <c>creditCardCredit</c> and
+    /// <c>transfer</c> — three values the enum has never had — so a body built from the page was refused with an
+    /// unhandled <c>BadHttpRequestException</c> naming one row, on an installation that was mid-post (2026-09-24).
+    /// The comparison is by value rather than order, and the guard at the end stops the test passing quietly
+    /// because a schema was renamed out from under it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Should_ListTheValuesTheSerialiserAccepts_When_TheDocumentNamesAnEnum()
+    {
+        using var document = await DocumentAsync();
+        var enums = typeof(TxnKind).Assembly.GetTypes()
+            .Where(type => type.IsEnum)
+            .GroupBy(type => type.Name)
+            .Where(group => group.Count() == 1)
+            .ToDictionary(group => group.Key, group => group.Single());
+
+        var wrong = new List<string>();
+        var compared = 0;
+
+        foreach (var schema in document.RootElement.GetProperty("components").GetProperty("schemas").EnumerateObject())
+        {
+            if (!enums.TryGetValue(schema.Name, out var type) || !schema.Value.TryGetProperty("enum", out var values))
+            {
+                continue;
+            }
+
+            compared++;
+            var documented = values.EnumerateArray().Select(value => value.GetString()).OrderBy(v => v, StringComparer.Ordinal);
+            // Both JsonOptions.Default and ConfigureHttpJsonOptions camel-case enum names. Reading additionally
+            // accepts any casing, but the document may only offer a caller what the serialiser itself writes.
+            var accepted = Enum.GetNames(type).Select(JsonNamingPolicy.CamelCase.ConvertName).OrderBy(v => v, StringComparer.Ordinal);
+
+            if (!documented.SequenceEqual(accepted, StringComparer.Ordinal))
+            {
+                wrong.Add($"{schema.Name}: documented [{string.Join(", ", documented)}], accepted [{string.Join(", ", accepted)}]");
+            }
+        }
+
+        Assert.Empty(wrong);
+        Assert.True(compared >= 2, $"only {compared} enum schema(s) were compared; TxnKind and JobStatus are both named in the document.");
+    }
+
     [Fact]
     public async Task Should_DeclareABearerSecurityScheme_When_TheDocumentIsRead()
     {
@@ -170,10 +218,20 @@ public sealed class OpenApiDriftTests : IDisposable
         Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
     }
 
+    /// <summary>
+    /// Disabled means <b>not mapped</b>, so the document is a 404 rather than a 403.
+    /// <para>
+    /// The setting is turned off here explicitly. It used to be inherited from the shipped
+    /// <c>appsettings.json</c>, which shipped <c>false</c> — so the test was really asserting what that file
+    /// happened to say, and it broke the day the owner enabled the reference (2026-09-24) even though the behaviour
+    /// it names had not changed at all.
+    /// </para>
+    /// </summary>
     [Fact]
     public async Task Should_NotServeTheDocument_When_ReferenceIsDisabled()
     {
-        using var client = _factory.CreateAuthorizedClient();
+        using var host = _factory.WithSetting("Api:Reference:Enabled", "false");
+        using var client = Authorized(host);
 
         using var response = await client.GetAsync(OpenApi.DocumentRoute);
 
