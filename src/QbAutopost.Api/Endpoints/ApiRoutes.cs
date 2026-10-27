@@ -137,6 +137,13 @@ public static class ApiRoutes
             return null;
         }
 
+        // Named so the database route is a decision, not a side effect of the prefix below. It is health:read until
+        // T-1009 adds requests:read, which extends this line.
+        if (p == "/health/database")
+        {
+            return ApiScopes.HealthRead;
+        }
+
         if (p.StartsWith("/health", Ordinal))
         {
             return ApiScopes.HealthRead;

@@ -123,6 +123,27 @@
         }
       }
     },
+    "/api/v1/health/database": {
+      "get": {
+        "tags": ["Health"],
+        "operationId": "getDatabaseHealth",
+        "summary": "Saved-requests database: reachability, schema state and check latency.",
+        "description": "Looks at the database now. Never includes the connection string. With `Database:ConnectionString` empty the feature is off and this answers 503 with reason `not-configured`; the rest of the API is unaffected.",
+        "x-required-scope": "health:read",
+        "responses": {
+          "200": {
+            "description": "The database answered and its schema is current.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DatabaseHealth" } } }
+          },
+          "503": {
+            "description": "Not configured, unreachable, or the schema is out of date; `reason` says which.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DatabaseHealth" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
     "/api/v1/quickbooks/connection/test": {
       "post": {
         "tags": ["QuickBooks"],
@@ -767,6 +788,18 @@
           "model": { "type": "string" },
           "latencyMs": { "type": "integer", "format": "int64" },
           "message": { "type": "string", "nullable": true }
+        }
+      },
+      "DatabaseHealth": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "state": { "type": "string", "enum": ["Ready", "NotConfigured", "Unreachable", "SchemaOutOfDate"] },
+          "reason": { "type": "string", "nullable": true, "enum": ["not-configured", "unreachable", "schema-out-of-date"] },
+          "reachable": { "type": "boolean" },
+          "schemaCurrent": { "type": "boolean" },
+          "pendingMigrations": { "type": "array", "items": { "type": "string" } },
+          "latencyMs": { "type": "integer", "format": "int64" }
         }
       },
       "ConnectionTestRequest": {

@@ -1,3 +1,4 @@
+using QbAutopost.Api.Database;
 using QbAutopost.Api.Health;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Pipeline;
@@ -15,7 +16,29 @@ public static class HealthEndpoints
         health.MapGet("/sdk", GetSdk);
         health.MapGet("/hermes", GetHermes);
         health.MapGet("/quickbooks", GetQuickBooks);
+        health.MapGet("/database", GetDatabase);
         return app;
+    }
+
+    /// <summary>
+    /// Saved-requests spec 5.5. Looks at the database now (an explicit refresh - the one way an outage that has
+    /// ended is noticed without a timer) and reports reachability, schema state and latency. The body is built from
+    /// the gate's state and migration names only, so the connection string cannot reach it.
+    /// </summary>
+    private static async Task<IResult> GetDatabase(DatabaseGate gate, CancellationToken ct)
+    {
+        await gate.RefreshAsync(ct);
+        var view = new DatabaseHealthView(
+            gate.IsReady,
+            gate.State.ToString(),
+            gate.Reason,
+            gate.State is DatabaseState.Ready or DatabaseState.SchemaOutOfDate,
+            gate.IsReady && gate.Pending.Count == 0,
+            gate.Pending,
+            gate.LatencyMs);
+        return view.Ok
+            ? Results.Ok(view)
+            : Results.Json(view, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
     /// <summary>

@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
 using QbAutopost.Api.Configuration;
+using QbAutopost.Api.Database;
 using QbAutopost.Api.Jobs;
 using QbAutopost.Api.QuickBooks;
 using QbAutopost.Core.Jobs;
@@ -38,7 +39,8 @@ public sealed class AppHealth(
     IHostApplicationLifetime lifetime,
     QbConnection connection,
     JobQueue queue,
-    IJobStore store)
+    IJobStore store,
+    DatabaseGate database)
 {
     /// <summary>Process start, read once: it never changes and reading it costs a syscall.</summary>
     private static readonly DateTime ProcessStartedUtc = StartTimeUtc();
@@ -62,7 +64,7 @@ public sealed class AppHealth(
 
     /// <summary>Readiness (FR-A-2) shares the lifetime signal: the worker starts with the host.</summary>
     public ReadinessView Ready() =>
-        Readiness.Evaluate(settings.Value, lifetime.ApplicationStarted.IsCancellationRequested);
+        Readiness.Evaluate(settings.Value, lifetime.ApplicationStarted.IsCancellationRequested, database);
 
     internal static string BuildVersion =>
         typeof(AppHealth).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion

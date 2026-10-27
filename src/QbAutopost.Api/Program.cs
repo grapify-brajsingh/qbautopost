@@ -1,7 +1,9 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using QbAutopost.Api.Configuration;
+using QbAutopost.Api.Database;
 using QbAutopost.Api.Endpoints;
 using QbAutopost.Api.Health;
 using QbAutopost.Api.Jobs;
@@ -17,8 +19,10 @@ using QbAutopost.Core.Hermes;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Mapping;
 using QbAutopost.Core.Pipeline;
+using QbAutopost.Core.SavedRequests;
 using QbAutopost.Core.Security;
 using QbAutopost.Core.Store;
+using QbAutopost.Data;
 using QbAutopost.QuickBooks;
 
 // T-901 (api-v1 §12): read appsettings.json from the exe's folder, not the working directory (server defect 1).
@@ -238,6 +242,35 @@ builder.Services.AddSingleton<JobAdmission>();
 builder.Services.AddSingleton<StartupRecovery>();
 builder.Services.AddHostedService<JobWorker>();
 
+// Saved-requests spec 4.2, 5.5, 10.6, 10.7. Without a connection string the feature is off (DisabledSavedRequestStore,
+// gate NotConfigured) and nothing else changes. Registered after JobWorker; hosted services start in order, and
+// InFlightRecovery finishes before Kestrel binds, so the saved-request routes never see a request still `posting`.
+var database = builder.Configuration.GetSection("Database").Get<DatabaseSettings>() ?? new DatabaseSettings();
+if (database.Configured)
+{
+    builder.Services.AddQbAutopostData(database.ConnectionString, database.CommandTimeoutSeconds);
+}
+else
+{
+    builder.Services.AddSingleton<ISavedRequestStore, DisabledSavedRequestStore>();
+}
+
+builder.Services.AddSingleton(sp =>
+{
+    var factory = sp.GetService<IDbContextFactory<QbAutopostDbContext>>();
+    return new DatabaseGate(
+        factory is null
+            ? null
+            : async ct =>
+            {
+                await using var db = await factory.CreateDbContextAsync(ct);
+                return await SchemaState.CheckAsync(db, ct);
+            },
+        sp.GetRequiredService<IOptions<AppSettings>>().Value.Database.RequireCurrentSchema,
+        sp.GetRequiredService<ILogger<DatabaseGate>>());
+});
+builder.Services.AddHostedService<InFlightRecovery>();
+
 var app = builder.Build();
 
 try
@@ -275,6 +308,9 @@ try
     {
         app.Logger.LogWarning("{TransportWarning}", warning);
     }
+
+    // Saved-requests spec 4.2: names the key, never the value, of a secret read from a settings file.
+    SecretWarnings.Warn(app.Configuration, app.Logger);
 
     app.Services.GetRequiredService<PromptLibrary>();
     app.Logger.LogInformation("Hermes prompts loaded from {PromptFolder}", Path.Combine(AppContext.BaseDirectory, PromptLibrary.DefaultFolder));

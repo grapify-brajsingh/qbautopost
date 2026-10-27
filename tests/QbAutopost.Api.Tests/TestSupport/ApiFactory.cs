@@ -7,10 +7,14 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging.Abstractions;
+using QbAutopost.Api.Database;
 using QbAutopost.Api.Endpoints;
 using QbAutopost.Api.QuickBooks;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Jobs;
+using QbAutopost.Core.SavedRequests;
+using QbAutopost.Data;
 
 namespace QbAutopost.Api.Tests.TestSupport;
 
@@ -36,6 +40,23 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
     /// <summary>Rule 1: the host must never reach the real COM probe, not even on a developer's Windows box.</summary>
     public FakeQbSdkProbe SdkProbe { get; } = new();
+
+    /// <summary>
+    /// Rule 1: no PostgreSQL either. The host gets this in-memory store, and a gate that starts <c>Ready</c>; a test
+    /// moves the gate with <c>Gate.Set(...)</c>, or changes what an explicit refresh finds with <see cref="Schema"/>.
+    /// </summary>
+    public FakeSavedRequestStore Store { get; } = new();
+
+    public DatabaseGate Gate { get; }
+
+    /// <summary>What the gate's schema check reports when something refreshes it.</summary>
+    public SchemaStatus Schema { get; set; } = new(true, true, [], null);
+
+    public ApiFactory()
+    {
+        Gate = new DatabaseGate(_ => Task.FromResult(Schema), true, NullLogger<DatabaseGate>.Instance);
+        Gate.Set(DatabaseState.Ready);
+    }
 
     public string LedgerFile => Dir.Combine("data", "ledger.json");
 
@@ -96,6 +117,10 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             // Without this the host would pick the real COM probe on a Windows dev box (CLAUDE.md rule 1).
             services.RemoveAll<IQbSdkProbe>();
             services.AddSingleton<IQbSdkProbe>(SdkProbe);
+            services.RemoveAll<ISavedRequestStore>();
+            services.AddSingleton<ISavedRequestStore>(Store);
+            services.RemoveAll<DatabaseGate>();
+            services.AddSingleton(Gate);
         });
     }
 

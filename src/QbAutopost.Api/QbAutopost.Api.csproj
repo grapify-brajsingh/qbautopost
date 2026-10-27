@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\QbAutopost.Core\QbAutopost.Core.csproj" />
+    <ProjectReference Include="..\QbAutopost.Data\QbAutopost.Data.csproj" />
     <ProjectReference Include="..\QbAutopost.QuickBooks\QbAutopost.QuickBooks.csproj" />
   </ItemGroup>
 
