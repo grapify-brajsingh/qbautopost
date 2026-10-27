@@ -65,6 +65,11 @@ public static class ApiRoutes
         // T-924: the synchronous post is here for two reasons at once. §3 honours Idempotency-Key on it — the only
         // mechanism that returns the *original* txnIds after a lost response (§8) — and RateLimitPolicy reads this
         // same predicate, so naming it here also puts it in the posting bucket rather than the cheaper default one.
+        //
+        // T-1012: POST /saved-requests is deliberately absent. Its Idempotency-Key is honoured by the store, per source
+        // and in the same transaction as the save (saved-requests spec 10.1): same key and body answer 200 with the
+        // existing record, a different body 409 idempotency-key-reused. This middleware's file-backed replay would
+        // answer from a second, separate record of the same fact, and the two could disagree.
         return Is(value, "/quickbooks/transactions")
                || Is(value, SyncPostRoute)
                || Is(value, "/jobs")

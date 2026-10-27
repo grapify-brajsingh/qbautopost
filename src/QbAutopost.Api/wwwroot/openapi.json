@@ -19,7 +19,8 @@
     { "name": "Rules", "description": "Teaching the mapper an alias or a vendor account." },
     { "name": "Reference", "description": "This document and the page that renders it." },
     { "name": "Auth", "description": "Dashboard sign-in: a short-lived Bearer access token and a rotating refresh cookie (saved-requests §11.2)." },
-    { "name": "Users", "description": "User management for admins (saved-requests §11.4): temporary passwords, roles, disabling, unlocking, audit." }
+    { "name": "Users", "description": "User management for admins (saved-requests §11.4): temporary passwords, roles, disabling, unlocking, audit." },
+    { "name": "Saved requests", "description": "Saved requests (saved-requests §6): n8n saves a validate-and-post body here, people review and post it from the dashboard." }
   ],
   "paths": {
     "/api/v1/health": {
@@ -1289,6 +1290,788 @@
           }
         }
       }
+    },
+    "/api/v1/saved-requests": {
+      "post": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "saveRequest",
+        "summary": "Save a validate-and-post body for a person to review and post.",
+        "description": "Saved-requests §6.1. The body is exactly the validate-and-post body; nothing is posted. Over `Api:MaxRequestBodyBytes` answers `413` and anything that is not one JSON object `400 not-a-json-object`; neither is stored. Every JSON object is stored as version 1, byte for byte, even when it cannot be read (`needsAttention: true`, the JSON path in `validation.errors`) or when validation refuses it (`dryRun`, `allowModelAccounts`, control-total mismatch, too many rows) or holds rows. When validation cannot run (rules file missing, lists unreadable) the snapshot is `unavailable` and the save still succeeds. A request that looks like another one is flagged (`duplicate`), never refused. `createdBy` and `updatedBy` come from the caller, never the body. Treat any `201` as success.",
+        "x-required-scope": "requests:submit",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Honoured per source (§10.1), by the store rather than the replay file: the same key and body answer `200` with the existing record and save nothing; the same key with a different body answers `409 idempotency-key-reused`. At most 128 characters.",
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncPostRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Saved. `Location` names the new record.",
+            "headers": {
+              "Location": {
+                "description": "`/api/v1/saved-requests/{id}`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestSaved"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "The same `Idempotency-Key` and body were saved before: the existing record (`Idempotency-Replayed: true`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestSaved"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`not-a-json-object`: the body is not one JSON object (or not UTF-8); nothing was saved. `invalid-request`: the `Idempotency-Key` is too long.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`idempotency-key-reused`: this source used the key for a different body; nothing was saved.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is over `Api:MaxRequestBodyBytes`; nothing was saved.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "listSavedRequests",
+        "summary": "List saved requests, filtered and paged.",
+        "description": "Saved-requests §6.5. Every value is checked: an unknown `status` or `sort`, a flag that is not `true`/`false`, a date that is not `yyyy-MM-dd`, or a page outside its range answers `400`. Rows hold everything in the detail except the payload, the validation findings and the read errors.",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Repeatable. Only these statuses.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "posting",
+                "posted",
+                "partial",
+                "unknown",
+                "discarded"
+              ]
+            }
+          },
+          {
+            "name": "needsAttention",
+            "in": "query",
+            "required": false,
+            "description": "Only requests that do (`true`) or do not (`false`) need attention.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "duplicate",
+            "in": "query",
+            "required": false,
+            "description": "Only flagged (`true`) or unflagged (`false`) requests.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Case-insensitive text in the reference, the public reference, or a payee or memo inside the payload.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "createdFrom",
+            "in": "query",
+            "required": false,
+            "description": "Created on or after this date (UTC).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "createdTo",
+            "in": "query",
+            "required": false,
+            "description": "Created on or before this date (UTC).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "description": "`api-client:<clientId>` or `user:<userId>`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "description": "Default `-created`; a leading `-` is descending.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "created",
+                "-created",
+                "updated",
+                "-updated",
+                "controlTotal",
+                "-controlTotal"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "1 or more. Default 1.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "description": "1 to `SavedRequests:MaxListPageSize` (100). Default 25.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of saved requests.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/saved-requests/stats": {
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "savedRequestStats",
+        "summary": "Counts for the dashboard header.",
+        "description": "Every status appears in `byStatus`, zero included.",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The counts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestStats"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/saved-requests/{id}": {
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "getSavedRequest",
+        "summary": "One saved request: latest payload, flags, validation snapshot and last attempt.",
+        "description": "Saved-requests §6.2. The `ETag` is the row version, to send as `If-Match` on an edit or a post. `allowedActions` follows the status and the caller's scopes; an API key never gets an action. Actors are `{ id, name, email }` for a user and `{ id, name }` for an API client (`api-client:<id>`).",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else, including `0`, a sign or more than 18 digits, answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The saved request.",
+            "headers": {
+              "ETag": {
+                "description": "The row version, in quotes.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/saved-requests/{id}/original": {
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "getSavedRequestOriginal",
+        "summary": "The original body exactly as it was received.",
+        "description": "Byte for byte, as UTF-8: key order, whitespace, escapes and duplicate keys are kept. Never re-serialised.",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else, including `0`, a sign or more than 18 digits, answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The original body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/saved-requests/{id}/versions": {
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "listSavedRequestVersions",
+        "summary": "Every version, newest first.",
+        "description": "Number, who, when, note and change count. Version 1 is the original.",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else, including `0`, a sign or more than 18 digits, answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The versions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestVersionList"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/saved-requests/{id}/versions/{n}": {
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "getSavedRequestVersion",
+        "summary": "One version's payload and change list.",
+        "description": "A version that does not exist answers `404`.",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else, including `0`, a sign or more than 18 digits, answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "n",
+            "in": "path",
+            "required": true,
+            "description": "The version number, 1 or more.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestVersion"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/saved-requests/{id}/attempts": {
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "listSavedRequestAttempts",
+        "summary": "Every post attempt, newest first.",
+        "description": "Without the stored result; `GET .../attempts/{attemptId}` has it.",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else, including `0`, a sign or more than 18 digits, answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The attempts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostAttemptList"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/saved-requests/{id}/attempts/{attemptId}": {
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "getSavedRequestAttempt",
+        "summary": "One attempt with the full stored result.",
+        "description": "`result` is the validate-and-post answer (200) or its problem body, stored as returned.",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else, including `0`, a sign or more than 18 digits, answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "attemptId",
+            "in": "path",
+            "required": true,
+            "description": "The attempt id.",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The attempt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostAttemptDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/saved-requests/{id}/events": {
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "listSavedRequestEvents",
+        "summary": "The timeline, newest first.",
+        "description": "`created`, `flagged-duplicate`, `edited`, `validated`, `post-started`, `post-finished`, `discarded`, `restored`, `resolved`.",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else, including `0`, a sign or more than 18 digits, answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestEventList"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2246,6 +3029,860 @@
           "key": { "type": "string" },
           "value": { "type": "string" },
           "previous": { "type": "string", "nullable": true, "description": "What the rule said before; null when it is new." }
+        }
+      },
+      "SavedRequestActor": {
+        "type": "object",
+        "description": "Who did it (§5.3). Users are disabled, never deleted, so an id always has a name.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "A user id, or `api-client:<id>`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "description": "Users only.",
+            "nullable": true
+          }
+        }
+      },
+      "SavedRequestStamp": {
+        "type": "object",
+        "properties": {
+          "utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "by": {
+            "$ref": "#/components/schemas/SavedRequestActor"
+          }
+        }
+      },
+      "SavedRequestSource": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "api-client",
+              "user"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "SavedRequestCounts": {
+        "type": "object",
+        "description": "`postable + held + skipped` is `submitted`.",
+        "properties": {
+          "submitted": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "postable": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "held": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "SavedRequestFinding": {
+        "type": "object",
+        "description": "A validate-and-post §6.2 finding.",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "externalId": {
+            "type": "string",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "detail": {
+            "type": "string",
+            "nullable": true
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "postedIn": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "SavedRequestUnknownNames": {
+        "type": "object",
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "vendors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "customers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SavedRequestValidation": {
+        "type": "object",
+        "description": "§6.4. Advisory: Post always validates again. `needsAttention` is set by `unreadable`, `held` and `refused`, not by `unavailable`.",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "held",
+              "refused",
+              "unreadable",
+              "unavailable"
+            ]
+          },
+          "validatedUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "versionNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "counts": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestCounts"
+              }
+            ],
+            "nullable": true
+          },
+          "validation": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedRequestFinding"
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Request-level refusals, or the read errors (`$.path: message`)."
+          },
+          "unknownNames": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestUnknownNames"
+              }
+            ],
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "description": "Only when `unavailable`: why validation could not run."
+          }
+        }
+      },
+      "SavedRequestDuplicate": {
+        "type": "object",
+        "properties": {
+          "flagged": {
+            "type": "boolean"
+          },
+          "of": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`same-payload`, `same-reference`, `overlapping-rows`."
+          }
+        }
+      },
+      "SavedRequestDuplicateDetail": {
+        "type": "object",
+        "properties": {
+          "flagged": {
+            "type": "boolean"
+          },
+          "of": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "acknowledgedBy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestActor"
+              }
+            ],
+            "nullable": true
+          },
+          "acknowledgedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "SavedRequestLastAttempt": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "in-progress",
+              "posted",
+              "partial",
+              "failed",
+              "held",
+              "refused",
+              "busy",
+              "unavailable",
+              "error",
+              "unknown"
+            ]
+          },
+          "httpStatus": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "finishedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "SavedRequestSaved": {
+        "type": "object",
+        "description": "§6.1.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "publicRef": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "posting",
+              "posted",
+              "partial",
+              "unknown",
+              "discarded"
+            ]
+          },
+          "needsAttention": {
+            "type": "boolean"
+          },
+          "duplicate": {
+            "$ref": "#/components/schemas/SavedRequestDuplicate"
+          },
+          "validation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestValidation"
+              }
+            ],
+            "nullable": true
+          },
+          "createdUtc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SavedRequestDetail": {
+        "type": "object",
+        "description": "§6.2.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "publicRef": {
+            "type": "string",
+            "description": "`SR-000123`."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "posting",
+              "posted",
+              "partial",
+              "unknown",
+              "discarded"
+            ]
+          },
+          "rowVersion": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SavedRequestSource"
+          },
+          "reference": {
+            "type": "string",
+            "nullable": true
+          },
+          "controlTotal": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "transactionCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "currentVersion": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "needsAttention": {
+            "type": "boolean"
+          },
+          "readErrors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "duplicate": {
+            "$ref": "#/components/schemas/SavedRequestDuplicateDetail"
+          },
+          "validation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestValidation"
+              }
+            ],
+            "nullable": true
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The latest version, as stored."
+          },
+          "lastAttempt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestLastAttempt"
+              }
+            ],
+            "nullable": true
+          },
+          "postId": {
+            "type": "string",
+            "nullable": true
+          },
+          "discardReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "created": {
+            "$ref": "#/components/schemas/SavedRequestStamp"
+          },
+          "updated": {
+            "$ref": "#/components/schemas/SavedRequestStamp"
+          },
+          "allowedActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Of `edit`, `validate`, `post`, `discard`, `restore`, `resolve`, in that order."
+          }
+        }
+      },
+      "SavedRequestSummary": {
+        "type": "object",
+        "description": "§6.5: the detail without the payload, the findings and the read errors.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "publicRef": {
+            "type": "string",
+            "description": "`SR-000123`."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "posting",
+              "posted",
+              "partial",
+              "unknown",
+              "discarded"
+            ]
+          },
+          "rowVersion": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SavedRequestSource"
+          },
+          "reference": {
+            "type": "string",
+            "nullable": true
+          },
+          "controlTotal": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "transactionCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "currentVersion": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "needsAttention": {
+            "type": "boolean"
+          },
+          "duplicate": {
+            "$ref": "#/components/schemas/SavedRequestDuplicate"
+          },
+          "validation": {
+            "allOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "ok",
+                      "held",
+                      "refused",
+                      "unreadable",
+                      "unavailable"
+                    ]
+                  },
+                  "validatedUtc": {
+                    "type": "string",
+                    "format": "date-time",
+                    "nullable": true
+                  }
+                }
+              }
+            ],
+            "nullable": true
+          },
+          "postId": {
+            "type": "string",
+            "nullable": true
+          },
+          "created": {
+            "$ref": "#/components/schemas/SavedRequestStamp"
+          },
+          "updated": {
+            "$ref": "#/components/schemas/SavedRequestStamp"
+          },
+          "allowedActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Of `edit`, `validate`, `post`, `discard`, `restore`, `resolve`, in that order."
+          }
+        }
+      },
+      "SavedRequestPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedRequestSummary"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "SavedRequestStats": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "byStatus": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Every status, zero included."
+          },
+          "needsAttention": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "duplicates": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "SavedRequestChange": {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "description": "e.g. `$.transactions[3].payee`."
+          },
+          "old": {
+            "nullable": true
+          },
+          "new": {
+            "nullable": true
+          }
+        }
+      },
+      "SavedRequestVersionSummary": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "created": {
+            "$ref": "#/components/schemas/SavedRequestStamp"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "changeCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "readable": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SavedRequestVersionList": {
+        "type": "object",
+        "description": "Newest first.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedRequestVersionSummary"
+            }
+          }
+        }
+      },
+      "SavedRequestVersion": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "readable": {
+            "type": "boolean"
+          },
+          "readErrors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedRequestChange"
+            }
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "created": {
+            "$ref": "#/components/schemas/SavedRequestStamp"
+          }
+        }
+      },
+      "PostAttempt": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "versionNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "in-progress",
+              "posted",
+              "partial",
+              "failed",
+              "held",
+              "refused",
+              "busy",
+              "unavailable",
+              "error",
+              "unknown"
+            ]
+          },
+          "httpStatus": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "postId": {
+            "type": "string",
+            "nullable": true
+          },
+          "counts": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "startedUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "startedBy": {
+            "$ref": "#/components/schemas/SavedRequestActor"
+          },
+          "resolvedBy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestActor"
+              }
+            ],
+            "nullable": true
+          },
+          "resolvedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "resolutionNote": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "PostAttemptDetail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "versionNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "in-progress",
+              "posted",
+              "partial",
+              "failed",
+              "held",
+              "refused",
+              "busy",
+              "unavailable",
+              "error",
+              "unknown"
+            ]
+          },
+          "httpStatus": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "postId": {
+            "type": "string",
+            "nullable": true
+          },
+          "counts": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "startedUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "startedBy": {
+            "$ref": "#/components/schemas/SavedRequestActor"
+          },
+          "resolvedBy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestActor"
+              }
+            ],
+            "nullable": true
+          },
+          "resolvedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "resolutionNote": {
+            "type": "string",
+            "nullable": true
+          },
+          "result": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          }
+        }
+      },
+      "PostAttemptList": {
+        "type": "object",
+        "description": "Newest first.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PostAttempt"
+            }
+          }
+        }
+      },
+      "SavedRequestEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          },
+          "atUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/SavedRequestActor"
+          }
+        }
+      },
+      "SavedRequestEventList": {
+        "type": "object",
+        "description": "Newest first.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedRequestEvent"
+            }
+          }
         }
       }
     }

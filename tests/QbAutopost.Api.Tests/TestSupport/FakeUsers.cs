@@ -6,6 +6,7 @@ using System.Text.Json;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
 using QbAutopost.Api.Auth;
+using QbAutopost.Api.SavedRequests;
 using QbAutopost.Core.Security;
 
 namespace QbAutopost.Api.Tests.TestSupport;
@@ -15,7 +16,7 @@ namespace QbAutopost.Api.Tests.TestSupport;
 /// issues access tokens signed with <see cref="ApiFactory.SigningKey"/>, shaped as spec 11.2 says T-1010 will issue
 /// them. The gate's 30 s cache is tested on the real <see cref="UserGate"/>, not here.
 /// </summary>
-public sealed class FakeUsers : IUserGate
+public sealed class FakeUsers : IUserGate, IUserDirectory
 {
     private readonly ConcurrentDictionary<string, User> _users = new();
     private int _next;
@@ -88,6 +89,16 @@ public sealed class FakeUsers : IUserGate
             ? Caller.ForUser(user.Id, user.Name, user.Email, user.Role, user.MustChange)
             : null;
         return Task.FromResult(caller);
+    }
+
+    /// <summary>T-1012: the names saved-request history shows beside user ids, as the user table would give them.</summary>
+    public Task<IReadOnlyDictionary<string, UserName>> FindAsync(IReadOnlyCollection<string> ids, CancellationToken ct)
+    {
+        IReadOnlyDictionary<string, UserName> found = ids
+            .Where(_users.ContainsKey)
+            .Distinct(StringComparer.Ordinal)
+            .ToDictionary(id => id, id => new UserName(_users[id].Name, _users[id].Email), StringComparer.Ordinal);
+        return Task.FromResult(found);
     }
 
     private User Add(string role, bool mustChange, bool disabled)

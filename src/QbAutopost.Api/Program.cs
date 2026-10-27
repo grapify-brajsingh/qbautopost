@@ -12,6 +12,7 @@ using QbAutopost.Api.Jobs;
 using QbAutopost.Api.Logging;
 using QbAutopost.Api.Ocr;
 using QbAutopost.Api.QuickBooks;
+using QbAutopost.Api.SavedRequests;
 using QbAutopost.Api.Security;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Api;
@@ -206,17 +207,19 @@ builder.Services.AddSingleton(sp =>
     };
 });
 // T-907 (§6.1, §12): the bounds a direct request is read against. Core stays free of the settings types.
+// T-1012: one instance, so the saved-request row fingerprints (R6) read rows exactly as the planner does.
 builder.Services.AddSingleton(sp =>
 {
     var s = sp.GetRequiredService<IOptions<AppSettings>>().Value;
-    return new DirectPlanner(new DirectLimits
+    return new DirectLimits
     {
         MaxRows = s.Api.MaxTransactionsPerRequest,
         MaxLineAmount = s.QuickBooks.MaxLineAmount,
         MaxAgeDays = s.QuickBooks.AllowedDateWindow.MaxAgeDays,
         MaxFutureDays = s.QuickBooks.AllowedDateWindow.MaxFutureDays,
-    });
+    };
 });
+builder.Services.AddSingleton(sp => new DirectPlanner(sp.GetRequiredService<DirectLimits>()));
 builder.Services.AddSingleton(sp =>
     new ApiBatchStore(sp.GetRequiredService<IOptions<AppSettings>>().Value.Paths.ApiBatches));
 // T-909 (FR-A-12): beside the batches, because a key's whole purpose is to name the batch it produced.
@@ -229,6 +232,10 @@ builder.Services.AddSingleton<DirectPostRunner>();
 // T-924 (ADR-0008): the synchronous validate-and-post. It owns no posting logic of its own — it is the all-or-nothing
 // gate in front of DirectPostRunner, plus the worker lock taken only if it is free.
 builder.Services.AddSingleton<SyncPostRunner>();
+// T-1012 (saved-requests spec 6.1, 6.4, 5.3): reading, validating and storing a saved request, and naming its actors.
+builder.Services.AddSingleton<SavedRequestValidator>();
+builder.Services.AddSingleton<SavedRequestIntake>();
+builder.Services.AddSingleton<ActorDirectory>();
 // T-914 (FR-A-7): the same StatementReader the job uses, so a validate and the job it predicts cannot disagree.
 builder.Services.AddSingleton<FolderValidator>();
 builder.Services.AddSingleton<JobPipeline>();
@@ -278,6 +285,8 @@ if (database.Configured)
     builder.Services.AddSingleton<UserAuditWriter>();
     // Fix 1a: the failed-password count, incremented atomically in PostgreSQL.
     builder.Services.AddSingleton<LockoutCounter>();
+    // T-1012 (spec 5.3): user names beside the ids in saved-request history, one query per response.
+    builder.Services.AddSingleton<IUserDirectory, DbUserDirectory>();
 }
 else
 {
@@ -417,6 +426,8 @@ try
     v1.MapAuthEndpoints();
     // T-1011 (spec 11.4): user management, admins only (users:manage); versioned surface only.
     v1.MapUserEndpoints();
+    // T-1012 (spec 6): saved requests, behind the database gate; versioned surface only.
+    v1.MapSavedRequestEndpoints();
     // T-913 (FR-A-18): the document and the Scalar page, on the versioned surface only and only when somebody asked
     // for them. Disabled means not mapped, so a route that could describe every way to move money simply is not there.
     if (settings.Api.Reference.Enabled)

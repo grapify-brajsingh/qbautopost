@@ -1,0 +1,194 @@
+using System.Net;
+using QbAutopost.Api.Database;
+using QbAutopost.Api.Endpoints;
+using QbAutopost.Api.Tests.TestSupport;
+using QbAutopost.Core.SavedRequests;
+
+namespace QbAutopost.Api.Tests.SavedRequests;
+
+/// <summary>
+/// T-1012 (saved-requests spec 6.1, 6.4, 9, 10.1, 10.7-10.9, 5.3): <c>POST /api/v1/saved-requests</c>. Anything that
+/// is a JSON object is stored; what is wrong with it becomes a flag for a person, never a refused save.
+/// </summary>
+public sealed class SaveApiTests : IDisposable
+{
+    private readonly SavedRequestTestHost _host = new();
+
+    public void Dispose() => _host.Dispose();
+
+    private FakeSavedRequestStore Store => _host.Factory.Store;
+
+    private async Task<SavedRequest> StoredAsync(long id) => (await Store.GetAsync(id, CancellationToken.None))!;
+
+    [Fact]
+    public async Task Should_Return201WithLocation_When_N8nKeySavesGoodPayload()
+    {
+        var (response, body) = await _host.SaveAsync(SavedRequestTestHost.Fixture("n8n-good.json"));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var id = body.GetProperty("id").GetInt64();
+        Assert.Equal($"/api/v1/saved-requests/{id}", response.Headers.Location?.ToString());
+        Assert.Equal($"SR-{id:000000}", body.GetProperty("publicRef").GetString());
+        Assert.Equal("pending", body.GetProperty("status").GetString());
+        Assert.False(body.GetProperty("needsAttention").GetBoolean());
+        Assert.Equal("ok", body.GetProperty("validation").GetProperty("state").GetString());
+        Assert.Equal(2, body.GetProperty("validation").GetProperty("counts").GetProperty("postable").GetInt32());
+        Assert.False(body.GetProperty("duplicate").GetProperty("flagged").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Should_SaveWithNeedsAttention_When_KindUnknown()
+    {
+        var (response, body) = await _host.SaveAsync(SavedRequestTestHost.Fixture("n8n-unknown-kind.json"));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.True(body.GetProperty("needsAttention").GetBoolean());
+        Assert.Equal("unreadable", body.GetProperty("validation").GetProperty("state").GetString());
+        var error = Assert.Single(body.GetProperty("validation").GetProperty("errors").EnumerateArray()).GetString();
+        Assert.StartsWith("$.transactions[3].kind", error);
+    }
+
+    [Fact]
+    public async Task Should_SaveWithNeedsAttention_When_ControlTotalWrong()
+    {
+        var (response, body) = await _host.SaveAsync(SavedRequestTestHost.Fixture("n8n-control-total-wrong.json"));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.True(body.GetProperty("needsAttention").GetBoolean());
+        Assert.Equal("refused", body.GetProperty("validation").GetProperty("state").GetString());
+        Assert.Contains(
+            body.GetProperty("validation").GetProperty("errors").EnumerateArray(),
+            e => e.GetString()!.StartsWith("control-total-mismatch", StringComparison.Ordinal));
+        // Rule 3: the stored control total is the caller's number, never one the code worked out.
+        Assert.Equal(999.99m, (await StoredAsync(body.GetProperty("id").GetInt64())).ControlTotal);
+    }
+
+    [Fact]
+    public async Task Should_SaveWithNeedsAttention_When_DryRunPresent()
+    {
+        var (response, body) = await _host.SaveAsync(SavedRequestTestHost.Fixture("n8n-dry-run.json"));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.True(body.GetProperty("needsAttention").GetBoolean());
+        Assert.Equal("refused", body.GetProperty("validation").GetProperty("state").GetString());
+        Assert.Contains(
+            body.GetProperty("validation").GetProperty("errors").EnumerateArray(),
+            e => e.GetString()!.StartsWith("dry-run-not-supported", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Should_SaveWithUnavailableSnapshot_When_RulesFileMissing()
+    {
+        using var host = _host.Factory.WithSetting("Company:RulesFile", _host.Factory.Dir.Combine("no-such-rules.json"));
+        using var client = host.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", _host.N8nKey);
+
+        var (response, body) = await _host.SaveAsync(SavedRequestTestHost.Fixture("n8n-good.json"), client: client);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal("unavailable", body.GetProperty("validation").GetProperty("state").GetString());
+        Assert.False(body.GetProperty("needsAttention").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("[1, 2, 3]")]
+    [InlineData("just some text")]
+    [InlineData("\"a string\"")]
+    [InlineData("")]
+    public async Task Should_Return400NotAJsonObject_When_BodyIsArrayOrText(string body)
+    {
+        var (response, problem) = await _host.SaveAsync(body);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("not-a-json-object", problem.GetProperty("type").GetString());
+        Assert.Equal(0, (await Store.StatsAsync(CancellationToken.None)).Total);
+    }
+
+    [Fact]
+    public async Task Should_Return413_When_BodyOverLimit()
+    {
+        using var host = _host.Factory.WithSetting("Api:MaxRequestBodyBytes", "256");
+        using var client = host.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", _host.N8nKey);
+
+        var (response, _) = await _host.SaveAsync(SavedRequestTestHost.Fixture("n8n-good.json"), client: client);
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+        Assert.Equal(0, (await Store.StatsAsync(CancellationToken.None)).Total);
+    }
+
+    [Fact]
+    public async Task Should_Return200Existing_When_SameIdempotencyKeyAndBody()
+    {
+        var body = SavedRequestTestHost.Fixture("n8n-good.json");
+        var (first, created) = await _host.SaveAsync(body, "message-id-1");
+
+        var (second, replayed) = await _host.SaveAsync(body, "message-id-1");
+
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        Assert.Equal(created.GetProperty("id").GetInt64(), replayed.GetProperty("id").GetInt64());
+        Assert.Equal(1, (await Store.StatsAsync(CancellationToken.None)).Total);
+    }
+
+    [Fact]
+    public async Task Should_Return409_When_SameKeyDifferentBody()
+    {
+        await _host.SaveAsync(SavedRequestTestHost.Fixture("n8n-good.json"), "message-id-1");
+
+        var (response, problem) = await _host.SaveAsync(SavedRequestTestHost.Fixture("n8n-dry-run.json"), "message-id-1");
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("idempotency-key-reused", problem.GetProperty("type").GetString());
+        Assert.Equal(1, (await Store.StatsAsync(CancellationToken.None)).Total);
+    }
+
+    [Fact]
+    public async Task Should_FlagSamePayload_When_SavedTwiceWithoutKey()
+    {
+        var body = SavedRequestTestHost.Fixture("n8n-good.json");
+        var (_, first) = await _host.SaveAsync(body);
+
+        var (response, second) = await _host.SaveAsync(body);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var duplicate = second.GetProperty("duplicate");
+        Assert.True(duplicate.GetProperty("flagged").GetBoolean());
+        Assert.Equal(first.GetProperty("id").GetInt64(), duplicate.GetProperty("of").GetInt64());
+        Assert.Contains(duplicate.GetProperty("reasons").EnumerateArray(), r => r.GetString() == DuplicateReasons.SamePayload);
+    }
+
+    [Fact]
+    public async Task Should_SetCreatedByFromKey_When_BodyCarriesCreatedBy()
+    {
+        var body = SavedRequestTestHost.Fixture("n8n-good.json")
+            .Replace("\"reference\":", "\"createdBy\": \"mallory\", \"updatedBy\": \"mallory\", \"reference\":", StringComparison.Ordinal);
+
+        var (_, saved) = await _host.SaveAsync(body);
+
+        var stored = await StoredAsync(saved.GetProperty("id").GetInt64());
+        Assert.Equal("api-client:" + SavedRequestTestHost.N8nClientId, stored.CreatedBy);
+        Assert.Equal("api-client:" + SavedRequestTestHost.N8nClientId, stored.UpdatedBy);
+        Assert.Equal("api-client:" + SavedRequestTestHost.N8nClientId, stored.Source);
+    }
+
+    /// <summary>Spec 10.1: the store honours the key per source; the file-backed middleware must not answer first.</summary>
+    [Fact]
+    public void Should_LeaveIdempotencyToTheStore_When_Saving() =>
+        Assert.False(ApiRoutes.IsIdempotent("POST", "/api/v1/saved-requests"));
+
+    [Fact]
+    public async Task Should_Return503_When_DatabaseGateNotReady()
+    {
+        using var client = _host.N8n();
+        await client.GetAsync("/health"); // starts the host; its start-up check makes the gate Ready
+        _host.Factory.Gate.Set(DatabaseState.Unreachable);
+
+        var (response, problem) = await _host.SaveAsync(SavedRequestTestHost.Fixture("n8n-good.json"), client: client);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("database-unavailable", problem.GetProperty("type").GetString());
+        Assert.Equal("30", Assert.Single(response.Headers.GetValues("Retry-After")));
+        Assert.Equal(0, (await Store.StatsAsync(CancellationToken.None)).Total);
+    }
+}

@@ -12,6 +12,7 @@ using QbAutopost.Api.Auth;
 using QbAutopost.Api.Database;
 using QbAutopost.Api.Endpoints;
 using QbAutopost.Api.QuickBooks;
+using QbAutopost.Api.SavedRequests;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.SavedRequests;
@@ -175,6 +176,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             services.AddSingleton(_fakeGate);
             services.RemoveAll<IUserGate>();
             services.AddSingleton<IUserGate>(Users);
+            services.RemoveAll<IUserDirectory>();
+            services.AddSingleton<IUserDirectory>(Users);
         });
     }
 

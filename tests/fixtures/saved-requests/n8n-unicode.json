@@ -1,0 +1,3 @@
+{"transactions":[ {"memo":"東京 コーヒー ☕ café \u00e9","payee":"🍣 寿司 Bar","externalId":"row-1","kind":"Check","date":"2026-08-05","amount":12.50,"account":"Chase Checking 4521","last4":"4521"}],
+	"controlTotal" : 12.5 ,  "reference":"n8n-unicode-✓",
+"reference":"duplicate key kept in the original"}
