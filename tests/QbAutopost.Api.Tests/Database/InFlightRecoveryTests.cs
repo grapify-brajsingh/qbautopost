@@ -1,4 +1,12 @@
+using System.Net;
 using System.Text.Json;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using QbAutopost.Api.Database;
 using QbAutopost.Api.Tests.TestSupport;
@@ -7,10 +15,15 @@ using QbAutopost.Data;
 
 namespace QbAutopost.Api.Tests.Database;
 
-/// <summary>Saved-requests spec 10.6: a request left <c>posting</c> by a crash becomes <c>unknown</c>, once.</summary>
+/// <summary>
+/// Saved-requests spec 10.6: a request left <c>posting</c> by a crash becomes <c>unknown</c> before the gate is ever
+/// Ready, once per process; a recovery that fails keeps the gate not ready and is retried by the next refresh.
+/// </summary>
 public sealed class InFlightRecoveryTests
 {
     private static readonly DateTime Now = new(2026, 10, 28, 9, 0, 0, DateTimeKind.Utc);
+    private static readonly SchemaStatus Current = new(true, true, [], null);
+    private static readonly SchemaStatus Down = new(false, false, [], SchemaState.Unreachable);
 
     /// <summary>A saved request claimed for posting and never finished, as a crash would leave it.</summary>
     internal static async Task<SavedRequest> SeedPostingAsync(FakeSavedRequestStore store)
@@ -30,42 +43,33 @@ public sealed class InFlightRecoveryTests
         return claim.Record!;
     }
 
-    private static DatabaseGate GateFor(SchemaStatus status) =>
-        new(_ => Task.FromResult(status), true, NullLogger<DatabaseGate>.Instance);
+    private static async Task<SavedRequestStatus> StatusAsync(FakeSavedRequestStore store, long id) =>
+        (await store.GetAsync(id, default))!.Status;
 
-    private static InFlightRecovery Recovery(DatabaseGate gate, FakeSavedRequestStore store) =>
-        new(gate, store, new FixedClock { UtcNow = Now }, NullLogger<InFlightRecovery>.Instance);
-
-    [Fact]
-    public async Task Should_MarkPostingRequestsUnknown_When_GateIsReadyAtStart()
-    {
-        var store = new FakeSavedRequestStore();
-        var seeded = await SeedPostingAsync(store);
-        var gate = GateFor(new SchemaStatus(true, true, [], null));
-
-        await Recovery(gate, store).StartAsync(default);
-
-        Assert.Equal(SavedRequestStatus.Unknown, (await store.GetAsync(seeded.Id, default))!.Status);
-    }
-
-    [Fact]
-    public async Task Should_WaitForTheGate_When_DatabaseIsDownAtStart()
-    {
-        var store = new FakeSavedRequestStore();
-        var seeded = await SeedPostingAsync(store);
-        var up = false;
-        var gate = new DatabaseGate(
-            _ => Task.FromResult(up ? new SchemaStatus(true, true, [], null) : new SchemaStatus(false, false, [], "unreachable")),
+    private static DatabaseGate GateFor(
+        FakeSavedRequestStore store, Func<SchemaStatus>? schema = null, Action? onRecover = null, Func<DateTime>? now = null) =>
+        new(
+            _ => Task.FromResult((schema ?? (() => Current))()),
             true,
-            NullLogger<DatabaseGate>.Instance);
+            NullLogger<DatabaseGate>.Instance,
+            ct =>
+            {
+                onRecover?.Invoke();
+                return store.RecoverInFlightAsync(Now, ct);
+            },
+            now);
 
-        await Recovery(gate, store).StartAsync(default);
-        Assert.Equal(SavedRequestStatus.Posting, (await store.GetAsync(seeded.Id, default))!.Status);
+    [Fact]
+    public async Task Should_MarkPostingRequestsUnknown_When_GateIsCheckedAtStart()
+    {
+        var store = new FakeSavedRequestStore();
+        var seeded = await SeedPostingAsync(store);
+        var gate = GateFor(store);
 
-        up = true;
-        await gate.RefreshAsync(default);
+        await new InFlightRecovery(gate).StartAsync(default);
 
-        await Eventually(async () => (await store.GetAsync(seeded.Id, default))!.Status == SavedRequestStatus.Unknown);
+        Assert.True(gate.IsReady);
+        Assert.Equal(SavedRequestStatus.Unknown, await StatusAsync(store, seeded.Id));
     }
 
     [Fact]
@@ -73,34 +77,133 @@ public sealed class InFlightRecoveryTests
     {
         var store = new FakeSavedRequestStore();
         var seeded = await SeedPostingAsync(store);
-        var gate = new DatabaseGate(null, true, NullLogger<DatabaseGate>.Instance);
+        var gate = new DatabaseGate(null, true, NullLogger<DatabaseGate>.Instance, ct => store.RecoverInFlightAsync(Now, ct));
 
-        await Recovery(gate, store).StartAsync(default);
+        await new InFlightRecovery(gate).StartAsync(default);
 
-        Assert.Equal(SavedRequestStatus.Posting, (await store.GetAsync(seeded.Id, default))!.Status);
+        Assert.Equal(SavedRequestStatus.Posting, await StatusAsync(store, seeded.Id));
     }
 
     [Fact]
-    public async Task Should_RunOnlyOnce_When_GateBecomesReadyAgainLater()
+    public async Task Should_NotBeReady_When_TheDatabaseIsDownAtStartAndRecoverOnlyWhenItComesUp()
     {
         var store = new FakeSavedRequestStore();
-        var gate = GateFor(new SchemaStatus(true, true, [], null));
-        await Recovery(gate, store).StartAsync(default);
         var seeded = await SeedPostingAsync(store);
+        var up = false;
+        var gate = GateFor(store, () => up ? Current : Down);
 
-        gate.Set(DatabaseState.Unreachable);
+        await new InFlightRecovery(gate).StartAsync(default);
+        Assert.False(gate.IsReady);
+        Assert.Equal(SavedRequestStatus.Posting, await StatusAsync(store, seeded.Id));
+
+        up = true;
         await gate.RefreshAsync(default);
 
-        Assert.Equal(SavedRequestStatus.Posting, (await store.GetAsync(seeded.Id, default))!.Status);
+        Assert.True(gate.IsReady);
+        Assert.Equal(SavedRequestStatus.Unknown, await StatusAsync(store, seeded.Id));
     }
 
-    private static async Task Eventually(Func<Task<bool>> condition)
+    [Fact]
+    public async Task Should_StayNotReadyAndRetry_When_RecoveryThrows()
     {
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (!await condition())
+        var store = new FakeSavedRequestStore();
+        var seeded = await SeedPostingAsync(store);
+        var failing = true;
+        var gate = new DatabaseGate(
+            _ => Task.FromResult(Current),
+            true,
+            NullLogger<DatabaseGate>.Instance,
+            ct => failing ? throw new TimeoutException("Host=db.internal;Password=hunter2") : store.RecoverInFlightAsync(Now, ct));
+
+        await gate.RefreshAsync(default);
+
+        Assert.False(gate.IsReady);
+        Assert.Equal("unreachable", gate.Reason);
+        Assert.Equal(SavedRequestStatus.Posting, await StatusAsync(store, seeded.Id));
+
+        failing = false;
+        await gate.RefreshAsync(default);
+
+        Assert.True(gate.IsReady);
+        Assert.Equal(SavedRequestStatus.Unknown, await StatusAsync(store, seeded.Id));
+    }
+
+    [Fact]
+    public async Task Should_LogOnlyTheExceptionType_When_RecoveryFails()
+    {
+        var log = new ListLogger<DatabaseGate>();
+        var gate = new DatabaseGate(
+            _ => Task.FromResult(Current),
+            true,
+            log,
+            _ => throw new TimeoutException("Host=db.internal;Password=hunter2"));
+
+        await gate.RefreshAsync(default);
+
+        Assert.Contains("TimeoutException", log.Text);
+        Assert.DoesNotContain("db.internal", log.Text);
+        Assert.DoesNotContain("hunter2", log.Text);
+        Assert.All(log.Entries, e => Assert.Null(e.Exception));
+    }
+
+    [Fact]
+    public async Task Should_RecoverExactlyOnce_When_TheGateFlapsBetweenNotReadyAndReady()
+    {
+        var store = new FakeSavedRequestStore();
+        var recoveries = 0;
+        var up = true;
+        var gate = GateFor(store, () => up ? Current : Down, () => recoveries++);
+
+        for (var i = 0; i < 3; i++)
         {
-            Assert.True(DateTime.UtcNow < deadline, "condition was not met within 5 seconds");
-            await Task.Delay(10);
+            up = true;
+            await gate.RefreshAsync(default);
+            Assert.True(gate.IsReady);
+            up = false;
+            await gate.RefreshAsync(default);
+            Assert.False(gate.IsReady);
         }
+
+        up = true;
+        await gate.RefreshAsync(default);
+
+        Assert.True(gate.IsReady);
+        Assert.Equal(1, recoveries);
+    }
+
+    [Fact]
+    public async Task Should_Answer503_When_ARequestArrivesBeforeRecoveryHasSucceeded()
+    {
+        var store = new FakeSavedRequestStore();
+        var seeded = await SeedPostingAsync(store);
+        var gate = new DatabaseGate(
+            _ => Task.FromResult(Current),
+            true,
+            NullLogger<DatabaseGate>.Instance,
+            _ => throw new TimeoutException());
+        var hits = 0;
+        using var host = await new HostBuilder().ConfigureWebHost(web => web
+            .UseTestServer()
+            .ConfigureServices(s =>
+            {
+                s.AddRouting();
+                s.AddProblemDetails();
+                s.AddSingleton(gate);
+            })
+            .Configure(app =>
+            {
+                app.UseRouting();
+                app.UseEndpoints(e => e.MapGroup("/probe").RequireDatabase().MapGet("/", () =>
+                {
+                    hits++;
+                    return Results.Ok();
+                }));
+            })).StartAsync();
+
+        using var response = await host.GetTestClient().GetAsync("/probe");
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal(0, hits);
+        Assert.Equal(SavedRequestStatus.Posting, await StatusAsync(store, seeded.Id));
     }
 }

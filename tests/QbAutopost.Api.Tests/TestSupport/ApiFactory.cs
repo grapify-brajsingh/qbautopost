@@ -54,8 +54,12 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
     public ApiFactory()
     {
-        Gate = new DatabaseGate(_ => Task.FromResult(Schema), true, NullLogger<DatabaseGate>.Instance);
-        Gate.Set(DatabaseState.Ready);
+        // Not forced: the host's first start-up check makes it Ready, and runs recovery on Store first, as production does.
+        Gate = new DatabaseGate(
+            _ => Task.FromResult(Schema),
+            true,
+            NullLogger<DatabaseGate>.Instance,
+            ct => Store.RecoverInFlightAsync(DateTime.UtcNow, ct));
     }
 
     public string LedgerFile => Dir.Combine("data", "ledger.json");

@@ -87,17 +87,82 @@ public sealed class DatabaseGateTests
         Assert.Equal(DatabaseState.Unreachable, gate.State);
     }
 
-    [Fact]
-    public async Task Should_RaiseBecameReadyOnce_When_StateMovesToReady()
+    // ---- request-driven, throttled refresh (R13) ----------------------------------------------------------------
+
+    private sealed class Clock
     {
-        var gate = GateFor(Current);
-        var raised = 0;
-        gate.BecameReady += () => raised++;
+        public DateTime Now { get; set; } = new(2026, 10, 28, 9, 0, 0, DateTimeKind.Utc);
+    }
 
+    [Fact]
+    public async Task Should_SucceedWithoutAnyoneCallingHealth_When_OutageEndedAndLastCheckIsOlderThan10Seconds()
+    {
+        var clock = new Clock();
+        var up = false;
+        var gate = new DatabaseGate(
+            _ => Task.FromResult(up ? Current : Down), true, NullLogger<DatabaseGate>.Instance, null, () => clock.Now);
         await gate.RefreshAsync(default);
-        await gate.RefreshAsync(default);
+        Assert.False(gate.IsReady);
+        var (client, host, hits) = await ProbeAsync(gate);
+        using var hostLifetime = host;
 
-        Assert.Equal(1, raised);
+        up = true;
+        clock.Now = clock.Now.AddSeconds(11);
+        using var response = await client.GetAsync("/probe");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(1, hits[0]);
+    }
+
+    [Fact]
+    public async Task Should_NotCheckAgain_When_ASecondRequestComesWithin10Seconds()
+    {
+        var clock = new Clock();
+        var checks = 0;
+        var gate = new DatabaseGate(
+            _ =>
+            {
+                checks++;
+                return Task.FromResult(Down);
+            },
+            true,
+            NullLogger<DatabaseGate>.Instance,
+            null,
+            () => clock.Now);
+        await gate.RefreshAsync(default);
+        var (client, host, _) = await ProbeAsync(gate);
+        using var hostLifetime = host;
+
+        clock.Now = clock.Now.AddSeconds(11);
+        using var first = await client.GetAsync("/probe");
+        clock.Now = clock.Now.AddSeconds(5);
+        using var second = await client.GetAsync("/probe");
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, first.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, second.StatusCode);
+        Assert.Equal(2, checks); // the explicit one, plus one for the first request only
+    }
+
+    [Fact]
+    public async Task Should_ShareOneCheck_When_ManyRequestsArriveDuringAnOutage()
+    {
+        var release = new TaskCompletionSource();
+        var checks = 0;
+        var gate = new DatabaseGate(
+            async _ =>
+            {
+                Interlocked.Increment(ref checks);
+                await release.Task;
+                return Down;
+            },
+            true,
+            NullLogger<DatabaseGate>.Instance);
+
+        var callers = Enumerable.Range(0, 8).Select(_ => gate.RefreshSharedAsync(default)).ToList();
+        release.SetResult();
+        await Task.WhenAll(callers);
+
+        Assert.Equal(1, checks);
     }
 
     private static async Task<(HttpClient Client, IHost Host, int[] Hits)> ProbeAsync(DatabaseGate gate, Func<Task>? inside = null)

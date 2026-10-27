@@ -267,7 +267,15 @@ builder.Services.AddSingleton(sp =>
                 return await SchemaState.CheckAsync(db, ct);
             },
         sp.GetRequiredService<IOptions<AppSettings>>().Value.Database.RequireCurrentSchema,
-        sp.GetRequiredService<ILogger<DatabaseGate>>());
+        sp.GetRequiredService<ILogger<DatabaseGate>>(),
+        // Spec 10.6: the gate is not Ready until this has succeeded once, so no route can claim a request first.
+        async ct =>
+        {
+            var moved = await sp.GetRequiredService<ISavedRequestStore>()
+                .RecoverInFlightAsync(sp.GetRequiredService<IClock>().UtcNow, ct);
+            sp.GetRequiredService<ILogger<DatabaseGate>>()
+                .LogInformation("Saved-request recovery: {Count} interrupted post(s) marked unknown", moved);
+        });
 });
 builder.Services.AddHostedService<InFlightRecovery>();
 

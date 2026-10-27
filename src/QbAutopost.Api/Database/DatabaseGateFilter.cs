@@ -17,6 +17,13 @@ public static class DatabaseGateFilter
         group.AddEndpointFilter(async (context, next) =>
         {
             var gate = context.HttpContext.RequestServices.GetRequiredService<DatabaseGate>();
+            // Request-driven and throttled, no timer: a gate that is not ready is looked at again by the next request
+            // once its last check is older than DatabaseGate.StaleAfter. Concurrent requests share one refresh.
+            if (gate.NeedsLookAgain)
+            {
+                await gate.RefreshSharedAsync(context.HttpContext.RequestAborted);
+            }
+
             if (!gate.IsReady)
             {
                 return Unavailable(context.HttpContext, gate);
