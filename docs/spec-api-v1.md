@@ -49,7 +49,7 @@ In scope: the HTTP surface, authentication and authorization, the direct-post pa
 OpenAPI, hosting, and the logging/audit that D-4 forces.
 
 Out of scope (unchanged from `docs/spec.md` §2): multi-company in one installation (Q-44), QuickBooks Online, a
-database, a UI, background schedulers beyond the single `JobWorker`.
+database (except the PostgreSQL store for saved requests and dashboard users: ADR-0009), a UI (the dashboard is a separate repository), background schedulers beyond the single `JobWorker`.
 
 Unchanged invariants (`CLAUDE.md`): COM only in `QbAutopost.QuickBooks`; the model never computes money; hold rather
 than guess; qbXML element order is golden-file tested; every state transition persisted before the next step;
