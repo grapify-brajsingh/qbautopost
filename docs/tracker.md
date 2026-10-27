@@ -338,6 +338,7 @@ Every row starts `todo`; "Files" lists the planned paths, "Verified by" is fille
 | Q-82 | T-1001 | Will the dashboard be served from the same site as the API? | Assume yes (same-site refresh cookie). If not, cross-site cookies plus credentialed CORS | |
 | Q-83 | T-1001 | Should `/health/ready` fail as a whole when the database is down? | No. The database is reported per feature (spec §10.7) | |
 | Q-84 | T-1001 | Retention: are saved requests and versions kept forever? | Kept forever. No deletion route, no job | |
+| Q-85 | T-1002 | A `Completed` engine ending with a null or non-terminal `JobStatus`. What should the attempt record? | Unknown / request locked as `unknown` / 200, so an admin resolves it (posts less). Marked `SPEC-GAP T-1002` in `AttemptOutcomes.FromCompleted` | |
 
 ## Decisions
 
