@@ -10,7 +10,7 @@ namespace QbAutopost.Core.SavedRequests;
 public interface ISavedRequestStore
 {
     /// <summary>
-    /// Saves version 1 and the <c>created</c> event (plus <c>flagged-duplicate</c> when the duplicate is flagged).
+    /// Saves version 1 (and its row fingerprints, kept per version for duplicate detection) and the <c>created</c> event (plus <c>flagged-duplicate</c> when the duplicate is flagged).
     /// The same source and idempotency key with the same original body replays the existing record; with a different
     /// body it reports <see cref="CreateKind.KeyReused"/>.
     /// </summary>
@@ -22,7 +22,7 @@ public interface ISavedRequestStore
 
     Task<SavedRequestStats> StatsAsync(CancellationToken ct);
 
-    /// <summary>Digests of requests created at or after <paramref name="sinceUtc"/>, never discarded ones, never <paramref name="excludeId"/>.</summary>
+    /// <summary>Digests (with the latest version's stored row fingerprints) of requests created at or after <paramref name="sinceUtc"/>, never discarded ones, never <paramref name="excludeId"/>.</summary>
     Task<IReadOnlyList<DuplicateDigest>> DuplicateCandidatesAsync(DateTime sinceUtc, long? excludeId, CancellationToken ct);
 
     Task<IReadOnlyList<SavedRequestVersion>> VersionsAsync(long id, CancellationToken ct);
@@ -44,7 +44,8 @@ public interface ISavedRequestStore
 
     /// <summary>
     /// Stores the validation snapshot and duplicate flag of the current version; writes one <c>validated</c> event.
-    /// Does not bump the row version. <see cref="MutationKind.WrongStatus"/> unless pending;
+    /// Bumps the row version (it is an update, so an ETag held by the dashboard goes stale).
+    /// <see cref="MutationKind.WrongStatus"/> unless pending;
     /// <see cref="MutationKind.Stale"/> when the snapshot is for another version than the current one.
     /// </summary>
     Task<MutationResult> SetValidationAsync(

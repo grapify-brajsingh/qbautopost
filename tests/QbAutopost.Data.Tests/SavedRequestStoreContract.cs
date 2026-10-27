@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using QbAutopost.Core.Api;
 using QbAutopost.Core.SavedRequests;
 
 namespace QbAutopost.Data.Tests;
@@ -27,6 +28,11 @@ public abstract class SavedRequestStoreContract
     private static ValidationSnapshot Snapshot(ValidationState state = ValidationState.Ok, int version = 1, DateTime? at = null) =>
         new(state, at ?? T0, version, null, [], [], null);
 
+    private static IReadOnlySet<string> FingerprintsOf(PayloadRead read) =>
+        read.Request is null
+            ? new HashSet<string>()
+            : DuplicateDetector.RowFingerprints(read.Request, new DirectLimits(), DateOnly.FromDateTime(T0));
+
     private static DuplicateMatch NoDuplicate => new(null, []);
 
     protected static NewSavedRequest NewRequest(
@@ -37,15 +43,16 @@ public abstract class SavedRequestStoreContract
         var read = SavedPayloadReader.Read(payload);
         var state = read.Readable ? ValidationState.Ok : ValidationState.Unreadable;
         return new NewSavedRequest(
-            source, source, body, payload, read, PayloadCanonicalizer.Sha256(payload), key,
+            source, source, body, payload, read, PayloadCanonicalizer.Sha256(payload), FingerprintsOf(read), key,
             Snapshot(state, 1, now ?? T0), duplicate ?? NoDuplicate, now ?? T0);
     }
 
     protected static NewVersion NewVersionOf(string body, string? note = null, DateTime? now = null, int version = 2)
     {
         var payload = JsonDocument.Parse(body).RootElement.Clone();
+        var read = SavedPayloadReader.Read(payload);
         return new NewVersion(
-            payload, SavedPayloadReader.Read(payload), PayloadCanonicalizer.Sha256(payload), [], note,
+            payload, read, PayloadCanonicalizer.Sha256(payload), FingerprintsOf(read), [], note,
             Snapshot(ValidationState.Ok, version, now ?? T0), NoDuplicate, Actor, now ?? T0);
     }
 
@@ -531,7 +538,7 @@ public abstract class SavedRequestStoreContract
         Assert.Equal(T0.AddMinutes(4), after.ValidatedUtc);
         Assert.Equal(42, after.DuplicateOfId);
         Assert.Equal(new[] { DuplicateReasons.SamePayload }, after.DuplicateReasons);
-        Assert.Equal(r.RowVersion, after.RowVersion);
+        Assert.Equal(r.RowVersion + 1, after.RowVersion);
 
         var stale = await store.SetValidationAsync(r.Id, Snapshot(ValidationState.Ok, 9), NoDuplicate, Actor, T0, default);
         Assert.Equal(MutationKind.Stale, stale.Kind);
@@ -639,6 +646,21 @@ public abstract class SavedRequestStoreContract
         Assert.NotEmpty(digest.RowFingerprints);
         Assert.Empty(excluding);
         Assert.DoesNotContain(candidates, c => c.Id == old.Id || c.Id == discarded.Id);
+    }
+
+    [Fact]
+    public async Task Should_ReturnLatestVersionFingerprints_When_ListingCandidatesAfterAppend()
+    {
+        var store = CreateStore();
+        var r = await SaveAsync(store);
+        var v1 = (await store.DuplicateCandidatesAsync(T0.AddDays(-1), null, default)).Single().RowFingerprints.ToHashSet();
+        await store.AppendVersionAsync(r.Id, r.RowVersion, NewVersionOf(BodyOf(reference: "R2", amount: 25m, externalId: "e2")), default);
+
+        var v2 = (await store.DuplicateCandidatesAsync(T0.AddDays(-1), null, default)).Single().RowFingerprints.ToHashSet();
+
+        Assert.NotEmpty(v1);
+        Assert.NotEmpty(v2);
+        Assert.False(v1.Overlaps(v2));
     }
 
     // ---- events ------------------------------------------------------------------------------------------------

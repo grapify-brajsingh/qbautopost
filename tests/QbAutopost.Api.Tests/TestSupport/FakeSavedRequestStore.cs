@@ -21,6 +21,7 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
     private readonly Dictionary<long, List<SavedRequestVersion>> _versions = new();
     private readonly Dictionary<long, List<PostAttempt>> _attempts = new();
     private readonly Dictionary<long, List<SavedRequestEvent>> _events = new();
+    private readonly Dictionary<long, IReadOnlySet<string>> _fingerprints = new();
     private long _nextRequestId = 1;
     private long _nextVersionId = 1;
     private long _nextAttemptId = 1;
@@ -60,6 +61,7 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
                     _nextVersionId++, id, 1, payload, request.Read.Readable, request.Read.Errors.ToList(), [], null,
                     request.NowUtc, request.CreatedBy),
             ];
+            _fingerprints[id] = request.RowFingerprints.ToHashSet(StringComparer.Ordinal);
             _attempts[id] = [];
             _events[id] = [];
             AddEvent(id, SavedRequestEvents.Created, null, request.NowUtc, request.CreatedBy);
@@ -123,7 +125,7 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
             var digests = _requests.Values
                 .Where(r => r.CreatedUtc >= sinceUtc && r.Status != SavedRequestStatus.Discarded && r.Id != excludeId)
                 .OrderBy(r => r.CreatedUtc).ThenBy(r => r.Id)
-                .Select(r => new DuplicateDigest(r.Id, r.CanonicalSha256, r.Reference, Fingerprints(r), r.CreatedUtc))
+                .Select(r => new DuplicateDigest(r.Id, r.CanonicalSha256, r.Reference, new HashSet<string>(_fingerprints[r.Id], StringComparer.Ordinal), r.CreatedUtc))
                 .ToList();
             return Task.FromResult<IReadOnlyList<DuplicateDigest>>(digests);
         }
@@ -191,6 +193,7 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
 
             var number = r.CurrentVersion + 1;
             var payload = version.Payload.Clone();
+            _fingerprints[id] = version.RowFingerprints.ToHashSet(StringComparer.Ordinal);
             _versions[id].Add(new SavedRequestVersion(
                 _nextVersionId++, id, number, payload, version.Read.Readable, version.Read.Errors.ToList(),
                 version.Changes.Select(Copy).ToList(), version.Note, version.NowUtc, version.Actor));
@@ -240,6 +243,7 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
             var readable = _versions[id].Single(v => v.Number == r.CurrentVersion).Readable;
             var updated = r with
             {
+                RowVersion = r.RowVersion + 1,
                 Validation = snapshot,
                 ValidatedUtc = snapshot.ValidatedUtc,
                 NeedsAttention = !readable || snapshot.NeedsAttention,
@@ -530,16 +534,6 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
                     foreach (var t in PayloadText(item)) yield return t;
                 break;
         }
-    }
-
-    // SPEC-GAP T-1005: §5.2 has no fingerprint column, so a digest recomputes the fingerprints from the stored
-    // payload with default limits, dated at the request's creation. The EF store must do the same.
-    private IReadOnlySet<string> Fingerprints(SavedRequest r)
-    {
-        var read = SavedPayloadReader.Read(r.CurrentPayload);
-        return read.Request is null
-            ? new HashSet<string>()
-            : DuplicateDetector.RowFingerprints(read.Request, new DirectLimits(), DateOnly.FromDateTime(r.CreatedUtc));
     }
 
     private static SavedRequestVersion Copy(SavedRequestVersion v) =>
