@@ -313,6 +313,11 @@ builder.Services.AddSingleton(sp =>
         });
 });
 builder.Services.AddHostedService<InFlightRecovery>();
+if (database.Configured)
+{
+    // T-1011 (spec 11.4): after InFlightRecovery, so the gate has been looked at; creates the first admin once.
+    builder.Services.AddHostedService<BootstrapAdmin>();
+}
 
 var app = builder.Build();
 
@@ -410,6 +415,8 @@ try
     MapAll(v1);
     // T-1010 (spec 11.2): sign-in exists on the versioned surface only; the refresh cookie's path names it.
     v1.MapAuthEndpoints();
+    // T-1011 (spec 11.4): user management, admins only (users:manage); versioned surface only.
+    v1.MapUserEndpoints();
     // T-913 (FR-A-18): the document and the Scalar page, on the versioned surface only and only when somebody asked
     // for them. Disabled means not mapped, so a route that could describe every way to move money simply is not there.
     if (settings.Api.Reference.Enabled)

@@ -18,7 +18,8 @@
     { "name": "Batches", "description": "The result of one direct post, and undoing it." },
     { "name": "Rules", "description": "Teaching the mapper an alias or a vendor account." },
     { "name": "Reference", "description": "This document and the page that renders it." },
-    { "name": "Auth", "description": "Dashboard sign-in: a short-lived Bearer access token and a rotating refresh cookie (saved-requests §11.2)." }
+    { "name": "Auth", "description": "Dashboard sign-in: a short-lived Bearer access token and a rotating refresh cookie (saved-requests §11.2)." },
+    { "name": "Users", "description": "User management for admins (saved-requests §11.4): temporary passwords, roles, disabling, unlocking, audit." }
   ],
   "paths": {
     "/api/v1/health": {
@@ -715,6 +716,530 @@
           "503": { "$ref": "#/components/responses/Unavailable" }
         }
       }
+    },
+    "/api/v1/users": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "operationId": "listUsers",
+        "summary": "List users.",
+        "description": "Ordered by email. A bad `role`, `disabled`, `page` or `pageSize` answers `400`.",
+        "x-required-scope": "users:manage",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Case-insensitive text found in the email or the display name. `%` and `_` are literal.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "required": false,
+            "description": "Only users holding this role.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "admin",
+                "editor",
+                "viewer"
+              ]
+            }
+          },
+          {
+            "name": "disabled",
+            "in": "query",
+            "required": false,
+            "description": "Only disabled (`true`) or only enabled (`false`) users.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "1 or more. Default 1.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "description": "1 to `SavedRequests:MaxListPageSize`. Default 25.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of users.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Users"
+        ],
+        "operationId": "createUser",
+        "summary": "Create a user with a one-time temporary password.",
+        "description": "The answer is `201` with the user and `temporaryPassword` (16 characters, shown once, never stored in plain text, `Cache-Control: no-store`). The user has `mustChangePassword: true` and exactly the role given. Email is case-insensitive and unique (`409 email-exists`). Recorded in `user_audit` as `created`.",
+        "x-required-scope": "users:manage",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUserRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created. `Location` and `ETag` are set.",
+            "headers": {
+              "ETag": {
+                "description": "The user's ETag, to send back in `If-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "`no-store`: the body holds a temporary password.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserWithTemporaryPassword"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "operationId": "getUser",
+        "summary": "One user.",
+        "description": "Includes `lastLoginUtc` and `lockedOutUntilUtc`. Never a password or a hash. The `ETag` is the value to send as `If-Match` on a patch.",
+        "x-required-scope": "users:manage",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user's id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user.",
+            "headers": {
+              "ETag": {
+                "description": "The user's ETag, to send back in `If-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserView"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Users"
+        ],
+        "operationId": "updateUser",
+        "summary": "Change a user's display name, role or disabled flag.",
+        "description": "Needs `If-Match`. A role change replaces the old role in one save, so the user never holds zero or two roles. Changing the role or disabling the user rotates their security stamp (so their access tokens stop at once, not after the 30 s gate cache) and revokes all their refresh tokens; both are recorded in `user_audit` (`role-changed`, `disabled`, `enabled`). Demoting or disabling the only enabled admin answers `409 last-admin`, also when two admins do it to each other at the same moment (the admins are row-locked in one transaction). An admin cannot disable themselves (`409 cannot-disable-self`).",
+        "x-required-scope": "users:manage",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user's id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "The user's ETag from `GET /users/{id}` (Identity's concurrency stamp, in quotes). Missing answers `428 precondition-required`, a stale one `412 edited-by-someone-else`. Any failed sign-in of that user also changes it, so a `412` may only mean \"reload\".",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchUserRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Changed. The new `ETag` is set.",
+            "headers": {
+              "ETag": {
+                "description": "The user's ETag, to send back in `If-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: the `If-Match` ETag is stale.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`precondition-required`: no `If-Match` header.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}/reset-password": {
+      "post": {
+        "tags": [
+          "Users"
+        ],
+        "operationId": "resetUserPassword",
+        "summary": "Issue a new one-time temporary password.",
+        "description": "Sets `mustChangePassword`, rotates the security stamp and revokes all the user's refresh tokens, so their sessions end at once. The new password is in the answer once (`Cache-Control: no-store`). Recorded as `password-reset`.",
+        "x-required-scope": "users:manage",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user's id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reset.",
+            "headers": {
+              "ETag": {
+                "description": "The user's ETag, to send back in `If-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "`no-store`: the body holds a temporary password.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserWithTemporaryPassword"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}/unlock": {
+      "post": {
+        "tags": [
+          "Users"
+        ],
+        "operationId": "unlockUser",
+        "summary": "Clear a lockout.",
+        "description": "Clears the lockout and the failed-password count. Recorded as `unlocked` (SPEC-GAP T-1011, Q-89: the spec lists no kind for it).",
+        "x-required-scope": "users:manage",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user's id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unlocked.",
+            "headers": {
+              "ETag": {
+                "description": "The user's ETag, to send back in `If-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserView"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}/audit": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "operationId": "listUserAudit",
+        "summary": "The `user_audit` rows about one user.",
+        "description": "Newest first. `actor` is a user id (with `actorName`), `anonymous` for a failed sign-in, `bootstrap`, or `api-client:<id>`. `detail` holds addresses and reasons, never a password or a token.",
+        "x-required-scope": "users:manage",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user's id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "1 or more. Default 1.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "description": "1 to `SavedRequests:MaxListPageSize`. Default 25.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of audit rows.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserAuditPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -803,6 +1328,214 @@
         "properties": {
           "currentPassword": { "type": "string", "format": "password" },
           "newPassword": { "type": "string", "format": "password", "minLength": 12 }
+        }
+      },
+      "CreateUserRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "displayName",
+          "role"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 254
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "editor",
+              "viewer"
+            ]
+          }
+        }
+      },
+      "PatchUserRequest": {
+        "type": "object",
+        "description": "At least one field.",
+        "properties": {
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "editor",
+              "viewer"
+            ]
+          },
+          "disabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UserView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "description": "`admin`, `editor` or `viewer`; empty when the account holds no role, or more than one (Q-87)."
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "mustChangePassword": {
+            "type": "boolean"
+          },
+          "createdUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastLoginUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lockedOutUntilUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Set only while a lockout is still running."
+          },
+          "rowVersion": {
+            "type": "integer",
+            "description": "Always 0. A user has no integer version; the `ETag` header carries Identity's concurrency stamp."
+          }
+        }
+      },
+      "UserWithTemporaryPassword": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "description": "`admin`, `editor` or `viewer`; empty when the account holds no role, or more than one (Q-87)."
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "mustChangePassword": {
+            "type": "boolean"
+          },
+          "createdUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastLoginUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lockedOutUntilUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Set only while a lockout is still running."
+          },
+          "rowVersion": {
+            "type": "integer",
+            "description": "Always 0. A user has no integer version; the `ETag` header carries Identity's concurrency stamp."
+          },
+          "temporaryPassword": {
+            "type": "string",
+            "description": "16 characters from an unambiguous alphabet. Shown once; hand it over and it is gone."
+          }
+        }
+      },
+      "UserPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserView"
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "pageSize": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
+      },
+      "UserAuditEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`created`, `role-changed`, `disabled`, `enabled`, `password-reset`, `password-changed`, `login-failed`, `locked-out`, `login` or `unlocked`."
+          },
+          "actor": {
+            "type": "string"
+          },
+          "actorName": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          },
+          "atUtc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "UserAuditPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserAuditEntry"
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "pageSize": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
         }
       },
       "AuthUser": {

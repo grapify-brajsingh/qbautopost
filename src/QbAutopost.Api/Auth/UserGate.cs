@@ -89,6 +89,12 @@ public sealed class UserGate(UserManager<AppUser> users, IMemoryCache cache, ICl
             user.MustChangePassword);
     }
 
+    /// <summary>
+    /// Drops the cached lookup of <paramref name="id"/>. Called after an admin changes a user's role, disables them or
+    /// resets their password, so the next request sees the new stamp now and not up to <see cref="CacheFor"/> later.
+    /// </summary>
+    public static void Forget(IMemoryCache cache, string id) => cache.Remove(CacheKey(id));
+
     private static string CacheKey(string id) => "user-gate:" + id;
 
     private static bool SameStamp(string current, string presented) =>

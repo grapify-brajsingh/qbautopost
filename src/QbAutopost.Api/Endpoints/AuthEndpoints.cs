@@ -385,7 +385,7 @@ public static class AuthEndpoints
     /// Applies <paramref name="change"/> and saves; on a failure (a concurrency-stamp conflict, say) reloads the user
     /// from the database, applies it again and saves once more. False when neither save succeeded.
     /// </summary>
-    private static async Task<bool> PersistAsync(HttpContext http, UserManager<AppUser> users, AppUser user, Action<AppUser> change)
+    internal static async Task<bool> PersistAsync(HttpContext http, UserManager<AppUser> users, AppUser user, Action<AppUser> change)
     {
         for (var attempt = 0; attempt < 2; attempt++)
         {
@@ -451,6 +451,6 @@ public static class AuthEndpoints
     private static string TimingHash(UserManager<AppUser> users) =>
         _timingHash ??= users.PasswordHasher.HashPassword(new AppUser(), Guid.NewGuid().ToString("N"));
 
-    private static IResult Problem(int status, string title, string detail, string type) =>
+    internal static IResult Problem(int status, string title, string detail, string type) =>
         Results.Problem(statusCode: status, title: title, detail: detail, type: type);
 }

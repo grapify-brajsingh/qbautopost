@@ -17,6 +17,17 @@ public sealed class UserAuditWriter(IDbContextFactory<QbAutopostDbContext> conte
     public const string LoginFailed = "login-failed";
     public const string LockedOut = "locked-out";
     public const string PasswordChanged = "password-changed";
+    public const string Created = "created";
+    public const string RoleChanged = "role-changed";
+    public const string Disabled = "disabled";
+    public const string Enabled = "enabled";
+    public const string PasswordReset = "password-reset";
+
+    /// <summary>
+    /// SPEC-GAP T-1011 (Q-89): 5.2 lists no kind for an admin clearing a lockout; the column is free text, so it is
+    /// recorded as <c>unlocked</c> rather than left out.
+    /// </summary>
+    public const string Unlocked = "unlocked";
 
     /// <summary>The actor of an event nobody signed in for: a failed or locked-out sign-in.</summary>
     public const string Anonymous = "anonymous";
