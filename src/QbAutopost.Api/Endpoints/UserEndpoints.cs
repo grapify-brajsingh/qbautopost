@@ -20,10 +20,7 @@ public sealed record CreateUserRequest(string? Email, string? DisplayName, strin
 
 public sealed record PatchUserRequest(string? DisplayName, string? Role, bool? Disabled);
 
-/// <summary>
-/// Spec 11.4. <see cref="RowVersion"/> is always 0: a user has no integer version, and the ETag is Identity's
-/// <c>ConcurrencyStamp</c> (R9). The field is kept so the dashboard reads users and saved requests alike.
-/// </summary>
+/// <summary>Spec 11.4. The only concurrency token is the <c>ETag</c> header, Identity's <c>ConcurrencyStamp</c> (R9, R21).</summary>
 public record UserView(
     string Id,
     string Email,
@@ -33,8 +30,7 @@ public record UserView(
     bool MustChangePassword,
     DateTime CreatedUtc,
     DateTime? LastLoginUtc,
-    DateTime? LockedOutUntilUtc,
-    int RowVersion)
+    DateTime? LockedOutUntilUtc)
 {
     public static UserView Of(AppUser user, string role, DateTime nowUtc) =>
         new(
@@ -46,8 +42,7 @@ public record UserView(
             user.MustChangePassword,
             user.CreatedUtc,
             user.LastLoginUtc,
-            user.LockoutEnd is { } end && end.UtcDateTime > nowUtc ? end.UtcDateTime : null,
-            0);
+            user.LockoutEnd is { } end && end.UtcDateTime > nowUtc ? end.UtcDateTime : null);
 }
 
 /// <summary>A <see cref="UserView"/> plus the temporary password, in the answer that creates or resets it and nowhere else.</summary>
@@ -61,13 +56,12 @@ public sealed record UserWithTemporaryPassword(
     DateTime CreatedUtc,
     DateTime? LastLoginUtc,
     DateTime? LockedOutUntilUtc,
-    int RowVersion,
     string TemporaryPassword)
-    : UserView(Id, Email, DisplayName, Role, Disabled, MustChangePassword, CreatedUtc, LastLoginUtc, LockedOutUntilUtc, RowVersion)
+    : UserView(Id, Email, DisplayName, Role, Disabled, MustChangePassword, CreatedUtc, LastLoginUtc, LockedOutUntilUtc)
 {
     public static UserWithTemporaryPassword Of(UserView view, string temporaryPassword) =>
         new(view.Id, view.Email, view.DisplayName, view.Role, view.Disabled, view.MustChangePassword, view.CreatedUtc,
-            view.LastLoginUtc, view.LockedOutUntilUtc, view.RowVersion, temporaryPassword);
+            view.LastLoginUtc, view.LockedOutUntilUtc, temporaryPassword);
 }
 
 public sealed record UserPage(IReadOnlyList<UserView> Items, int Page, int PageSize, int Total);
@@ -308,6 +302,17 @@ public static class UserEndpoints
 
             // Read after the locks: a transaction that held them has committed, and this is a new statement.
             db.ChangeTracker.Clear();
+
+            // The caller's row is in the lock set when they are an admin, so what is read here is final: an admin
+            // demoted or disabled while this request was in flight (the gate may have cached them) is refused.
+            var callerRoles = await RoleNamesAsync(db, caller.Id, ct);
+            var callerRow = await db.Users.AsNoTracking().SingleOrDefaultAsync(u => u.Id == caller.Id, ct);
+            if (callerRow is null || callerRow.IsDisabled || callerRoles.Count != 1 || callerRoles[0] != DashboardRoles.Admin)
+            {
+                return AuthEndpoints.Problem(
+                    StatusCodes.Status403Forbidden, "Forbidden", "You are no longer an enabled admin.", "forbidden");
+            }
+
             user = (await db.Users.SingleOrDefaultAsync(u => u.Id == id, ct))!;
             if (user is null)
             {
@@ -402,15 +407,18 @@ public static class UserEndpoints
 
         var caller = CallerMiddleware.CallerOf(http)!;
         var temporary = TemporaryPassword.Generate(settings.Value.Auth.Password.MinLength);
+        // R19: the new hash, mustChangePassword and the rotated security stamp are one write, so a lost race leaves
+        // either nothing changed (409) or all of it. Whenever the hash was saved the sessions end, below.
         var reset = await AuthEndpoints.PersistAsync(http, users, user, u =>
         {
             u.PasswordHash = users.PasswordHasher.HashPassword(u, temporary);
             u.MustChangePassword = true;
+            u.SecurityStamp = Guid.NewGuid().ToString();
         });
-        if (!reset || !await RotateStampAsync(http, users, user))
+        if (!reset)
         {
             return AuthEndpoints.Problem(
-                StatusCodes.Status409Conflict, "Password not reset", "The user changed while it was being updated. Try again.", "concurrent-update");
+                StatusCodes.Status409Conflict, "Password not reset", "The user changed while it was being updated. Nothing was changed; try again.", "concurrent-update");
         }
 
         await EndSessionsAsync(services, user.Id, ct);
@@ -533,25 +541,6 @@ public static class UserEndpoints
     {
         UserGate.Forget(services.GetRequiredService<IMemoryCache>(), userId);
         await services.GetRequiredService<RefreshTokenService>().RevokeAllAsync(userId, ct);
-    }
-
-    /// <summary><c>UpdateSecurityStampAsync</c> with one retry on a fresh copy; a failed sign-in elsewhere may rotate the concurrency stamp meanwhile.</summary>
-    private static async Task<bool> RotateStampAsync(HttpContext http, UserManager<AppUser> users, AppUser user)
-    {
-        for (var attempt = 0; attempt < 2; attempt++)
-        {
-            if (attempt > 0)
-            {
-                await http.RequestServices.GetRequiredService<QbAutopostDbContext>().Entry(user).ReloadAsync(http.RequestAborted);
-            }
-
-            if ((await users.UpdateSecurityStampAsync(user)).Succeeded)
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static async Task<List<string>> RoleNamesAsync(QbAutopostDbContext db, string userId, CancellationToken ct) =>

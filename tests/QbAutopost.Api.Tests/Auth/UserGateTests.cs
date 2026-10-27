@@ -88,6 +88,24 @@ public sealed class UserGateTests : IDisposable
     }
 
     [Fact]
+    public async Task Should_NotCacheTheOldSnapshot_When_ForgetRunsWhileItIsBeingLoaded()
+    {
+        var user = _store.Add("ann", DashboardRoles.Editor);
+        var token = Principal(user);
+        // The lookup has read the enabled user; then the admin's change commits and Forget runs; then the lookup caches.
+        _store.AfterFind = () =>
+        {
+            UserGate.Forget(_cache, user.Id);
+            _store.AfterFind = null;
+        };
+        Assert.NotNull(await _gate.ResolveAsync(token, default));
+
+        user.IsDisabled = true;
+
+        Assert.Null(await _gate.ResolveAsync(token, default));
+    }
+
+    [Fact]
     public async Task Should_GiveNoScopes_When_TheUserHasNoRole()
     {
         var user = _store.Add("ann", role: null);
@@ -136,8 +154,15 @@ public sealed class UserGateTests : IDisposable
             return user;
         }
 
-        public Task<AppUser?> FindByIdAsync(string userId, CancellationToken cancellationToken) =>
-            Task.FromResult(_users.GetValueOrDefault(userId));
+        /// <summary>Runs after a lookup has read the user, before it returns: a change and its Forget landing mid-load.</summary>
+        public Action? AfterFind { get; set; }
+
+        public Task<AppUser?> FindByIdAsync(string userId, CancellationToken cancellationToken)
+        {
+            var found = _users.GetValueOrDefault(userId);
+            AfterFind?.Invoke();
+            return Task.FromResult(found);
+        }
 
         public Task<IList<string>> GetRolesAsync(AppUser user, CancellationToken cancellationToken) =>
             Task.FromResult<IList<string>>(_roles.GetValueOrDefault(user.Id) ?? []);

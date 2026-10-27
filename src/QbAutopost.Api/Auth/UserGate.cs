@@ -56,14 +56,24 @@ public sealed class UserGate(UserManager<AppUser> users, IMemoryCache cache, ICl
     {
         var key = CacheKey(id);
         var now = clock.UtcNow;
+        var generation = GenerationOf(id);
         if (!fresh && cache.TryGetValue(key, out CachedUser? cached) && cached is not null && now - cached.FetchedUtc < CacheFor)
         {
             return cached.User;
         }
 
         var snapshot = await LoadAsync(id);
-        // The absolute expiry only frees memory; freshness is decided by FetchedUtc above.
-        cache.Set(key, new CachedUser(snapshot, now), CacheFor);
+        // R19: a Forget that ran while this was loading means the snapshot may predate the admin's change, so it is
+        // used for this one request but not cached. Checked and set under the lock Forget takes.
+        lock (Forgetting)
+        {
+            if (GenerationOf(id) == generation)
+            {
+                // The absolute expiry only frees memory; freshness is decided by FetchedUtc above.
+                cache.Set(key, new CachedUser(snapshot, now), CacheFor);
+            }
+        }
+
         return snapshot;
     }
 
@@ -93,7 +103,27 @@ public sealed class UserGate(UserManager<AppUser> users, IMemoryCache cache, ICl
     /// Drops the cached lookup of <paramref name="id"/>. Called after an admin changes a user's role, disables them or
     /// resets their password, so the next request sees the new stamp now and not up to <see cref="CacheFor"/> later.
     /// </summary>
-    public static void Forget(IMemoryCache cache, string id) => cache.Remove(CacheKey(id));
+    public static void Forget(IMemoryCache cache, string id)
+    {
+        lock (Forgetting)
+        {
+            Generations[id] = GenerationOf(id) + 1;
+            cache.Remove(CacheKey(id));
+        }
+    }
+
+    /// <summary>Bumped by <see cref="Forget"/>; a lookup that started before a bump does not cache its result.</summary>
+    private static readonly Dictionary<string, long> Generations = [];
+
+    private static readonly object Forgetting = new();
+
+    private static long GenerationOf(string id)
+    {
+        lock (Forgetting)
+        {
+            return Generations.GetValueOrDefault(id);
+        }
+    }
 
     private static string CacheKey(string id) => "user-gate:" + id;
 

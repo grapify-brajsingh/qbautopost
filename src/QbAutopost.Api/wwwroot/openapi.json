@@ -806,7 +806,14 @@
             "$ref": "#/components/responses/Forbidden"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       },
@@ -871,7 +878,14 @@
             "$ref": "#/components/responses/Forbidden"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       }
@@ -930,7 +944,14 @@
             "$ref": "#/components/responses/Forbidden"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       },
@@ -1032,7 +1053,14 @@
             "$ref": "#/components/responses/Forbidden"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       }
@@ -1100,7 +1128,14 @@
             "$ref": "#/components/responses/Forbidden"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       }
@@ -1162,7 +1197,14 @@
             "$ref": "#/components/responses/Forbidden"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       }
@@ -1236,7 +1278,14 @@
             "$ref": "#/components/responses/Forbidden"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       }
@@ -1416,10 +1465,6 @@
             "format": "date-time",
             "nullable": true,
             "description": "Set only while a lockout is still running."
-          },
-          "rowVersion": {
-            "type": "integer",
-            "description": "Always 0. A user has no integer version; the `ETag` header carries Identity's concurrency stamp."
           }
         }
       },
@@ -1459,10 +1504,6 @@
             "format": "date-time",
             "nullable": true,
             "description": "Set only while a lockout is still running."
-          },
-          "rowVersion": {
-            "type": "integer",
-            "description": "Always 0. A user has no integer version; the `ETag` header carries Identity's concurrency stamp."
           },
           "temporaryPassword": {
             "type": "string",

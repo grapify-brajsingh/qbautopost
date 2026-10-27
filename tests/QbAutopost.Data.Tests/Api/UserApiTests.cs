@@ -156,6 +156,7 @@ public sealed class UserApiTests(PostgresFixture postgres) : IClassFixture<Postg
         Assert.Equal("editor", body.GetProperty("role").GetString());
         Assert.Equal(JsonValueKind.Null, body.GetProperty("lastLoginUtc").ValueKind);
         Assert.Equal(JsonValueKind.Null, body.GetProperty("lockedOutUntilUtc").ValueKind);
+        Assert.False(body.TryGetProperty("rowVersion", out _));
         Assert.Equal($"\"{(await UserAsync(ann.Id)).ConcurrencyStamp}\"", response.Headers.ETag!.Tag);
     }
 
@@ -505,6 +506,77 @@ public sealed class UserApiTests(PostgresFixture postgres) : IClassFixture<Postg
         Assert.True((await fresh.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("user").GetProperty("mustChangePassword").GetBoolean());
         var audit = await DbAsync(db => db.UserAudit.SingleAsync(a => a.UserId == ann.Id && a.Kind == "password-reset"));
         Assert.DoesNotContain(temporary, audit.Detail ?? "");
+    }
+
+    [PostgresFact]
+    public async Task Should_NeverLeaveAMix_When_ResetRacesWithFailedSignIns()
+    {
+        await AddUserAsync("root@example.com", DashboardRoles.Admin);
+        var ann = await AddUserAsync("ann@example.com", DashboardRoles.Editor);
+        using var client = Client();
+        var (adminToken, _) = await SignInAsync(client, "root@example.com", Password);
+        var (annToken, annRefresh) = await SignInAsync(client, "ann@example.com", Password);
+        var before = await UserAsync(ann.Id);
+
+        // Failed sign-ins rotate the concurrency stamp all the time; the reset may lose a save to one.
+        var storm = Task.WhenAll(Enumerable.Range(0, 3).Select(_ => Task.Run(async () =>
+        {
+            for (var i = 0; i < 6; i++)
+            {
+                using var wrong = await LoginAsync(client, "ann@example.com", "wrong-password-here");
+            }
+        })));
+        using var reset = await Send(client, HttpMethod.Post, $"{Users}/{ann.Id}/reset-password", adminToken);
+        await storm;
+
+        var after = await UserAsync(ann.Id);
+        var live = await DbAsync(db => db.RefreshTokens.CountAsync(t => t.UserId == ann.Id && t.RevokedUtc == null));
+        if (reset.StatusCode == HttpStatusCode.OK)
+        {
+            Assert.NotEqual(before.PasswordHash, after.PasswordHash);
+            Assert.NotEqual(before.SecurityStamp, after.SecurityStamp);
+            Assert.True(after.MustChangePassword);
+            Assert.Equal(0, live);
+            using var me = await Send(client, HttpMethod.Get, Me, annToken);
+            Assert.Equal(HttpStatusCode.Unauthorized, me.StatusCode);
+        }
+        else
+        {
+            Assert.Equal(HttpStatusCode.Conflict, reset.StatusCode);
+            Assert.Equal(before.PasswordHash, after.PasswordHash);
+            Assert.Equal(before.SecurityStamp, after.SecurityStamp);
+            Assert.False(after.MustChangePassword);
+            Assert.Equal(1, live);
+        }
+    }
+
+    [PostgresFact]
+    public async Task Should_Return403_When_TheCallerWasDemotedAfterTheGateCachedThem()
+    {
+        var root = await AddUserAsync("root@example.com", DashboardRoles.Admin);
+        await AddUserAsync("second@example.com", DashboardRoles.Admin);
+        var ann = await AddUserAsync("ann@example.com", DashboardRoles.Editor);
+        using var client = Client();
+        var (token, _) = await SignInAsync(client, "root@example.com", Password);
+        var etag = await EtagAsync(client, token, ann.Id); // the gate has now cached root as an admin
+
+        // root stops being an admin behind the cache's back (no stamp change, no Forget).
+        await DbAsync(db => db.Users.Where(u => u.Id == root.Id).ExecuteUpdateAsync(set => set.SetProperty(u => u.IsDisabled, true)));
+        using var disabledCaller = await Send(client, HttpMethod.Patch, $"{Users}/{ann.Id}", token, new { role = "viewer" }, etag);
+        Assert.Equal(HttpStatusCode.Forbidden, disabledCaller.StatusCode);
+
+        await DbAsync(db => db.Users.Where(u => u.Id == root.Id).ExecuteUpdateAsync(set => set.SetProperty(u => u.IsDisabled, false)));
+        var viewerRole = await DbAsync(db => db.Roles.Where(r => r.Name == "viewer").Select(r => r.Id).SingleOrDefaultAsync());
+        if (viewerRole is null)
+        {
+            await AddUserAsync("vi@example.com", DashboardRoles.Viewer);
+            viewerRole = await DbAsync(db => db.Roles.Where(r => r.Name == "viewer").Select(r => r.Id).SingleAsync());
+        }
+
+        await DbAsync(db => db.UserRoles.Where(ur => ur.UserId == root.Id).ExecuteUpdateAsync(set => set.SetProperty(ur => ur.RoleId, viewerRole)));
+        using var demotedCaller = await Send(client, HttpMethod.Patch, $"{Users}/{ann.Id}", token, new { role = "viewer" }, etag);
+        Assert.Equal(HttpStatusCode.Forbidden, demotedCaller.StatusCode);
+        Assert.Equal(["editor"], await RolesOfAsync(ann.Id));
     }
 
     [PostgresFact]
