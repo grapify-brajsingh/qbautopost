@@ -56,6 +56,29 @@ public sealed class ModelMappingTests
         Assert.True(rowVersion.IsConcurrencyToken);
     }
 
+    /// <summary>R8 (T-1010): a refresh token is found by its hash, and one hash names one row.</summary>
+    [Fact]
+    public void Should_IndexTheRefreshTokenHashUniquely_When_ModelIsBuilt()
+    {
+        using var db = CreateContext();
+
+        var entity = db.Model.FindEntityType(typeof(RefreshTokenEntity))!;
+        var index = Assert.Single(entity.GetIndexes(), i => i.Properties.Select(p => p.Name).SequenceEqual([nameof(RefreshTokenEntity.TokenSha256)]));
+
+        Assert.True(index.IsUnique);
+    }
+
+    /// <summary>R10 (T-1010): a failed login for an email nobody holds is audited with no subject.</summary>
+    [Fact]
+    public void Should_AllowAuditWithoutSubject_When_ModelIsBuilt()
+    {
+        using var db = CreateContext();
+
+        var subject = db.Model.FindEntityType(typeof(UserAuditEntity))!.FindProperty(nameof(UserAuditEntity.UserId))!;
+
+        Assert.True(subject.IsNullable);
+    }
+
     private static QbAutopostDbContext CreateContext() =>
         new(new DbContextOptionsBuilder<QbAutopostDbContext>().UseNpgsql("Host=127.0.0.1;Database=qbautopost_model_only").Options);
 }

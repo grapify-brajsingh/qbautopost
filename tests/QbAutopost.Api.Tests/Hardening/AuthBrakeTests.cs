@@ -147,6 +147,37 @@ public sealed class AuthBrakeTests
         Assert.Equal(HttpStatusCode.TooManyRequests, statuses[3]);
     }
 
+    /// <summary>T-1010 (spec 11.2): login is braked per email as well as per address, on the same counts and limits.</summary>
+    [Fact]
+    public void Should_BlockTheEmail_When_ItsFailuresPassTheLimit()
+    {
+        var (brake, _) = Brake();
+        var email = AuthBrake.EmailKey("Ann@Example.com");
+
+        for (var i = 0; i < 4; i++)
+        {
+            brake.RecordFailure(email);
+        }
+
+        Assert.True(brake.IsBlocked(AuthBrake.EmailKey("ann@example.COM"), out var retryAfter));
+        Assert.Equal(TimeSpan.FromMinutes(5), retryAfter);
+        Assert.False(brake.IsBlocked(Guesser, out _));
+        Assert.False(brake.IsBlocked(AuthBrake.EmailKey("bob@example.com"), out _));
+    }
+
+    [Fact]
+    public void Should_NotBlockTheAddress_When_OnlyAnEmailFailed()
+    {
+        var (brake, _) = Brake();
+
+        for (var i = 0; i < 4; i++)
+        {
+            brake.RecordFailure(AuthBrake.EmailKey(Guesser.ToString()));
+        }
+
+        Assert.False(brake.IsBlocked(Guesser, out _));
+    }
+
     private static (AuthBrake Brake, FixedClock Clock) Brake()
     {
         var clock = new FixedClock { UtcNow = new DateTime(2026, 9, 23, 12, 0, 0, DateTimeKind.Utc) };

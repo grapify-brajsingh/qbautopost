@@ -18,16 +18,26 @@ namespace QbAutopost.Api.Security;
 /// State is in memory and therefore per process: a restart forgives everyone. That is the right trade for a brake
 /// whose job is to make guessing slow — persisting it would add a file to keep, prune and back up for no real gain.
 /// </para>
+/// <para>
+/// T-1010 (saved-requests spec 11.2): sign-in is braked per address and per email on the same counts and limits. An
+/// email is counted under <see cref="EmailKey"/>, so it never shares a count with an address.
+/// </para>
 /// </summary>
 public sealed class AuthBrake(IClock clock, RateLimitSettings limits)
 {
     private readonly ConcurrentDictionary<string, Attempts> _byAddress = new();
 
     /// <summary>True when this address is serving a block; <paramref name="retryAfter"/> is what is left of it.</summary>
-    public bool IsBlocked(IPAddress? address, out TimeSpan retryAfter)
+    public bool IsBlocked(IPAddress? address, out TimeSpan retryAfter) => IsBlocked(Key(address), out retryAfter);
+
+    /// <summary>The key one email is counted under: case-insensitive, as Identity matches emails.</summary>
+    public static string EmailKey(string email) => "email:" + email.Trim().ToUpperInvariant();
+
+    /// <summary>True when <paramref name="key"/> (an address, or an <see cref="EmailKey"/>) is serving a block.</summary>
+    public bool IsBlocked(string key, out TimeSpan retryAfter)
     {
         retryAfter = TimeSpan.Zero;
-        if (!limits.Enabled || !_byAddress.TryGetValue(Key(address), out var attempts) || attempts.BlockedUntil is not { } until)
+        if (!limits.Enabled || !_byAddress.TryGetValue(key, out var attempts) || attempts.BlockedUntil is not { } until)
         {
             return false;
         }
@@ -37,7 +47,7 @@ public sealed class AuthBrake(IClock clock, RateLimitSettings limits)
         {
             // The block is spent. Forget the address entirely, so the next mistake starts a fresh count rather than
             // tipping straight back over the edge.
-            _byAddress.TryRemove(Key(address), out _);
+            _byAddress.TryRemove(key, out _);
             return false;
         }
 
@@ -46,7 +56,10 @@ public sealed class AuthBrake(IClock clock, RateLimitSettings limits)
     }
 
     /// <summary>Records a request that arrived with a key belonging to nobody.</summary>
-    public void RecordFailure(IPAddress? address)
+    public void RecordFailure(IPAddress? address) => RecordFailure(Key(address));
+
+    /// <summary>Records a failed authentication counted under <paramref name="key"/>.</summary>
+    public void RecordFailure(string key)
     {
         if (!limits.Enabled)
         {
@@ -55,7 +68,7 @@ public sealed class AuthBrake(IClock clock, RateLimitSettings limits)
 
         var now = clock.UtcNow;
         _byAddress.AddOrUpdate(
-            Key(address),
+            key,
             _ => new Attempts(1, now, null),
             (_, existing) =>
             {
@@ -77,7 +90,10 @@ public sealed class AuthBrake(IClock clock, RateLimitSettings limits)
     /// Records a key that resolved to a caller. The count is cleared: somebody who mistyped a key, fixed it, then
     /// mistyped it again is not guessing, and should not accumulate their way into a block over a working day.
     /// </summary>
-    public void RecordSuccess(IPAddress? address) => _byAddress.TryRemove(Key(address), out _);
+    public void RecordSuccess(IPAddress? address) => RecordSuccess(Key(address));
+
+    /// <summary>Clears the count kept under <paramref name="key"/>.</summary>
+    public void RecordSuccess(string key) => _byAddress.TryRemove(key, out _);
 
     private static string Key(IPAddress? address) => address?.ToString() ?? "unknown";
 

@@ -15,6 +15,9 @@ public sealed class RefreshTokenConfiguration : IEntityTypeConfiguration<Refresh
 
         builder.Property(e => e.TokenSha256).HasColumnType("char(64)");
 
+        // R8 (T-1010): a presented token is found by its hash, and one hash names exactly one row.
+        builder.HasIndex(e => e.TokenSha256).IsUnique();
+
         builder.HasOne<AppUser>().WithMany().HasForeignKey(e => e.UserId).OnDelete(DeleteBehavior.Restrict);
     }
 }

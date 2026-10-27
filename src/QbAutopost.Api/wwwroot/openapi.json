@@ -17,7 +17,8 @@
     { "name": "Jobs", "description": "The job-folder path: a folder of statements and invoices." },
     { "name": "Batches", "description": "The result of one direct post, and undoing it." },
     { "name": "Rules", "description": "Teaching the mapper an alias or a vendor account." },
-    { "name": "Reference", "description": "This document and the page that renders it." }
+    { "name": "Reference", "description": "This document and the page that renders it." },
+    { "name": "Auth", "description": "Dashboard sign-in: a short-lived Bearer access token and a rotating refresh cookie (saved-requests §11.2)." }
   ],
   "paths": {
     "/api/v1/health": {
@@ -610,6 +611,110 @@
           "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": ["Auth"],
+        "operationId": "login",
+        "summary": "Sign in with email and password.",
+        "description": "Answers an access token (JWT, HS256, `Auth:Jwt:AccessTokenMinutes`) and sets the refresh cookie `qbautopost_refresh` (`HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`, `Auth:Jwt:RefreshTokenDays`). An unknown email, a wrong password and a disabled account all answer the same `401 invalid-credentials`. `Auth:Lockout:MaxFailedAttempts` wrong passwords lock the account for `Auth:Lockout:LockoutMinutes` (`423 locked-out`). Failed sign-ins are also braked per address and per email by `Api:RateLimits:FailedAuthPerMinute` (`429`). Every failure is recorded in `user_audit`. `503 auth-not-configured` when `Auth:Jwt:SigningKey` is missing; `503 database-unavailable` when the database is not ready.",
+        "x-required-scope": "none",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoginRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in. The refresh cookie is set.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SignInResponse" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "description": "Wrong credentials: unknown email, wrong password or disabled account. One answer for all three (`invalid-credentials`).", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } },
+          "423": { "description": "`locked-out`: too many wrong passwords; `Retry-After` says for how long.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "tags": ["Auth"],
+        "operationId": "refreshAccessToken",
+        "summary": "Exchange the refresh cookie for a new access token and a new refresh cookie.",
+        "description": "Takes no body and no header credential: only the `qbautopost_refresh` cookie. The presented token is revoked and its successor set. Presenting a token that was already revoked revokes its whole family (a theft signal) and answers `401`; so does a missing, unknown or expired token, and the cookie is then cleared.",
+        "x-required-scope": "none",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "A new access token; the refresh cookie is replaced.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SignInResponse" } } }
+          },
+          "401": { "description": "`invalid-refresh-token`: missing, unknown, expired or revoked. The cookie is cleared.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": ["Auth"],
+        "operationId": "logout",
+        "summary": "Sign out: revoke the current refresh token and clear the cookie.",
+        "description": "Revokes the refresh token in the `qbautopost_refresh` cookie when it belongs to the caller, and always clears the cookie. Allowed while a password change is pending.",
+        "x-required-scope": "signed-in",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Signed out.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SignedOut" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "tags": ["Auth"],
+        "operationId": "getMe",
+        "summary": "The signed-in user, their role and its scopes.",
+        "description": "Allowed while a password change is pending, so the dashboard can tell the user to change it.",
+        "x-required-scope": "signed-in",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "The caller.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthUser" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/api/v1/auth/change-password": {
+      "post": {
+        "tags": ["Auth"],
+        "operationId": "changePassword",
+        "summary": "Change the caller's password.",
+        "description": "Needs the current password. The new one needs `Auth:Password:MinLength` characters (12) and nothing else (`400 invalid-password`). A wrong current password answers `400 current-password-incorrect` and counts toward lockout. On success the security stamp rotates (older access tokens stop working), `mustChangePassword` is cleared, every other refresh token of the user is revoked, and a new access token is returned; the current refresh cookie stays valid.",
+        "x-required-scope": "signed-in",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ChangePasswordRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Changed. Use the access token in this answer from now on.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SignInResponse" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "423": { "description": "`locked-out`: too many wrong passwords; `Retry-After` says for how long.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
     }
   },
   "components": {
@@ -684,6 +789,45 @@
       }
     },
     "schemas": {
+      "LoginRequest": {
+        "type": "object",
+        "required": ["email", "password"],
+        "properties": {
+          "email": { "type": "string", "format": "email", "description": "Matched case-insensitively." },
+          "password": { "type": "string", "format": "password" }
+        }
+      },
+      "ChangePasswordRequest": {
+        "type": "object",
+        "required": ["currentPassword", "newPassword"],
+        "properties": {
+          "currentPassword": { "type": "string", "format": "password" },
+          "newPassword": { "type": "string", "format": "password", "minLength": 12 }
+        }
+      },
+      "AuthUser": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "email": { "type": "string", "nullable": true },
+          "displayName": { "type": "string" },
+          "role": { "type": "string", "description": "`admin`, `editor` or `viewer`; empty when the account holds no role, or more than one (Q-87), and it then has no scopes." },
+          "mustChangePassword": { "type": "boolean", "description": "While true every route except `me`, `change-password` and `logout` answers `403 password-change-required`." },
+          "scopes": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "SignInResponse": {
+        "type": "object",
+        "properties": {
+          "accessToken": { "type": "string", "description": "Send as `Authorization: Bearer <accessToken>`." },
+          "expiresUtc": { "type": "string", "format": "date-time" },
+          "user": { "$ref": "#/components/schemas/AuthUser" }
+        }
+      },
+      "SignedOut": {
+        "type": "object",
+        "properties": { "signedOut": { "type": "boolean" } }
+      },
       "Problem": {
         "type": "object",
         "description": "RFC 7807 problem details. `requestId` is the same id as the `X-Request-Id` header and every log line of that request.",

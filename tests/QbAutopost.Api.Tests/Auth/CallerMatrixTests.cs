@@ -132,7 +132,15 @@ public sealed class CallerMatrixTests(CallerMatrixTests.Host host) : IClassFixtu
 
         using var response = await client.SendAsync(Request("POST", path));
 
-        Assert.Equal(Expect.Passed, await OutcomeOf(response));
+        // T-1010: the routes now exist, and refresh without a cookie gives its own 401. What this asserts is that the
+        // caller resolver let the request through, so that answer counts as passing and the resolver's do not.
+        await response.Content.LoadIntoBufferAsync();
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.True(
+            response.StatusCode != HttpStatusCode.Unauthorized || body.Contains("invalid-refresh-token", StringComparison.Ordinal),
+            $"{path} answered {(int)response.StatusCode} {body}");
+        Assert.NotEqual(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.DoesNotContain("ambiguous-credentials", body, StringComparison.Ordinal);
     }
 
     [Theory]

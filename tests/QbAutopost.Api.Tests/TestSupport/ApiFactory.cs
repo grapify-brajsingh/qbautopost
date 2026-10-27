@@ -51,7 +51,10 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     /// </summary>
     public FakeSavedRequestStore Store { get; } = new();
 
-    public DatabaseGate Gate { get; }
+    /// <summary>
+    /// The fake gate; with <see cref="WithPostgres"/>, the host's real gate (resolving it starts the host).
+    /// </summary>
+    public DatabaseGate Gate => _postgres is null ? _fakeGate : Services.GetRequiredService<DatabaseGate>();
 
     /// <summary>T-1009: dashboard users for Bearer requests, in place of UserManager (rule 1: no PostgreSQL).</summary>
     public FakeUsers Users { get; } = new();
@@ -59,14 +62,39 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     /// <summary>What the gate's schema check reports when something refreshes it.</summary>
     public SchemaStatus Schema { get; set; } = new(true, true, [], null);
 
+    private readonly DatabaseGate _fakeGate;
+
+    /// <summary>R14: a PostgreSQL connection string, or null for the usual in-memory host.</summary>
+    private readonly string? _postgres;
+
     public ApiFactory()
+        : this(null)
     {
+    }
+
+    private ApiFactory(string? postgres)
+    {
+        _postgres = postgres;
+
         // Not forced: the host's first start-up check makes it Ready, and runs recovery on Store first, as production does.
-        Gate = new DatabaseGate(
+        _fakeGate = new DatabaseGate(
             _ => Task.FromResult(Schema),
             true,
             NullLogger<DatabaseGate>.Instance,
             ct => Store.RecoverInFlightAsync(DateTime.UtcNow, ct));
+    }
+
+    /// <summary>
+    /// R14 (T-1010): the real host against a real PostgreSQL (Testcontainers), with the production wiring of
+    /// <c>Program</c>: <c>AddQbAutopostData</c>, the EF store, the real <see cref="DatabaseGate"/> and its schema check,
+    /// <c>InFlightRecovery</c>, Identity over the pooled context, and the real <see cref="UserGate"/>. Only QuickBooks
+    /// and Hermes stay fake. The database must already be migrated: the app never migrates (spec 5.5).
+    /// <see cref="Store"/> and <see cref="Users"/> are not used by such a host.
+    /// </summary>
+    public static ApiFactory WithPostgres(string connectionString)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+        return new ApiFactory(connectionString);
     }
 
     public string LedgerFile => Dir.Combine("data", "ledger.json");
@@ -91,6 +119,12 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
+        if (_postgres is not null)
+        {
+            // UseSetting, not the collection below: Program reads it while it registers services.
+            builder.UseSetting("Database:ConnectionString", _postgres);
+        }
+
         builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Api:ApiKey"] = ApiKey,
@@ -129,10 +163,16 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             // Without this the host would pick the real COM probe on a Windows dev box (CLAUDE.md rule 1).
             services.RemoveAll<IQbSdkProbe>();
             services.AddSingleton<IQbSdkProbe>(SdkProbe);
+            if (_postgres is not null)
+            {
+                // R14: the real store, gate and user gate, exactly as Program registered them.
+                return;
+            }
+
             services.RemoveAll<ISavedRequestStore>();
             services.AddSingleton<ISavedRequestStore>(Store);
             services.RemoveAll<DatabaseGate>();
-            services.AddSingleton(Gate);
+            services.AddSingleton(_fakeGate);
             services.RemoveAll<IUserGate>();
             services.AddSingleton<IUserGate>(Users);
         });

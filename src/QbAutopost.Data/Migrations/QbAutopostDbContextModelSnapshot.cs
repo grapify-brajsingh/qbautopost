@@ -415,6 +415,10 @@ namespace QbAutopost.Data.Migrations
                     b.HasKey("Id")
                         .HasName("pk_refresh_tokens");
 
+                    b.HasIndex("TokenSha256")
+                        .IsUnique()
+                        .HasDatabaseName("ix_refresh_tokens_token_sha256");
+
                     b.HasIndex("UserId")
                         .HasDatabaseName("ix_refresh_tokens_user_id");
 
@@ -699,7 +703,6 @@ namespace QbAutopost.Data.Migrations
                         .HasColumnName("kind");
 
                     b.Property<string>("UserId")
-                        .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("user_id");
 
@@ -815,7 +818,6 @@ namespace QbAutopost.Data.Migrations
                         .WithMany()
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
                         .HasConstraintName("fk_user_audit_users_user_id");
                 });
 

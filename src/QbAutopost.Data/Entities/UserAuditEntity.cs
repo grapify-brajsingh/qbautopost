@@ -5,8 +5,11 @@ public sealed class UserAuditEntity
 {
     public long Id { get; set; }
 
-    /// <summary>The subject: the user the entry is about.</summary>
-    public string UserId { get; set; } = "";
+    /// <summary>
+    /// The subject: the user the entry is about. Null only for a failed login naming an email nobody holds (R10); the
+    /// attempted email is then in <see cref="Detail"/>.
+    /// </summary>
+    public string? UserId { get; set; }
 
     public string Actor { get; set; } = "";
 

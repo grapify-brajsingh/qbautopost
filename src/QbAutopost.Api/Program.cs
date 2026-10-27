@@ -272,6 +272,10 @@ if (database.Configured)
         })
         .AddRoles<IdentityRole>()
         .AddEntityFrameworkStores<QbAutopostDbContext>();
+
+    // T-1010 (spec 11.2): refresh tokens and the user audit go through the pooled context directly.
+    builder.Services.AddSingleton<RefreshTokenService>();
+    builder.Services.AddSingleton<UserAuditWriter>();
 }
 else
 {
@@ -282,6 +286,7 @@ else
 // (no Identity registered) a Bearer request answers 503 before anything asks for UserManager.
 builder.Services.AddMemoryCache();
 builder.Services.AddScoped<IUserGate, UserGate>();
+builder.Services.AddSingleton<TokenService>();
 
 builder.Services.AddSingleton(sp =>
 {
@@ -401,6 +406,8 @@ try
     // is true (api-v1 §9), so the POC package and the deploy scripts keep working until T-914 moves them.
     var v1 = app.MapGroup(ApiRoutes.V1Prefix);
     MapAll(v1);
+    // T-1010 (spec 11.2): sign-in exists on the versioned surface only; the refresh cookie's path names it.
+    v1.MapAuthEndpoints();
     // T-913 (FR-A-18): the document and the Scalar page, on the versioned surface only and only when somebody asked
     // for them. Disabled means not mapped, so a route that could describe every way to move money simply is not there.
     if (settings.Api.Reference.Enabled)
