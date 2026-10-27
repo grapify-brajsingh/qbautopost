@@ -340,6 +340,116 @@ public sealed class AuthApiTests(PostgresFixture postgres) : IClassFixture<Postg
         }
     }
 
+    // ---- fix round 1: concurrency, every failure audited ---------------------------------------------------------
+
+    [PostgresFact]
+    public async Task Should_LockOutAndTripTheBrake_When_TenWrongPasswordsArriveInParallel()
+    {
+        var user = await AddUserAsync("ann@example.com", DashboardRoles.Editor);
+        var host = Factory.WithSettings(new Dictionary<string, string?>
+        {
+            ["Api:RateLimits:Enabled"] = "true",
+            ["Api:RateLimits:FailedAuthPerMinute"] = "5",
+        });
+        using var client = host.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false });
+
+        var responses = await Task.WhenAll(Enumerable.Range(0, 10).Select(_ => LoginAsync(client, "ann@example.com", "wrong-password-here")));
+        var statuses = responses.Select(r => (int)r.StatusCode).ToList();
+        foreach (var response in responses)
+        {
+            response.Dispose();
+        }
+
+        Assert.All(statuses, s => Assert.Contains(s, new[] { 401, 423, 429 }));
+        Assert.Contains(429, statuses);
+        Assert.True((await UserAsync(user.Id)).LockoutEnd > DateTimeOffset.UtcNow, $"not locked out; answers: {string.Join(",", statuses)}");
+        using var correct = await LoginAsync(client, "ann@example.com", Password);
+        Assert.NotEqual(HttpStatusCode.OK, correct.StatusCode);
+    }
+
+    [PostgresFact]
+    public async Task Should_AuditTheRefusal_When_TheBrakeRefusesALogin()
+    {
+        var host = Factory.WithSettings(new Dictionary<string, string?>
+        {
+            ["Api:RateLimits:Enabled"] = "true",
+            ["Api:RateLimits:FailedAuthPerMinute"] = "1",
+        });
+        using var client = host.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false });
+        for (var i = 0; i < 2; i++)
+        {
+            using var failure = await LoginAsync(client, "nobody@example.com", Password);
+        }
+
+        using var refused = await LoginAsync(client, "nobody@example.com", Password);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, refused.StatusCode);
+        var details = await DbAsync(db => db.UserAudit.Where(a => a.Kind == "login-failed").Select(a => a.Detail!).ToListAsync());
+        Assert.Contains(details, d => d.Contains("rate-limited", StringComparison.Ordinal));
+    }
+
+    [PostgresFact]
+    public async Task Should_CapTheAuditedEmail_When_TheAttemptedEmailIsLong()
+    {
+        using var client = Client();
+        var email = new string('a', 400) + "@example.com";
+
+        using var response = await LoginAsync(client, email, Password);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var detail = (await DbAsync(db => db.UserAudit.SingleAsync(a => a.UserId == null))).Detail!;
+        var stored = JsonDocument.Parse(detail).RootElement.GetProperty("email").GetString()!;
+        Assert.Equal(254, stored.Length);
+    }
+
+    [PostgresFact]
+    public async Task Should_Return400CountAndAudit_When_CurrentPasswordIsWrong()
+    {
+        var user = await AddUserAsync("ann@example.com", DashboardRoles.Editor);
+        using var client = Client();
+        var (token, current) = await SignInAsync(client, "ann@example.com", Password);
+
+        using var response = await ChangePasswordAsync(client, token, current, "not-the-password", NewPassword);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("current-password-incorrect", (await response.ReadProblemAsync()).GetProperty("type").GetString());
+        Assert.Equal(1, (await UserAsync(user.Id)).AccessFailedCount);
+        var failed = await DbAsync(db => db.UserAudit.Where(a => a.UserId == user.Id && a.Kind == "login-failed").Select(a => a.Detail!).ToListAsync());
+        Assert.Contains(failed, d => d.Contains("wrong-current-password", StringComparison.Ordinal));
+    }
+
+    [PostgresFact]
+    public async Task Should_Return401AndRevoke_When_RefreshingForADisabledUser()
+    {
+        var user = await AddUserAsync("ann@example.com", DashboardRoles.Editor);
+        using var client = Client();
+        var (_, refresh) = await SignInAsync(client, "ann@example.com", Password);
+        await DbAsync(db => db.Users.Where(u => u.Id == user.Id).ExecuteUpdateAsync(set => set.SetProperty(u => u.IsDisabled, true)));
+
+        using var response = await RefreshAsync(client, refresh);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.All(await DbAsync(db => db.RefreshTokens.Where(t => t.UserId == user.Id).ToListAsync()), t => Assert.NotNull(t.RevokedUtc));
+    }
+
+    [PostgresFact]
+    public async Task Should_RevokeOnlyThatCookiesToken_When_LogoutCarriesAnotherUsersCookie()
+    {
+        var ann = await AddUserAsync("ann@example.com", DashboardRoles.Editor);
+        var bob = await AddUserAsync("bob@example.com", DashboardRoles.Viewer);
+        using var client = Client();
+        var (annToken, annRefresh) = await SignInAsync(client, "ann@example.com", Password);
+        var (_, bobRefresh) = await SignInAsync(client, "bob@example.com", Password);
+
+        using var response = await Send(client, HttpMethod.Post, Logout, annToken, bobRefresh);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull((await DbAsync(db => db.RefreshTokens.SingleAsync(t => t.UserId == bob.Id))).RevokedUtc);
+        Assert.Null((await DbAsync(db => db.RefreshTokens.SingleAsync(t => t.UserId == ann.Id))).RevokedUtc);
+        using var annStillRefreshes = await RefreshAsync(client, annRefresh);
+        Assert.Equal(HttpStatusCode.OK, annStillRefreshes.StatusCode);
+    }
+
     // ---- helpers ---------------------------------------------------------------------------------------------
 
     private HttpClient Client() => Factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false });

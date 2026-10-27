@@ -9,6 +9,7 @@ using QbAutopost.Api.Database;
 using QbAutopost.Api.Security;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Security;
+using QbAutopost.Data;
 using QbAutopost.Data.Entities;
 
 namespace QbAutopost.Api.Endpoints;
@@ -93,45 +94,47 @@ public static class AuthEndpoints
 
         var address = http.Connection.RemoteIpAddress;
         var emailKey = AuthBrake.EmailKey(email);
-        if (Blocked(brake, address, emailKey) is { } blocked)
+        var audit = http.RequestServices.GetRequiredService<UserAuditWriter>();
+        var ip = address?.ToString();
+
+        // Fix 1b: the failure is counted before the slow password check, atomically with the block test, so a
+        // parallel burst cannot all pass the brake first. A sign-in that succeeds gives its reservation back.
+        if (Reserve(brake, address, emailKey) is { } blocked)
         {
+            await audit.WriteAsync(null, UserAuditWriter.Anonymous, UserAuditWriter.LoginFailed, new { email = Capped(email), address = ip, reason = "rate-limited" }, ct);
             log.LogWarning("Sign-in refused: too many failed sign-ins from this address or for this account");
             return TooMany(http, blocked);
         }
 
         var users = http.RequestServices.GetRequiredService<UserManager<AppUser>>();
-        var audit = http.RequestServices.GetRequiredService<UserAuditWriter>();
-        var ip = address?.ToString();
 
         var user = await users.FindByEmailAsync(email);
         if (user is null)
         {
             // The same PBKDF2 work a real account costs, so the answer's timing does not say the email is unknown.
             users.PasswordHasher.VerifyHashedPassword(new AppUser(), TimingHash(users), password);
-            Fail(brake, address, emailKey);
             // R10: no subject; the attempted email is kept in detail so that every failure is recorded (spec 11.2).
-            await audit.WriteAsync(null, UserAuditWriter.Anonymous, UserAuditWriter.LoginFailed, new { email, address = ip, reason = "unknown-email" }, ct);
+            await audit.WriteAsync(null, UserAuditWriter.Anonymous, UserAuditWriter.LoginFailed, new { email = Capped(email), address = ip, reason = "unknown-email" }, ct);
             log.LogWarning("Sign-in refused: no account holds the email given");
             return InvalidCredentials();
         }
 
         if (await users.IsLockedOutAsync(user))
         {
-            Fail(brake, address, emailKey);
             await audit.WriteAsync(user.Id, UserAuditWriter.Anonymous, UserAuditWriter.LoginFailed, new { address = ip, reason = "locked-out" }, ct);
             log.LogWarning("Sign-in refused for user {UserId}: the account is locked out", user.Id);
-            return await LockedOutAsync(http, users, user, clock);
+            return LockedOut(http, user.LockoutEnd, clock);
         }
 
+        var lockout = http.RequestServices.GetRequiredService<LockoutCounter>();
         if (!await users.CheckPasswordAsync(user, password))
         {
-            Fail(brake, address, emailKey);
-            await users.AccessFailedAsync(user);
-            if (await users.IsLockedOutAsync(user))
+            // Fix 1a: counted atomically, so parallel wrong passwords each count.
+            if (await lockout.RecordFailureAsync(user.Id, ct) is { } lockedUntil)
             {
                 await audit.WriteAsync(user.Id, UserAuditWriter.Anonymous, UserAuditWriter.LockedOut, new { address = ip, reason = "failed-attempts" }, ct);
                 log.LogWarning("User {UserId} locked out after repeated wrong passwords", user.Id);
-                return await LockedOutAsync(http, users, user, clock);
+                return LockedOut(http, lockedUntil, clock);
             }
 
             await audit.WriteAsync(user.Id, UserAuditWriter.Anonymous, UserAuditWriter.LoginFailed, new { address = ip, reason = "wrong-password" }, ct);
@@ -141,18 +144,30 @@ public static class AuthEndpoints
 
         if (user.IsDisabled)
         {
-            // Spec 11.2: the same answer as wrong credentials, and counted the same, so it says nothing more.
-            Fail(brake, address, emailKey);
+            // Spec 11.2: the same answer as wrong credentials, and counted the same (its reservation is kept), so it
+            // says nothing more.
             await audit.WriteAsync(user.Id, UserAuditWriter.Anonymous, UserAuditWriter.LoginFailed, new { address = ip, reason = "disabled" }, ct);
             log.LogWarning("Sign-in refused for user {UserId}: the account is disabled", user.Id);
             return InvalidCredentials();
         }
 
-        await users.ResetAccessFailedCountAsync(user);
-        user.LastLoginUtc = clock.UtcNow;
-        await users.UpdateAsync(user);
-        // Only the email's count: an address is not forgiven by one good sign-in, or a guesser holding one real
-        // account could clear it between guesses at everyone else's.
+        // Fix 3: what the answer reports must be stored. One retry on a fresh copy, then a 409.
+        var now = clock.UtcNow;
+        if (!await PersistAsync(http, users, user, u =>
+            {
+                u.AccessFailedCount = 0;
+                u.LastLoginUtc = now;
+            }))
+        {
+            log.LogWarning("Sign-in for user {UserId} not completed: the account changed while it was being updated", user.Id);
+            return Problem(
+                StatusCodes.Status409Conflict, "Sign-in not completed",
+                "The account changed while signing in. Sign in again.", "concurrent-update");
+        }
+
+        // The address gets back only this attempt's own reservation: it is not forgiven earlier failures by one good
+        // sign-in, or a guesser holding one real account could clear it between guesses at everyone else's.
+        brake.Release(address);
         brake.RecordSuccess(emailKey);
 
         var refreshTokens = http.RequestServices.GetRequiredService<RefreshTokenService>();
@@ -221,8 +236,9 @@ public static class AuthEndpoints
         var revoked = false;
         if (!string.IsNullOrEmpty(presented))
         {
-            // Only the caller's own token: a cookie belonging to somebody else is left alone, not revoked on their behalf.
-            revoked = await http.RequestServices.GetRequiredService<RefreshTokenService>().RevokeAsync(presented, caller.Id, ct);
+            // Fix 6: the token in the cookie, and nothing else of the caller's. Whoever holds a cookie can already use it,
+            // so revoking it, even when it is somebody else's, only ever takes power away.
+            revoked = await http.RequestServices.GetRequiredService<RefreshTokenService>().RevokeAsync(presented, ct);
         }
 
         ClearRefreshCookie(http);
@@ -265,13 +281,24 @@ public static class AuthEndpoints
         if (await users.IsLockedOutAsync(user))
         {
             log.LogWarning("Password change refused for user {UserId}: the account is locked out", user.Id);
-            return await LockedOutAsync(http, users, user, clock);
+            return LockedOut(http, user.LockoutEnd, clock);
         }
 
-        // A stolen access token must not become a way to guess the password: a wrong one counts toward lockout.
+        var audit = http.RequestServices.GetRequiredService<UserAuditWriter>();
+        var ip = http.Connection.RemoteIpAddress?.ToString();
+
+        // A stolen access token must not become a way to guess the password: a wrong one counts toward lockout,
+        // atomically (fix 1a), and is recorded like any failed sign-in (fix 2).
         if (!await users.CheckPasswordAsync(user, current))
         {
-            await users.AccessFailedAsync(user);
+            if (await http.RequestServices.GetRequiredService<LockoutCounter>().RecordFailureAsync(user.Id, ct) is { } lockedUntil)
+            {
+                await audit.WriteAsync(user.Id, user.Id, UserAuditWriter.LockedOut, new { address = ip, reason = "wrong-current-password" }, ct);
+                log.LogWarning("User {UserId} locked out after repeated wrong current passwords", user.Id);
+                return LockedOut(http, lockedUntil, clock);
+            }
+
+            await audit.WriteAsync(user.Id, user.Id, UserAuditWriter.LoginFailed, new { address = ip, reason = "wrong-current-password" }, ct);
             log.LogWarning("Password change refused for user {UserId}: the current password is wrong", user.Id);
             // SPEC-GAP T-1010 (Q-88): 11.2 names no answer for a wrong current password. 400, not 401, so the
             // dashboard does not take it for an expired session and sign the user out.
@@ -289,15 +316,25 @@ public static class AuthEndpoints
                 string.Join(" ", changed.Errors.Select(e => e.Description)), "invalid-password");
         }
 
-        // ChangePasswordAsync has already rotated the security stamp, so every older access token stops working.
-        await users.ResetAccessFailedCountAsync(user);
-        user.MustChangePassword = false;
-        await users.UpdateAsync(user);
-
+        // ChangePasswordAsync has already rotated the security stamp, so every older access token stops working. The
+        // password is changed, so the other sessions go and the change is recorded before anything else can fail.
         await http.RequestServices.GetRequiredService<RefreshTokenService>()
             .RevokeOthersAsync(user.Id, http.Request.Cookies[RefreshCookie], ct);
-        await http.RequestServices.GetRequiredService<UserAuditWriter>()
-            .WriteAsync(user.Id, user.Id, UserAuditWriter.PasswordChanged, new { address = http.Connection.RemoteIpAddress?.ToString() }, ct);
+        await audit.WriteAsync(user.Id, user.Id, UserAuditWriter.PasswordChanged, new { address = ip }, ct);
+
+        // Fix 3: one retry on a fresh copy, then a 409 rather than a mustChangePassword: false that is not stored.
+        if (!await PersistAsync(http, users, user, u =>
+            {
+                u.AccessFailedCount = 0;
+                u.MustChangePassword = false;
+            }))
+        {
+            log.LogWarning("Password change for user {UserId}: the password changed, but the account could not be updated", user.Id);
+            return Problem(
+                StatusCodes.Status409Conflict, "Password changed, account not updated",
+                "The password was changed, but the account changed at the same time. Sign in again with the new password.",
+                "concurrent-update");
+        }
         log.LogInformation("User {UserId} changed their password; their other refresh tokens are revoked", user.Id);
         return await SignedInAsync(http, users, user, tokens);
     }
@@ -331,17 +368,41 @@ public static class AuthEndpoints
             "Dashboard sign-in is not configured on this server. API keys are unaffected.", "auth-not-configured");
     }
 
-    private static TimeSpan? Blocked(AuthBrake brake, IPAddress? address, string emailKey)
+    /// <summary>Reserves a failure for both keys; null when both admitted it, else how long the caller must wait.</summary>
+    private static TimeSpan? Reserve(AuthBrake brake, IPAddress? address, string emailKey)
     {
-        var byAddress = brake.IsBlocked(address, out var addressWait);
-        var byEmail = brake.IsBlocked(emailKey, out var emailWait);
-        return byAddress || byEmail ? (addressWait > emailWait ? addressWait : emailWait) : null;
+        var byAddress = brake.TryReserve(address, out var addressWait);
+        var byEmail = brake.TryReserve(emailKey, out var emailWait);
+        return byAddress && byEmail ? null : (addressWait > emailWait ? addressWait : emailWait);
     }
 
-    private static void Fail(AuthBrake brake, IPAddress? address, string emailKey)
+    private const int MaxAuditedEmail = 254;
+
+    /// <summary>The attempted email as stored in <c>user_audit.detail</c>: at most <see cref="MaxAuditedEmail"/> characters.</summary>
+    private static string Capped(string email) => email.Length <= MaxAuditedEmail ? email : email[..MaxAuditedEmail];
+
+    /// <summary>
+    /// Applies <paramref name="change"/> and saves; on a failure (a concurrency-stamp conflict, say) reloads the user
+    /// from the database, applies it again and saves once more. False when neither save succeeded.
+    /// </summary>
+    private static async Task<bool> PersistAsync(HttpContext http, UserManager<AppUser> users, AppUser user, Action<AppUser> change)
     {
-        brake.RecordFailure(address);
-        brake.RecordFailure(emailKey);
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            if (attempt > 0)
+            {
+                // Identity's store works on the request's scoped context, so this is the copy UpdateAsync will save.
+                await http.RequestServices.GetRequiredService<QbAutopostDbContext>().Entry(user).ReloadAsync(http.RequestAborted);
+            }
+
+            change(user);
+            if ((await users.UpdateAsync(user)).Succeeded)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static IResult InvalidCredentials() =>
@@ -362,9 +423,8 @@ public static class AuthEndpoints
             $"Too many failed sign-ins. Retry after {seconds} seconds.", "too-many-failed-sign-ins");
     }
 
-    private static async Task<IResult> LockedOutAsync(HttpContext http, UserManager<AppUser> users, AppUser user, IClock clock)
+    private static IResult LockedOut(HttpContext http, DateTimeOffset? end, IClock clock)
     {
-        var end = await users.GetLockoutEndDateAsync(user);
         var seconds = end is { } until ? Math.Max(1, (int)Math.Ceiling((until.UtcDateTime - clock.UtcNow).TotalSeconds)) : 1;
         http.Response.Headers.RetryAfter = seconds.ToString(CultureInfo.InvariantCulture);
         return Problem(

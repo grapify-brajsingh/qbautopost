@@ -32,6 +32,9 @@ namespace QbAutopost.Data.Migrations
                 name: "ix_refresh_tokens_token_sha256",
                 table: "refresh_tokens");
 
+            // A failed login for an unknown email has no subject; NOT NULL cannot be restored while such rows exist.
+            migrationBuilder.Sql("DELETE FROM user_audit WHERE user_id IS NULL;");
+
             migrationBuilder.AlterColumn<string>(
                 name: "user_id",
                 table: "user_audit",

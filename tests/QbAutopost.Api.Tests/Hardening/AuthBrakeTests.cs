@@ -178,6 +178,48 @@ public sealed class AuthBrakeTests
         Assert.False(brake.IsBlocked(Guesser, out _));
     }
 
+    /// <summary>T-1010 fix 1b: a reservation is counted before the slow password check, atomically, so a burst cannot all pass.</summary>
+    [Fact]
+    public async Task Should_AdmitOnlyTheLimitPlusOne_When_ReservationsRaceForOneKey()
+    {
+        var (brake, _) = Brake();
+        var key = AuthBrake.EmailKey("ann@example.com");
+
+        var admitted = await Task.WhenAll(Enumerable.Range(0, 200).Select(i => Task.Run(() => brake.TryReserve(key, out var wait))));
+
+        // FailedAuthPerMinute = 3: the fourth failure is admitted and trips the block, as RecordFailure does.
+        Assert.Equal(4, admitted.Count(a => a));
+        Assert.True(brake.IsBlocked(key, out _));
+    }
+
+    [Fact]
+    public void Should_RefuseWithRetryAfter_When_ReservingForABlockedKey()
+    {
+        var (brake, _) = Brake();
+        for (var i = 0; i < 4; i++)
+        {
+            brake.RecordFailure(Guesser);
+        }
+
+        Assert.False(brake.TryReserve(Guesser, out var retryAfter));
+        Assert.Equal(TimeSpan.FromMinutes(5), retryAfter);
+    }
+
+    [Fact]
+    public void Should_GiveTheReservationBack_When_ItIsReleased()
+    {
+        var (brake, _) = Brake();
+        for (var i = 0; i < 3; i++)
+        {
+            Assert.True(brake.TryReserve(Guesser, out _));
+        }
+
+        brake.Release(Guesser);
+        Assert.True(brake.TryReserve(Guesser, out _));
+
+        Assert.False(brake.IsBlocked(Guesser, out _));
+    }
+
     private static (AuthBrake Brake, FixedClock Clock) Brake()
     {
         var clock = new FixedClock { UtcNow = new DateTime(2026, 9, 23, 12, 0, 0, DateTimeKind.Utc) };

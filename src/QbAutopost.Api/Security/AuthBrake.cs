@@ -87,6 +87,74 @@ public sealed class AuthBrake(IClock clock, RateLimitSettings limits)
     }
 
     /// <summary>
+    /// T-1010 fix 1b: counts a failure for <paramref name="key"/> <b>before</b> the slow credential check, as one atomic
+    /// step with the block test, so a parallel burst cannot all pass the check and then fail together. False when the
+    /// key is already blocked (nothing is counted); true otherwise, and this reservation may itself trip the block,
+    /// exactly as <see cref="RecordFailure(string)"/> would. A sign-in that then succeeds gives it back with <see cref="Release(string)"/>.
+    /// </summary>
+    public bool TryReserve(string key, out TimeSpan retryAfter)
+    {
+        retryAfter = TimeSpan.Zero;
+        if (!limits.Enabled)
+        {
+            return true;
+        }
+
+        while (true)
+        {
+            var now = clock.UtcNow;
+            if (!_byAddress.TryGetValue(key, out var existing))
+            {
+                if (_byAddress.TryAdd(key, Next(null, now)))
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
+            if (existing.BlockedUntil is { } until && until > now)
+            {
+                retryAfter = until - now;
+                return false;
+            }
+
+            if (_byAddress.TryUpdate(key, Next(existing, now), existing))
+            {
+                return true;
+            }
+        }
+    }
+
+    public bool TryReserve(IPAddress? address, out TimeSpan retryAfter) => TryReserve(Key(address), out retryAfter);
+
+    /// <summary>Gives back one <see cref="TryReserve(string, out TimeSpan)"/>, lifting a block the count no longer reaches.</summary>
+    public void Release(string key)
+    {
+        while (_byAddress.TryGetValue(key, out var existing))
+        {
+            if (existing.Count <= 1)
+            {
+                if (_byAddress.TryRemove(new KeyValuePair<string, Attempts>(key, existing)))
+                {
+                    return;
+                }
+
+                continue;
+            }
+
+            var count = existing.Count - 1;
+            var next = existing with { Count = count, BlockedUntil = count > limits.FailedAuthPerMinute ? existing.BlockedUntil : null };
+            if (_byAddress.TryUpdate(key, next, existing))
+            {
+                return;
+            }
+        }
+    }
+
+    public void Release(IPAddress? address) => Release(Key(address));
+
+    /// <summary>
     /// Records a key that resolved to a caller. The count is cleared: somebody who mistyped a key, fixed it, then
     /// mistyped it again is not guessing, and should not accumulate their way into a block over a working day.
     /// </summary>
@@ -94,6 +162,17 @@ public sealed class AuthBrake(IClock clock, RateLimitSettings limits)
 
     /// <summary>Clears the count kept under <paramref name="key"/>.</summary>
     public void RecordSuccess(string key) => _byAddress.TryRemove(key, out _);
+
+    /// <summary>The count after one more failure at <paramref name="now"/>, blocked once it passes the limit.</summary>
+    private Attempts Next(Attempts? existing, DateTime now)
+    {
+        var fresh = existing is null || now - existing.WindowStart > TimeSpan.FromMinutes(1);
+        var count = fresh ? 1 : existing!.Count + 1;
+        var start = fresh ? now : existing!.WindowStart;
+        return count > limits.FailedAuthPerMinute
+            ? new Attempts(count, start, now.AddMinutes(limits.FailedAuthBlockMinutes))
+            : new Attempts(count, start, null);
+    }
 
     private static string Key(IPAddress? address) => address?.ToString() ?? "unknown";
 

@@ -89,13 +89,13 @@ public sealed class RefreshTokenService(IDbContextFactory<QbAutopostDbContext> c
         return new RefreshResult(RefreshOutcome.Ok, current.UserId, raw);
     }
 
-    /// <summary>Revokes <paramref name="rawToken"/> when it belongs to <paramref name="userId"/> (logout); true when one was revoked.</summary>
-    public async Task<bool> RevokeAsync(string rawToken, string userId, CancellationToken ct)
+    /// <summary>Revokes <paramref name="rawToken"/> and nothing else (logout); true when a live token was revoked.</summary>
+    public async Task<bool> RevokeAsync(string rawToken, CancellationToken ct)
     {
         var hash = HashOf(rawToken);
         await using var db = await contexts.CreateDbContextAsync(ct);
         var revoked = await db.RefreshTokens
-            .Where(t => t.TokenSha256 == hash && t.UserId == userId && t.RevokedUtc == null)
+            .Where(t => t.TokenSha256 == hash && t.RevokedUtc == null)
             .ExecuteUpdateAsync(set => set.SetProperty(t => t.RevokedUtc, clock.UtcNow), ct);
         return revoked > 0;
     }

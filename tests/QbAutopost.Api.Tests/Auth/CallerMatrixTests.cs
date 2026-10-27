@@ -124,23 +124,18 @@ public sealed class CallerMatrixTests(CallerMatrixTests.Host host) : IClassFixtu
     }
 
     [Theory]
-    [InlineData(V1 + "/auth/login")]
-    [InlineData(V1 + "/auth/refresh")]
-    public async Task Should_NeedNoCredential_When_SigningIn(string path)
+    [InlineData(V1 + "/auth/login", HttpStatusCode.BadRequest, "invalid-request")]
+    [InlineData(V1 + "/auth/refresh", HttpStatusCode.Unauthorized, "invalid-refresh-token")]
+    public async Task Should_NeedNoCredential_When_SigningIn(string path, HttpStatusCode status, string type)
     {
         using var client = host.ClientFor(Who.None);
 
         using var response = await client.SendAsync(Request("POST", path));
 
-        // T-1010: the routes now exist, and refresh without a cookie gives its own 401. What this asserts is that the
-        // caller resolver let the request through, so that answer counts as passing and the resolver's do not.
-        await response.Content.LoadIntoBufferAsync();
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.True(
-            response.StatusCode != HttpStatusCode.Unauthorized || body.Contains("invalid-refresh-token", StringComparison.Ordinal),
-            $"{path} answered {(int)response.StatusCode} {body}");
-        Assert.NotEqual(HttpStatusCode.Forbidden, response.StatusCode);
-        Assert.DoesNotContain("ambiguous-credentials", body, StringComparison.Ordinal);
+        // T-1010: the route itself answered, not the caller resolver: the empty body is the route's own 400, and a
+        // refresh without a cookie its own 401. Anything else (a resolver 401/403, or a 500) fails.
+        Assert.Equal(status, response.StatusCode);
+        Assert.Equal(type, await TypeOf(response));
     }
 
     [Theory]

@@ -661,7 +661,7 @@
         "tags": ["Auth"],
         "operationId": "logout",
         "summary": "Sign out: revoke the current refresh token and clear the cookie.",
-        "description": "Revokes the refresh token in the `qbautopost_refresh` cookie when it belongs to the caller, and always clears the cookie. Allowed while a password change is pending.",
+        "description": "Revokes the refresh token in the `qbautopost_refresh` cookie (that token only, none of the caller's others), and always clears the cookie. Allowed while a password change is pending.",
         "x-required-scope": "signed-in",
         "security": [{ "bearerAuth": [] }],
         "responses": {

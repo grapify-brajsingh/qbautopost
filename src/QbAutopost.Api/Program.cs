@@ -276,6 +276,8 @@ if (database.Configured)
     // T-1010 (spec 11.2): refresh tokens and the user audit go through the pooled context directly.
     builder.Services.AddSingleton<RefreshTokenService>();
     builder.Services.AddSingleton<UserAuditWriter>();
+    // Fix 1a: the failed-password count, incremented atomically in PostgreSQL.
+    builder.Services.AddSingleton<LockoutCounter>();
 }
 else
 {
