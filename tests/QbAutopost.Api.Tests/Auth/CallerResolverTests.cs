@@ -96,6 +96,88 @@ public sealed class CallerResolverTests : IDisposable
     }
 
     [Fact]
+    public async Task Should_AnswerDatabaseUnavailableAndRefreshTheGate_When_TheUserLookupHitsADatabaseFailure()
+    {
+        using var client = Bearer(_factory, _factory.Users.TokenFor(DashboardRoles.Viewer));
+        await client.GetAsync("/health");
+        Assert.True(_factory.Gate.IsReady);
+        _factory.Schema = new(false, false, [], "unreachable");
+        _factory.Users.Failure = new TimeoutException("simulated");
+
+        using var response = await client.GetAsync(ListsRoute);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("database-unavailable", (await response.ReadProblemAsync()).GetProperty("type").GetString());
+        Assert.Equal("30", Assert.Single(response.Headers.GetValues("Retry-After")));
+        Assert.False(_factory.Gate.IsReady);
+    }
+
+    [Fact]
+    public async Task Should_NotFeedTheBrake_When_GenuineTokensHaveOnlyExpired()
+    {
+        var host = BrakeAtTwo();
+        foreach (var _ in Enumerable.Range(0, 3))
+        {
+            using var expired = Bearer(host, _factory.Users.ExpiredTokenFor(DashboardRoles.Viewer));
+            using var refused = await expired.GetAsync(ListsRoute);
+            Assert.Equal(HttpStatusCode.Unauthorized, refused.StatusCode);
+        }
+
+        using var client = Bearer(host, _factory.Users.TokenFor(DashboardRoles.Viewer));
+        using var response = await client.GetAsync(ListsRoute);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Should_BlockTheAddress_When_MalformedBearerTokensReachTheFailedAuthLimit()
+    {
+        var host = BrakeAtTwo();
+        foreach (var _ in Enumerable.Range(0, 3))
+        {
+            using var malformed = Bearer(host, "not-a-jwt");
+            using var refused = await malformed.GetAsync(ListsRoute);
+            Assert.Equal(HttpStatusCode.Unauthorized, refused.StatusCode);
+        }
+
+        using var client = Bearer(host, _factory.Users.TokenFor(DashboardRoles.Viewer));
+        using var response = await client.GetAsync(ListsRoute);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("JWT")]
+    [InlineData("rt+jwt")]
+    [InlineData(null)]
+    public async Task Should_Refuse_When_TheTokenTypeIsNotAnAccessToken(string? typ)
+    {
+        using var client = Bearer(_factory, _factory.Users.TokenWithType(DashboardRoles.Admin, typ));
+
+        using var response = await client.GetAsync(ListsRoute);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Should_Accept_When_AHandBuiltTokenCarriesTheAccessTokenType()
+    {
+        // The control for the theory above: the hand-built token is refused for its typ, not for how it was built.
+        using var client = Bearer(_factory, _factory.Users.TokenWithType(DashboardRoles.Admin, "at+jwt"));
+
+        using var response = await client.GetAsync(ListsRoute);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    private WebApplicationFactory<Program> BrakeAtTwo() =>
+        _factory.WithSettings(new Dictionary<string, string?>
+        {
+            ["Api:RateLimits:Enabled"] = "true",
+            ["Api:RateLimits:FailedAuthPerMinute"] = "2",
+        });
+
+    [Fact]
     public async Task Should_LetAViewerReadTheLists_When_TheTokenIsGood()
     {
         using var client = Bearer(_factory, _factory.Users.TokenFor(DashboardRoles.Viewer));

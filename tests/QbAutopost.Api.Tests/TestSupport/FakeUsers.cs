@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
 using QbAutopost.Api.Auth;
@@ -35,6 +37,38 @@ public sealed class FakeUsers : IUserGate
     public string ForgedTokenFor(string role) =>
         Sign(Add(role, false, false), "a-different-key-that-is-long-enough-0123456789", DateTime.UtcNow, DateTime.UtcNow.AddMinutes(15));
 
+    /// <summary>
+    /// A valid token for a good user, signed with the right key, whose JOSE header carries <paramref name="typ"/>
+    /// instead of <c>at+jwt</c> (null: no <c>typ</c> at all). Built by hand, because the handler always writes one.
+    /// </summary>
+    public string TokenWithType(string role, string? typ)
+    {
+        var user = Add(role, false, false);
+        var now = DateTimeOffset.UtcNow;
+        var header = typ is null
+            ? new Dictionary<string, object> { ["alg"] = "HS256" }
+            : new Dictionary<string, object> { ["alg"] = "HS256", ["typ"] = typ };
+        var payload = new Dictionary<string, object>
+        {
+            ["iss"] = "qbautopost",
+            ["aud"] = "qbautopost-dashboard",
+            ["nbf"] = now.ToUnixTimeSeconds(),
+            ["iat"] = now.ToUnixTimeSeconds(),
+            ["exp"] = now.AddMinutes(15).ToUnixTimeSeconds(),
+            [AccessTokens.Subject] = user.Id,
+            [AccessTokens.Role] = user.Role,
+            [AccessTokens.Stamp] = user.Stamp,
+            [AccessTokens.TokenId] = Guid.NewGuid().ToString("N"),
+        };
+        var unsigned = Base64UrlEncoder.Encode(JsonSerializer.Serialize(header)) + "."
+                       + Base64UrlEncoder.Encode(JsonSerializer.Serialize(payload));
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(ApiFactory.SigningKey));
+        return unsigned + "." + Base64UrlEncoder.Encode(hmac.ComputeHash(Encoding.ASCII.GetBytes(unsigned)));
+    }
+
+    /// <summary>When set, the next lookups throw it, as a store would when PostgreSQL is unreachable.</summary>
+    public Exception? Failure { get; set; }
+
     /// <summary>How many times a token reached the user lookup; the database gate must stop it first when not ready.</summary>
     public int Resolutions => _resolutions;
 
@@ -43,6 +77,11 @@ public sealed class FakeUsers : IUserGate
     public Task<Caller?> ResolveAsync(ClaimsPrincipal principal, CancellationToken ct)
     {
         Interlocked.Increment(ref _resolutions);
+        if (Failure is { } failure)
+        {
+            throw failure;
+        }
+
         var id = principal.FindFirstValue(AccessTokens.Subject);
         var stamp = principal.FindFirstValue(AccessTokens.Stamp);
         var caller = id is not null && _users.TryGetValue(id, out var user) && !user.Disabled && user.Stamp == stamp
@@ -65,6 +104,7 @@ public sealed class FakeUsers : IUserGate
     private static string Sign(User user, string key, DateTime notBefore, DateTime expires) =>
         new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
         {
+            TokenType = AccessTokens.TokenType,
             Issuer = "qbautopost",
             Audience = "qbautopost-dashboard",
             NotBefore = notBefore,

@@ -36,6 +36,14 @@ public sealed class ScopeTests
         Assert.False(Caller.ForClient(Key(scope)).Allows(scope));
 
     [Fact]
+    public void Should_DropPeopleOnlyAndSignedIn_When_ClientsJsonListsThemOnAKey()
+    {
+        var caller = Caller.ForClient(Key(ApiScopes.RequestsPost, ApiScopes.UsersManage, ApiScopes.SignedIn, ApiScopes.QbRead));
+
+        Assert.Equal(new[] { ApiScopes.QbRead }, caller.Scopes);
+    }
+
+    [Fact]
     public void Should_GrantListsRead_When_ApiClientHoldsQbRead() =>
         Assert.True(Caller.ForClient(Key(ApiScopes.QbRead)).Allows(ApiScopes.ListsRead));
 

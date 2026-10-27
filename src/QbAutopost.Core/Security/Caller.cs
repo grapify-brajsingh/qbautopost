@@ -31,7 +31,10 @@ public sealed record Caller(
             : ApiScopes.Alternatives(scope).Any(s =>
                 s.Equals(ApiScopes.SignedIn, StringComparison.OrdinalIgnoreCase) || Scopes.Contains(s));
 
-    /// <summary>The caller an API key resolves to.</summary>
+    /// <summary>
+    /// The caller an API key resolves to. R18, defence in depth: the people-only scopes and <c>signed-in</c> are
+    /// dropped even when <c>clients.json</c> lists them, so no later check can find them on a key.
+    /// </summary>
     public static Caller ForClient(ApiClient client) =>
         new(
             CallerKind.ApiClient,
@@ -39,7 +42,9 @@ public sealed record Caller(
             client.Name ?? client.Id,
             null,
             null,
-            new HashSet<string>(client.Scopes, StringComparer.OrdinalIgnoreCase),
+            new HashSet<string>(
+                client.Scopes.Where(s => !ApiScopes.PeopleOnly.Contains(s) && !s.Equals(ApiScopes.SignedIn, StringComparison.OrdinalIgnoreCase)),
+                StringComparer.OrdinalIgnoreCase),
             false);
 
     /// <summary>The caller a signed-in user resolves to, with the scopes of <paramref name="role"/> and no others.</summary>

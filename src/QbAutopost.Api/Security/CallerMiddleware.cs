@@ -211,11 +211,18 @@ public sealed class CallerMiddleware(RequestDelegate next, IOptions<AppSettings>
             return null;
         }
 
-        var validation = await Tokens.ValidateTokenAsync(token, _validation ??= AccessTokens.ValidationParameters(jwt));
+        var parameters = _validation ??= AccessTokens.ValidationParameters(jwt);
+        var validation = await Tokens.ValidateTokenAsync(token, parameters);
         if (!validation.IsValid)
         {
-            // T-1009: a token that does not validate is a guess as much as an unknown key is.
-            brake.RecordFailure(address);
+            // T-1009: a token that does not validate is a guess as much as an unknown key is. R16: except a genuine one
+            // that has only expired, which every open dashboard sends every 15 minutes; counting those would block
+            // the office address.
+            if (!await IsGenuineButExpiredAsync(token, validation, parameters))
+            {
+                brake.RecordFailure(address);
+            }
+
             log.LogWarning(
                 "Request {Method} {Path} refused: invalid or expired access token ({Reason})",
                 context.Request.Method, context.Request.Path.Value, validation.Exception?.GetType().Name ?? "invalid");
@@ -232,16 +239,27 @@ public sealed class CallerMiddleware(RequestDelegate next, IOptions<AppSettings>
 
         if (!gate.IsReady)
         {
-            context.Response.Headers.RetryAfter = DatabaseGateFilter.RetryAfterSeconds.ToString(CultureInfo.InvariantCulture);
-            await Problem(
-                context, problems, StatusCodes.Status503ServiceUnavailable, DatabaseGateFilter.Title,
-                $"Signed-in users are checked against the database, which is not available ({gate.Reason ?? "unreachable"}). API keys are unaffected.",
-                "database-unavailable");
+            await DatabaseGateFilter.Unavailable(context, gate).ExecuteAsync(context);
             return null;
         }
 
-        var caller = await context.RequestServices.GetRequiredService<IUserGate>()
-            .ResolveAsync(new ClaimsPrincipal(validation.ClaimsIdentity), context.RequestAborted);
+        Caller? caller;
+        try
+        {
+            caller = await context.RequestServices.GetRequiredService<IUserGate>()
+                .ResolveAsync(new ClaimsPrincipal(validation.ClaimsIdentity), context.RequestAborted);
+        }
+        catch (Exception ex) when (DatabaseGate.IsDatabaseFailure(ex))
+        {
+            // Spec 10.7, as DatabaseGateFilter does: the failure is the trigger for the gate to look again.
+            log.LogWarning(
+                "Request {Method} {Path} refused: the user lookup failed with {ExceptionType}",
+                context.Request.Method, context.Request.Path.Value, ex.GetType().Name);
+            await gate.RefreshAsync(context.RequestAborted);
+            await DatabaseGateFilter.Unavailable(context, gate).ExecuteAsync(context);
+            return null;
+        }
+
         if (caller is null)
         {
             // A genuine token for a user who may no longer use it is not guessing, so the brake is not fed: a disabled
@@ -254,6 +272,23 @@ public sealed class CallerMiddleware(RequestDelegate next, IOptions<AppSettings>
         }
 
         return caller;
+    }
+
+    /// <summary>
+    /// R16: true when the only thing wrong is the lifetime: signature, issuer, audience and <c>typ</c> all validate
+    /// once the lifetime is not checked.
+    /// </summary>
+    private static async Task<bool> IsGenuineButExpiredAsync(
+        string token, TokenValidationResult validation, TokenValidationParameters parameters)
+    {
+        if (validation.Exception is not SecurityTokenExpiredException)
+        {
+            return false;
+        }
+
+        var ignoringLifetime = parameters.Clone();
+        ignoringLifetime.ValidateLifetime = false;
+        return (await Tokens.ValidateTokenAsync(token, ignoringLifetime)).IsValid;
     }
 
     /// <summary>The token after <c>Bearer </c>; null when there is no Bearer header. An empty token is still a Bearer attempt.</summary>

@@ -18,6 +18,12 @@ public static class AccessTokens
     public const string Stamp = "stamp";
     public const string TokenId = "jti";
 
+    /// <summary>
+    /// The JOSE <c>typ</c> header every access token carries (RFC 9068), and the only one validation accepts, so no
+    /// other JWT signed with the same key (a future refresh or reset token) can stand in for an access token.
+    /// </summary>
+    public const string TokenType = "at+jwt";
+
     public static SymmetricSecurityKey SigningKey(JwtSettings jwt) => new(Encoding.UTF8.GetBytes(jwt.SigningKey));
 
     /// <summary>Issuer, audience, lifetime with no clock skew (one machine issues and checks), HS256 only.</summary>
@@ -27,6 +33,7 @@ public static class AccessTokens
         ValidAudience = jwt.Audience,
         IssuerSigningKey = SigningKey(jwt),
         ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
+        ValidTypes = [TokenType],
         ValidateIssuer = true,
         ValidateAudience = true,
         ValidateLifetime = true,

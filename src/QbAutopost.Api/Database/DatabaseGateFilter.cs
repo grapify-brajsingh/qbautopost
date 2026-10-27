@@ -42,7 +42,8 @@ public static class DatabaseGateFilter
         return group;
     }
 
-    private static IResult Unavailable(HttpContext http, DatabaseGate gate)
+    /// <summary>The one <c>503 database-unavailable</c> answer, shared with <c>CallerMiddleware</c>'s Bearer path.</summary>
+    public static IResult Unavailable(HttpContext http, DatabaseGate gate)
     {
         http.Response.Headers.RetryAfter = RetryAfterSeconds.ToString(CultureInfo.InvariantCulture);
         return Results.Problem(
