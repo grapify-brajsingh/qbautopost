@@ -1,0 +1,26 @@
+# Local PostgreSQL for development only (spec saved-requests-postgres §5.4). The QuickBooks server runs its own
+# PostgreSQL service, installed by deploy/install-postgres.ps1 with generated passwords; this file is never used there.
+#
+#   docker compose -f deploy/dev/docker-compose.yml up -d
+#
+# The password below is a throwaway value for this local container, bound to 127.0.0.1 only. It is not a secret and
+# must never be reused on a server. src/QbAutopost.Data/DesignTimeFactory.cs uses the same default.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: qbautopost
+      POSTGRES_USER: qbautopost
+      POSTGRES_PASSWORD: qbautopost-dev # local development only
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - qbautopost-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qbautopost -d qbautopost"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  qbautopost-pgdata:

@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="Testcontainers.PostgreSql" Version="4.16.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
   </ItemGroup>
@@ -17,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\QbAutopost.Core\QbAutopost.Core.csproj" />
+    <ProjectReference Include="..\..\src\QbAutopost.Data\QbAutopost.Data.csproj" />
     <ProjectReference Include="..\QbAutopost.Api.Tests\QbAutopost.Api.Tests.csproj" />
   </ItemGroup>
 
