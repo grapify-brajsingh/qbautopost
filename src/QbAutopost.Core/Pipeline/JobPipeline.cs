@@ -220,31 +220,12 @@ public sealed class JobPipeline(
     private async Task<StatementSummary> ReadStatementAsync(JobFile file, Rules rules, JobSpec spec, string outputDir, CancellationToken ct)
     {
         var parsed = await statementReader.ReadAsync(file, rules, Path.Combine(outputDir, HermesSpecReader.HermesDir), ct);
-        var summary = new StatementSummary
-        {
-            File = parsed.File,
-            Last4 = parsed.Last4 ?? file.Last4FromName,
-            Kind = parsed.Kind,
-            Layout = parsed.Layout,
-            Rows = parsed.Rows.Count,
-            Lines = parsed.Rows,
-            Totals = parsed.Totals,
-            HoldReason = parsed.HoldReason,
-            Errors = parsed.Errors,
-        };
+
+        // FR-3/FR-4, shared with FR-A-7's folder validation so the two can never reach different verdicts.
+        var summary = StatementCheck.Reconcile(parsed, file);
         if (summary.IsHeld)
         {
             return summary;
-        }
-
-        // FR-4: T2 output is checked against the statement's own totals; CSV/XLSX against the balance column.
-        var reconcile = parsed.Totals is { } totals
-            ? ReconcileGate.CheckExtraction(parsed.Kind!.Value, parsed.Rows, totals)
-            : ReconcileGate.CheckBalanceChain(parsed.Rows);
-        summary = summary with { Reconcile = reconcile };
-        if (!reconcile.Ok)
-        {
-            return summary with { HoldReason = HoldReasons.ReconcileFailed };
         }
 
         // SPEC-GAP T-103: a statement whose layout kind contradicts the requirement (bank vs card) is held.

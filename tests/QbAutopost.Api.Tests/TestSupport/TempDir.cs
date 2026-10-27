@@ -33,11 +33,30 @@ public sealed class TempDir : IDisposable
         return target;
     }
 
+    /// <summary>
+    /// Deletes the folder, retrying briefly. <b>Q-62</b>: this threw <c>IOException</c> on
+    /// <c>qbautopost-yyyyMMdd.log</c> in roughly one full run out of three once T-912 added 42 more tests — always in
+    /// a different, otherwise-passing test class. The cause is teardown, not behaviour: <c>WebApplicationFactory</c>
+    /// returns from <c>Dispose</c> before Serilog's shared file sink has released the handle, and the folder goes a
+    /// moment later. Retrying is the honest fix; the alternative is a suite that fails at random for a reason that
+    /// has nothing to do with what any test asserts.
+    /// <para>
+    /// If the handle is still held after the last attempt the folder is left behind: it is under the machine's temp
+    /// directory, so the cost is a few stale kilobytes, and failing a green test to report them would be worse.
+    /// </para>
+    /// </summary>
     public void Dispose()
     {
-        if (Directory.Exists(Path))
+        for (var attempt = 0; attempt < 10 && Directory.Exists(Path); attempt++)
         {
-            Directory.Delete(Path, recursive: true);
+            try
+            {
+                Directory.Delete(Path, recursive: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Thread.Sleep(100);
+            }
         }
     }
 }

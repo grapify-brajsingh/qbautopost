@@ -27,8 +27,8 @@ public static class StartupLog
         }
 
         log.LogInformation(
-            "Settings: API {Bind}, DryRunDefault {DryRunDefault}, company {CompanyName}, company file {CompanyFile} ({CompanyFileState}), rules {RulesFile} ({RulesState})",
-            s.Api.Bind, s.DryRunDefault, s.Company.Name, s.Company.FilePath, State(s.Company.FilePath), s.Company.RulesFile, State(s.Company.RulesFile));
+            "Settings: API {Bind} (legacy routes {LegacyRoutes}), DryRunDefault {DryRunDefault}, company {CompanyName}, company file {CompanyFile} ({CompanyFileState}), rules {RulesFile} ({RulesState})",
+            s.Api.Bind, s.Api.LegacyRoutes ? "on" : "off", s.DryRunDefault, s.Company.Name, s.Company.FilePath, State(s.Company.FilePath), s.Company.RulesFile, State(s.Company.RulesFile));
         log.LogInformation(
             "Data files: ledger {Ledger} ({LedgerState}), QuickBooks lists {QbLists} ({QbListsState}), job index {JobIndex} ({JobIndexState}), logs {Logs}",
             s.Paths.Ledger, State(s.Paths.Ledger), s.Paths.QbLists, State(s.Paths.QbLists), s.Paths.JobIndex, State(s.Paths.JobIndex), s.Paths.Logs);

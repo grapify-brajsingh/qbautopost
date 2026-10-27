@@ -17,8 +17,13 @@ public static class LoggingSetup
     public const string FilePrefix = "qbautopost-";
     public const int RetainedDays = 31;
 
+    /// <summary>
+    /// T-912 (api-v1 §8): <c>jobId</c> keeps its own column — a line about a job is grepped by <c>[jobId]</c> — and
+    /// <c>requestId</c> and <c>clientId</c> get theirs beside it, so "which call did this" and "whose call was it"
+    /// are answerable from the text file rather than only from a structured sink nobody has configured.
+    /// </summary>
     public const string OutputTemplate =
-        "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] [{jobId}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
+        "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] [{jobId}] [{requestId}] [{clientId}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
 
     private static readonly Dictionary<string, LogEventLevel> DefaultOverrides = new(StringComparer.Ordinal)
     {
@@ -53,7 +58,8 @@ public static class LoggingSetup
 
         var scrubber = new SecretScrubber(SecretValues(configuration, settings));
         config.Enrich.FromLogContext()
-            .Enrich.With<JobIdEnricher>();
+            .Enrich.With<JobIdEnricher>()
+            .Enrich.With<RequestContextEnricher>();
 
         LoggerSinkConfiguration.Wrap(
             config.WriteTo,

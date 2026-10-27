@@ -3,6 +3,7 @@ using QbAutopost.Api.Configuration;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Pipeline;
+using QbAutopost.Core.Security;
 using QbAutopost.Core.Store;
 
 namespace QbAutopost.Api.Jobs;
@@ -35,6 +36,16 @@ public sealed class JobAdmission(
         if (errors.Count > 0)
         {
             return new Admission(AdmissionOutcome.Invalid, null, errors);
+        }
+
+        // T-911 (FR-A-17): with remote callers (D-4) the folder is a stranger's string, so it must sit where the
+        // owner said jobs live. Checked after Validate so a caller still learns "does not exist" before "not
+        // allowed" — the likelier mistake, and an answer that reveals nothing they had not already named.
+        if (!PathAllowList.IsInside(folder, [.. settings.Value.Paths.AllowedJobRoots]))
+        {
+            return Admission.Rejected(
+                AdmissionOutcome.Invalid,
+                $"folder '{folder}' is outside the folders this server accepts jobs from (Paths:AllowedJobRoots)");
         }
 
         var jobId = FolderReader.JobIdOf(folder!);

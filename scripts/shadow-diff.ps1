@@ -174,7 +174,7 @@ Write-Host "Job $($doc.jobId): $($results.Count) rows -> $OutFile"
 foreach ($group in $counts) { Write-Host ('  {0,-20} {1}' -f $group.Name, $group.Count) }
 $bad = @($results | Where-Object { $disagreeing -contains $_.Status }).Count
 if ($bad -gt 0) {
-    Write-Host "$bad disagreement(s). Teach rules for real mapping differences (POST /rules/alias, /rules/account) and log them in docs/tracker.md (T-803)."
+    Write-Host "$bad disagreement(s). Teach rules for real mapping differences (POST /api/v1/rules/alias, POST /api/v1/rules/account) and log them in docs/tracker.md (T-803)."
     exit 3
 }
 Write-Host 'No disagreements.'

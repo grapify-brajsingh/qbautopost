@@ -60,7 +60,12 @@ public static partial class FolderReader
     }
 
     /// <summary>Lists the inputs of a valid folder and creates <c>output/</c>. Only the top level of each input folder is read (F4).</summary>
-    public static JobInput Read(string folder)
+    /// <param name="createOutput">
+    /// T-914 (FR-A-7): <c>false</c> lists the folder without creating <c>output/</c>. Folder validation answers
+    /// "would this run?" and must leave nothing behind — a caller may be validating a read-only share, and a folder
+    /// that gained an empty <c>output/</c> from a question nobody acted on is a change the caller did not ask for.
+    /// </param>
+    public static JobInput Read(string folder, bool createOutput = true)
     {
         var errors = Validate(folder);
         if (errors.Count > 0)
@@ -76,7 +81,10 @@ public static partial class FolderReader
             : [];
 
         var outputDir = Path.Combine(root, OutputDirName);
-        Directory.CreateDirectory(outputDir);
+        if (createOutput)
+        {
+            Directory.CreateDirectory(outputDir);
+        }
 
         return new JobInput
         {

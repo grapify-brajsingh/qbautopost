@@ -73,7 +73,11 @@ Copy-Item C:\qb-autopost\poc\jobs\2026-09-tropicana C:\qb-jobs\ -Recurse -Force
       `QuickBooks: app name QbAutopost …`, `Hermes: disabled …`, `QuickBooks gateway: Sdk`,
       `QbAutopost ready, listening on http://127.0.0.1:5080`.
 - [ ] **3.3** `Company file … (found)` — if it says `missing`, fix `Company:FilePath` and restart.
-- [ ] **3.4** It does **not** exit. `Api:ApiKey is not set` means step 2.2 did not take effect.
+- [ ] **3.4** It does **not** exit. `No API caller can authenticate` means step 2.2 did not take effect.
+- [ ] **3.5** Two lines about the key surface: `API callers: 0 client(s) in …` and a warning that the shared
+      `Api:ApiKey` is accepted and carries every scope. That is expected for the POC (`Api:AllowLegacyKey` is
+      `true`); a real installation issues one key per caller with `scripts\new-api-client.ps1`
+      (`docs/runbook.md` §3.4). Every route below is served under `/api/v1`, and the step script uses those paths.
 
 Open **window 2** for the rest: `cd C:\qb-autopost`.
 
@@ -112,6 +116,15 @@ Open **window 2** for the rest: `cd C:\qb-autopost`.
 
 ## 6. Dry run (nothing is written to QuickBooks)
 
+- [ ] **6.0** Optional, and it takes no job id: check the folder first.
+
+  ```powershell
+  $h = @{ 'X-Api-Key' = $env:QBAUTOPOST__Api__ApiKey }
+  Invoke-RestMethod -Method Post -Uri http://127.0.0.1:5080/api/v1/jobs/validate -Headers $h `
+    -ContentType 'application/json' -Body '{ "folder": "C:\\qb-jobs\\2026-09-tropicana" }'
+  ```
+
+  Expect `ok: true`, two statements, each with `reconcile.ok: true`, and no `output\` folder created.
 - [ ] **6.1** `.\scripts\qb-server-check.ps1 -Step dryrun -Folder C:\qb-jobs\2026-09-tropicana`
 - [ ] **6.2** Expect `"status": "ready"`, `"toPost": 15`, `"held": 0`, `"skipped": 1`
       (the skipped line is the card's AUTOMATIC PAYMENT).

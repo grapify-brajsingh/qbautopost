@@ -1,3 +1,5 @@
+using QbAutopost.Api.Endpoints;
+using QbAutopost.Api.Security;
 using Serilog;
 using Serilog.Events;
 
@@ -26,6 +28,13 @@ public static class RequestLog
                 {
                     context.Set(JobIdEnricher.PropertyName, value.Split('#')[0]);
                 }
+
+                // T-912 (api-v1 §8): this line is written after the key check's LogContext scope has gone, so the
+                // caller has to be put on it here — otherwise the one line per request is the one without a client.
+                if (ApiKeyMiddleware.ClientOf(http) is { } client)
+                {
+                    context.Set(ApiKeyMiddleware.ClientIdProperty, client.Id);
+                }
             };
         });
         return app;
@@ -34,6 +43,6 @@ public static class RequestLog
     public static LogEventLevel Level(HttpContext http, double elapsedMs, Exception? ex) =>
         ex is not null || http.Response.StatusCode >= 500 ? LogEventLevel.Error
         : http.Response.StatusCode >= 400 ? LogEventLevel.Warning
-        : http.Request.Path.StartsWithSegments("/health", StringComparison.OrdinalIgnoreCase) ? LogEventLevel.Debug
+        : ApiRoutes.IsHealth(http.Request.Path) ? LogEventLevel.Debug
         : LogEventLevel.Information;
 }

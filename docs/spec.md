@@ -93,7 +93,7 @@ Transactions Type > Deposit
 ```
 
 **MUST:**
-- F1. `POST /jobs` returns 400 if `requirement.txt` is missing, `statements\` is missing or empty, or the path is not an absolute existing directory.
+- F1. `POST /api/v1/jobs` returns 400 if `requirement.txt` is missing, `statements\` is missing or empty, or the path is not an absolute existing directory.
 - F2. Files in `statements\` whose extension is not csv/xlsx/pdf are reported in `result.json.unreadable[]` with reason `unsupported-extension`; the job continues.
 - F3. A job id already present in `ledger.json.jobs[]` is refused with 409 unless `force=true`.
 - F4. Nothing under `output\` is ever treated as input, even on re-run.
@@ -101,20 +101,40 @@ Transactions Type > Deposit
 
 ## 6. API
 
-Base: `http://<bind>:<port>` (default `127.0.0.1:5080`). Header `X-Api-Key: <key>` required on every route except `GET /health/*`. Errors use RFC 7807 problem details.
+> **The route contract is `docs/spec-api-v1.md`** (M9, owner decisions D-1…D-4, 2026-09-22). This section is the
+> summary; where the two disagree, `spec-api-v1.md` wins, and this table was rewritten to it at T-914.
 
-| Method & path | Request | Response | Rules |
-|---|---|---|---|
-| `POST /jobs` | `{ "folder": "C:\\qb-jobs\\2026-08-tropicana", "dryRun": true, "force": false }` | `202 { "jobId": "2026-08-tropicana", "status": "queued" }` | F1, F3. `dryRun` defaults to `Settings.DryRunDefault` (true). |
-| `GET /jobs/{id}` | — | `200 JobView` (below) | 404 if unknown. |
-| `POST /jobs/{id}/post` | — | `202` | Only from `ready`. 409 otherwise. |
-| `GET /jobs` | `?status=` | `200 [JobSummary]` | In-memory + `status.json` scan of known folders. |
-| `POST /batches/{id}/undo` | — | `200 { "deleted": n, "failed": [{ "txnId", "message" }] }` | `TxnDelRq` per ledger entry; marks entries `undone`. |
-| `POST /rules/alias` | `{ "fragment": "UNKNOWN PLUMBER", "name": "Unknown Plumber LLC", "kind": "vendor|customer" }` | `200` | Writes `rules.json`. |
-| `POST /rules/account` | `{ "vendor": "Unknown Plumber LLC", "account": "Repairs and Maintenance" }` | `200` | Writes `rules.json`. 400 if account not in `qb-lists.json` (when lists exist). |
-| `POST /qb/sync-lists` | — | `200 { accounts, vendors, customers, missingInRules[] }` | Writes `qb-lists.json`. |
-| `GET /health/quickbooks` | — | `200 { ok, companyFile, message }` | `HostQuery`. 503 when not ok. |
-| `GET /health/hermes` | — | `200 { ok, model, latencyMs }` | One 5-token completion. 503 when not ok. |
+Base: `http://<bind>:<port>/api/v1` (default `127.0.0.1:5080`). Plain HTTP only while the bind is a loopback
+address (FR-A-14). Header `X-Api-Key: <key>` on every route **except `GET /api/v1/health` and
+`GET /api/v1/health/ready`** — every other health route opens a QuickBooks session or probes the SDK and needs the
+`health:read` scope (FR-A-13; this narrows the pre-M9 rule that left all of `/health/*` open). Errors use RFC 7807
+problem details and carry `requestId`. Every mutating route accepts `Idempotency-Key`. The pre-M9 flat paths
+(`/jobs`, `/health/…` without the prefix) are also mapped while `Api:LegacyRoutes` is true and each use is logged;
+they go one release after the owner confirms no caller uses them (Q-53).
+
+| Method & path | Scope | Request | Response | Rules |
+|---|---|---|---|---|
+| `GET /api/v1/health` | *(none)* | — | `200 { ok, status, version, process, worker, … }` | In-process state only; never QuickBooks, never Hermes. FR-A-1. |
+| `GET /api/v1/health/ready` | *(none)* | — | `200 { ok, checks[] }` | Local checks only: config, prompts, rules, worker. FR-A-2. **The route to point monitoring at.** |
+| `GET /api/v1/health/sdk` | `health:read` | — | `200 { ok, registered, bitness, … }` | COM registration and bitness; opens no company file. FR-A-3. |
+| `GET /api/v1/health/quickbooks` | `health:read` | — | `200 { ok, companyFile, message }` | `HostQuery`. 503 when not ok. |
+| `GET /api/v1/health/hermes` | `health:read` | — | `200 { ok, model, latencyMs }` | One 5-token completion. 503 when not ok. |
+| `POST /api/v1/jobs` | `jobs:write` | `{ "folder": "C:\\qb-jobs\\2026-08-tropicana", "dryRun": true, "force": false }` | `202 { "jobId": "2026-08-tropicana", "status": "queued" }` | F1, F3, and `Paths:AllowedJobRoots`. `dryRun` defaults to `Settings.DryRunDefault` (true). |
+| `POST /api/v1/jobs/validate` | `jobs:read` | `{ "folder": "…" }` | `200`/`422 { ok, errors[], statements[], unreadable[] }` | F1 + statement parse + G1. Queues nothing, writes nothing, calls nobody. FR-A-7. |
+| `GET /api/v1/jobs/{id}` | `jobs:read` | — | `200 JobView` (below) | 404 if unknown. |
+| `POST /api/v1/jobs/{id}/post` | `jobs:write` | — | `202` | Only from `ready`. 409 otherwise. |
+| `GET /api/v1/jobs` | `jobs:read` | `?status=` | `200 [JobSummary]` | In-memory + `status.json` scan of known folders. |
+| `POST /api/v1/quickbooks/connection/test` | `qb:read` | `{ companyFile?, timeoutSeconds?, includeCompanyInfo? }` | `200`/`503 { ok, steps[], totalMs, … }` | One full session round trip with per-step timings. FR-A-4. |
+| `POST /api/v1/quickbooks/company-file/validate` | `qb:read` | `{ companyFile?, requireBackup? }` | `200`/`422 { ok, checks[] }` | Is *this* file the right one, open, and backed up? FR-A-5. |
+| `POST /api/v1/quickbooks/transactions/validate` | `qb:read` | `DirectRequest` | `200`/`422 ValidationResult` | Offline: map → G3 → G4 → qbXML, never the SDK. FR-A-6. |
+| `POST /api/v1/quickbooks/transactions` | `qb:post` | `DirectRequest` | `200`/`202`/`503 BatchResult` | Post JSON rows through the same engine as a job. FR-A-8…FR-A-10. |
+| `GET /api/v1/batches/{id}` | `qb:read` | — | `200 BatchResult` | The poll target for a post that outlasted its budget. FR-A-11. |
+| `POST /api/v1/batches/{id}/undo` | `qb:post` | — | `200 { "deleted": n, "failed": [{ "txnId", "message" }] }` | `TxnDelRq` per ledger entry; marks entries `undone`. |
+| `POST /api/v1/rules/alias` | `rules:write` | `{ "fragment": "UNKNOWN PLUMBER", "name": "Unknown Plumber LLC", "kind": "vendor|customer" }` | `200` | Writes `rules.json`. |
+| `POST /api/v1/rules/account` | `rules:write` | `{ "vendor": "Unknown Plumber LLC", "account": "Repairs and Maintenance" }` | `200` | Writes `rules.json`. 400 if account not in `qb-lists.json` (when lists exist). |
+| `GET /api/v1/quickbooks/lists` | `qb:read` | — | `200 { syncedUtc, accounts[], vendors[], customers[] }` | Reads the cached `qb-lists.json`; never opens a session. |
+| `POST /api/v1/quickbooks/lists/sync` | `qb:read` | — | `200 { accounts, vendors, customers, missingInRules[] }` | Writes `qb-lists.json`. `POST /api/v1/qb/sync-lists` is the deprecated spelling. |
+| `GET /api/v1/openapi.json` · `GET /api/v1/reference` | `health:read` | — | `200` | Only when `Api:Reference:Enabled`; disabled means **404, not 403**. FR-A-18. |
 
 `JobView`:
 ```json
@@ -134,7 +154,7 @@ Base: `http://<bind>:<port>` (default `127.0.0.1:5080`). Header `X-Api-Key: <key
 }
 ```
 
-Job state machine (**MUST**): `queued → analysing → (failed | ready | posting)`; `ready → posting` only via `POST /jobs/{id}/post`; `posting → posted | partial`; `posted|partial → undone` via undo. `status.json` is written on every transition. On startup, any job found in `analysing` is set to `failed (interrupted)`; any job found in `posting` is set to `partial (interrupted — run duplicates before re-post)`.
+Job state machine (**MUST**): `queued → analysing → (failed | ready | posting)`; `ready → posting` only via `POST /api/v1/jobs/{id}/post`; `posting → posted | partial`; `posted|partial → undone` via undo. `status.json` is written on every transition. On startup, any job found in `analysing` is set to `failed (interrupted)`; any job found in `posting` is set to `partial (interrupted — run duplicates before re-post)`.
 
 ## 7. Domain model (Core)
 
@@ -153,7 +173,7 @@ Ported from the POC (`poc/QbAutopost`), namespaces `QbAutopost.Core.*`.
 Each FR lists behaviour, then acceptance criteria. "Held" always means: removed from the postable set, recorded in `analysis.json`/`result.json` with `reason`, and never silently dropped.
 
 ### FR-1 Folder validation
-See §5 F1–F5. Runs synchronously inside `POST /jobs`.
+See §5 F1–F5. Runs synchronously inside `POST /api/v1/jobs`, and on its own in `POST /api/v1/jobs/validate` (FR-A-7).
 
 ### FR-2 Requirement → job spec (Hermes T1) + gate G2
 - Send `requirement.txt` to Hermes with prompt `spec`. Parse into `JobSpec` (schema §9.1).
@@ -220,7 +240,7 @@ LineAccount tiers (first hit wins; `Tier` recorded):
 - Writes `request.qbxml` and the three paste-ready CSVs even in dry run.
 
 ### FR-10 Dry run and post
-- `dryRun=true` → after FR-9 the job is `ready`. `POST /jobs/{id}/post` re-runs FR-6…FR-9 (rules may have changed), then posts.
+- `dryRun=true` → after FR-9 the job is `ready`. `POST /api/v1/jobs/{id}/post` re-runs FR-6…FR-9 (rules may have changed), then posts.
 - `dryRun=false` → posts immediately after FR-9.
 
 ### FR-11 Posting through the SDK
@@ -242,7 +262,7 @@ LineAccount tiers (first hit wins; `Tier` recorded):
 - `AccountQuery`, `VendorQuery`, `CustomerQuery` (ActiveOnly) → `qb-lists.json`; response lists every account named in `rules.json` that QuickBooks does not have.
 
 ### FR-16 Health
-- `/health/hermes`: `POST /v1/chat/completions` with a 5-token prompt; ok iff 200 and non-empty content. `/health/quickbooks`: `HostQuery` status 0.
+- `/api/v1/health/hermes`: `POST /v1/chat/completions` (Hermes own route) with a 5-token prompt; ok iff 200 and non-empty content. `/api/v1/health/quickbooks`: `HostQuery` status 0. Both need the `health:read` scope (FR-A-13).
 
 ### FR-17 Audit
 - Every Hermes request/response saved under `output/hermes/`; every SDK request/response saved as `request.qbxml`/`response.qbxml` (queries as `query-<n>.qbxml`). Secrets never written.
@@ -307,6 +327,13 @@ POC schema plus: `InvoiceMatchDays` (5), `ModelConfidenceThreshold` (0.8), `Cust
 ```
 Secrets may also come from environment variables (`QBAUTOPOST__Hermes__ApiKey`).
 
+M9 added `Api:{LegacyRoutes, AllowLegacyKey, MaxTransactionsPerRequest, SyncPostTimeoutSeconds,
+IdempotencyRetentionDays, AuditRetentionDays, AllowInsecureRemote, MaxRequestBodyBytes, Tls, Cors, RateLimits,
+Reference}`, `QuickBooks:{MaxLineAmount, AllowedDateWindow, AllowCompanyFileOverride, AllowedCompanyFolders,
+ConnectionTestTimeoutSeconds}` and `Paths:{Clients, ApiBatches, AllowedJobRoots}`. The full list with defaults is
+`docs/spec-api-v1.md` §12; what each one means to an operator is `docs/runbook.md` §3.1–§3.6. `Api:Tls:PfxPassword`
+is environment-only and is deliberately absent from the shipped file.
+
 ## 13. Ledger (`ledger.json`)
 
 `{ jobs: [ { jobId, batchId, postedUtc, posted, held, skipped, txnIds[], undone } ], posted: [ { batchId, jobId, fingerprint, txnId, editSequence, kind, account, payee, lineAccount, amount, date, refNumber, memo, sourceFile, lineNo, undone } ] }`. Written atomically (temp file + rename) after every batch and every undo.
@@ -324,7 +351,7 @@ Secrets may also come from environment variables (`QBAUTOPOST__Hermes__ApiKey`).
 - `tests/QbAutopost.Core.Tests` (xUnit): parsers (CSV/XLSX/PDF-text fixtures), fingerprint, mapper routing table (one test per row of the FR-6 table), tiers, G1/G3/G4/G5, qbXML builder (golden files), response parsers, ledger, invoice matcher.
 - `tests/QbAutopost.Api.Tests`: `WebApplicationFactory` with `FakeHermesClient` (canned JSON from `tests/fixtures/hermes/`) and `FakeQbGateway` (records requests; returns synthetic `*AddRs` with sequential TxnIDs; can be told to fail line N or hang). Covers the full state machine, dry-run → post, undo, rules endpoints, startup recovery.
 - **MUST:** no test contacts a real Hermes or QuickBooks. `dotnet test` passes on Linux.
-- Manual verification on the server (tracked in `tracker.md`, M6/M8): `/health/*`, sync-lists, a dry run on a real folder, a post to a **copy** of the company file, undo.
+- Manual verification on the server (tracked in `tracker.md`, M6/M8): `/api/v1/health/*`, lists/sync, a dry run on a real folder, a post to a **copy** of the company file, undo.
 
 ## 16. Open questions and assumed answers
 
