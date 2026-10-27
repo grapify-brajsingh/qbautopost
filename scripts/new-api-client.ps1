@@ -18,7 +18,9 @@
 
 .PARAMETER Scopes
     Scopes to grant, from: health:read, qb:read, qb:post, qb:post:ai, qb:debug, jobs:read, jobs:write,
-    rules:write, admin. Grant the fewest that let the caller do its job.
+    rules:write, admin, requests:submit, requests:read, lists:read. Grant the fewest that let the caller do its
+    job; the n8n workflow needs only requests:submit. requests:edit, requests:post, requests:admin and users:manage
+    are people-only (saved-requests spec 11.3) and no key can hold them.
 
 .PARAMETER AllowedCidrs
     Optional networks the caller may connect from, e.g. 10.0.0.0/24. Empty means anywhere.
@@ -50,7 +52,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$validScopes = @('health:read', 'qb:read', 'qb:post', 'qb:post:ai', 'qb:debug', 'jobs:read', 'jobs:write', 'rules:write', 'admin')
+$validScopes = @('health:read', 'qb:read', 'qb:post', 'qb:post:ai', 'qb:debug', 'jobs:read', 'jobs:write', 'rules:write', 'admin',
+    'requests:submit', 'requests:read', 'lists:read')
 foreach ($scope in $Scopes) {
     if ($validScopes -notcontains $scope) {
         throw "Unknown scope '$scope'. Valid scopes: $($validScopes -join ', ')"

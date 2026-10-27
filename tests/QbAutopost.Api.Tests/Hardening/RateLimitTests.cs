@@ -204,7 +204,7 @@ public sealed class RateLimitTests
         context.Connection.RemoteIpAddress = IPAddress.Parse(address);
         if (client is not null)
         {
-            context.Items[ApiKeyMiddleware.ClientItemKey] = client;
+            context.Items[CallerMiddleware.ClientItemKey] = client;
         }
 
         return context;

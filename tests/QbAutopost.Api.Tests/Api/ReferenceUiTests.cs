@@ -188,7 +188,7 @@ public sealed class ReferenceUiTests : IDisposable
     private static HttpClient WithKey(WebApplicationFactory<Program> host, string key)
     {
         var client = host.CreateClient();
-        // Q-67: X-Api-Key is the only header ApiKeyMiddleware reads; Authorization: Bearer is not accepted yet.
+        // Q-67: an API key travels only in X-Api-Key; Authorization: Bearer carries a dashboard JWT (T-1009), not a key.
         client.DefaultRequestHeaders.Add(ApiSettings.KeyHeader, key);
         return client;
     }

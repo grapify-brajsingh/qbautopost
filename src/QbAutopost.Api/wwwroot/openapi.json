@@ -128,8 +128,8 @@
         "tags": ["Health"],
         "operationId": "getDatabaseHealth",
         "summary": "Saved-requests database: reachability, schema state and check latency.",
-        "description": "Looks at the database now. Never includes the connection string. With `Database:ConnectionString` empty the feature is off and this answers 503 with reason `not-configured`; the rest of the API is unaffected.",
-        "x-required-scope": "health:read",
+        "description": "Looks at the database now. Never includes the connection string. With `Database:ConnectionString` empty the feature is off and this answers 503 with reason `not-configured`; the rest of the API is unaffected. Either `requests:read` (any dashboard user, for the status light) or `health:read` satisfies it.",
+        "x-required-scope": "requests:read|health:read",
         "responses": {
           "200": {
             "description": "The database answered and its schema is current.",
@@ -312,8 +312,8 @@
         "tags": ["QuickBooks"],
         "operationId": "getLists",
         "summary": "The cached QuickBooks account, vendor and customer names.",
-        "description": "Read from `qb-lists.json`, so it answers while QuickBooks is shut down and never queues behind a post. A `syncedUtc` of `null` with empty lists means the sync has not run yet; it is not an error.",
-        "x-required-scope": "qb:read",
+        "description": "Read from `qb-lists.json`, so it answers while QuickBooks is shut down and never queues behind a post. A `syncedUtc` of `null` with empty lists means the sync has not run yet; it is not an error. Needs `lists:read`, which every dashboard role holds; an API key holding `qb:read` satisfies it too.",
+        "x-required-scope": "lists:read",
         "responses": {
           "200": {
             "description": "The names as the last sync left them.",
@@ -623,7 +623,7 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "`Authorization: Bearer <key>`. api-v1 §2.2 calls this the preferred form and FR-A-18 asks this document to declare it — but **this build does not accept it yet**: `ApiKeyMiddleware` reads only `X-Api-Key`. It is declared, not offered, so no reader is sent down a road the app refuses (Q-67)."
+        "description": "`Authorization: Bearer <access token>`: a dashboard user's JWT (saved-requests §11.3), not an API key. An API key still travels only in `X-Api-Key` (Q-67); sending both headers answers `400 ambiguous-credentials`."
       }
     },
     "parameters": {

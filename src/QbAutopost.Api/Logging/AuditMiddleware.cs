@@ -8,7 +8,7 @@ namespace QbAutopost.Api.Logging;
 /// <summary>
 /// FR-A-16: one line in <see cref="AuditLog"/> for every authenticated request that changes something.
 /// <para>
-/// It sits <b>in front of</b> <see cref="ApiKeyMiddleware"/> and records after the pipeline has returned. That is
+/// It sits <b>in front of</b> <see cref="CallerMiddleware"/> and records after the pipeline has returned. That is
 /// deliberate (handoff trap 17): the key check answers <c>403</c> by returning early, so an audit placed behind it
 /// would never see a caller turned away from the posting route — which is the first thing an auditor asks about. The
 /// caller is read out of <c>HttpContext.Items</c> afterwards, which the key check fills in before it decides.
@@ -68,7 +68,7 @@ public sealed class AuditMiddleware(RequestDelegate next)
     private static void Record(
         HttpContext context, AuditLog audit, IClock clock, ILogger log, int status, byte[]? body)
     {
-        if (ApiKeyMiddleware.ClientOf(context) is not { } client)
+        if (CallerMiddleware.CallerOf(context) is not { } caller)
         {
             return;
         }
@@ -78,7 +78,7 @@ public sealed class AuditMiddleware(RequestDelegate next)
         {
             Utc = clock.UtcNow,
             RequestId = RequestId.Of(context) ?? RequestId.None,
-            ClientId = client.Id,
+            ClientId = CallerMiddleware.LogIdOf(caller),
             RemoteIp = context.Connection.RemoteIpAddress?.ToString(),
             Method = context.Request.Method,
             Path = context.Request.Path.Value ?? string.Empty,

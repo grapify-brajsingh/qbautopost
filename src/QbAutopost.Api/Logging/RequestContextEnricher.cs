@@ -15,6 +15,6 @@ public sealed class RequestContextEnricher : ILogEventEnricher
     public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
     {
         logEvent.AddPropertyIfAbsent(propertyFactory.CreateProperty(RequestId.PropertyName, RequestId.None));
-        logEvent.AddPropertyIfAbsent(propertyFactory.CreateProperty(ApiKeyMiddleware.ClientIdProperty, RequestId.None));
+        logEvent.AddPropertyIfAbsent(propertyFactory.CreateProperty(CallerMiddleware.ClientIdProperty, RequestId.None));
     }
 }

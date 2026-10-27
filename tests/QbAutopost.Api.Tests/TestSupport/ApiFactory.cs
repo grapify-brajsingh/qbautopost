@@ -8,6 +8,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
+using QbAutopost.Api.Auth;
 using QbAutopost.Api.Database;
 using QbAutopost.Api.Endpoints;
 using QbAutopost.Api.QuickBooks;
@@ -26,6 +27,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 {
     public const string ApiKey = "test-key";
     public const string Company = "Tropicana Properties LLC";
+
+    /// <summary>T-1009: signs the test access tokens (<see cref="FakeUsers"/>); 32+ bytes, as HS256 here requires.</summary>
+    public const string SigningKey = "test-signing-key-0123456789abcdef-0123456789";
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
@@ -48,6 +52,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     public FakeSavedRequestStore Store { get; } = new();
 
     public DatabaseGate Gate { get; }
+
+    /// <summary>T-1009: dashboard users for Bearer requests, in place of UserManager (rule 1: no PostgreSQL).</summary>
+    public FakeUsers Users { get; } = new();
 
     /// <summary>What the gate's schema check reports when something refreshes it.</summary>
     public SchemaStatus Schema { get; set; } = new(true, true, [], null);
@@ -87,6 +94,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Api:ApiKey"] = ApiKey,
+            ["Auth:Jwt:SigningKey"] = SigningKey,
             ["DryRunDefault"] = "true",
             ["Company:Name"] = Company,
             ["Company:RulesFile"] = Fixtures.SampleRules,
@@ -125,6 +133,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             services.AddSingleton<ISavedRequestStore>(Store);
             services.RemoveAll<DatabaseGate>();
             services.AddSingleton(Gate);
+            services.RemoveAll<IUserGate>();
+            services.AddSingleton<IUserGate>(Users);
         });
     }
 

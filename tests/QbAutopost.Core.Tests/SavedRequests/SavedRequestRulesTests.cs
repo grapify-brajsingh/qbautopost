@@ -1,12 +1,13 @@
 using QbAutopost.Core.SavedRequests;
+using QbAutopost.Core.Security;
 
 namespace QbAutopost.Core.Tests.SavedRequests;
 
 public sealed class SavedRequestRulesTests
 {
-    private static readonly HashSet<string> Editor = [SavedRequestScopes.Read, SavedRequestScopes.Edit, SavedRequestScopes.Post];
-    private static readonly HashSet<string> Admin = [SavedRequestScopes.Read, SavedRequestScopes.Edit, SavedRequestScopes.Post, SavedRequestScopes.Admin];
-    private static readonly HashSet<string> Viewer = [SavedRequestScopes.Read];
+    private static readonly HashSet<string> Editor = [ApiScopes.RequestsRead, ApiScopes.RequestsEdit, ApiScopes.RequestsPost];
+    private static readonly HashSet<string> Admin = [ApiScopes.RequestsRead, ApiScopes.RequestsEdit, ApiScopes.RequestsPost, ApiScopes.RequestsAdmin];
+    private static readonly HashSet<string> Viewer = [ApiScopes.RequestsRead];
 
     [Fact]
     public void Should_AllowEditValidatePostDiscard_When_PendingAndEditor() =>
@@ -18,7 +19,7 @@ public sealed class SavedRequestRulesTests
     public void Should_AllowPostOnly_When_PendingAndScopeIsPostOnly() =>
         Assert.Equal(
             SavedRequestAction.Post,
-            SavedRequestRules.Allowed(SavedRequestStatus.Pending, new HashSet<string> { SavedRequestScopes.Post }, true));
+            SavedRequestRules.Allowed(SavedRequestStatus.Pending, new HashSet<string> { ApiScopes.RequestsPost }, true));
 
     [Theory]
     [InlineData(SavedRequestStatus.Posting)]

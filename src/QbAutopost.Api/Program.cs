@@ -2,6 +2,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Microsoft.AspNetCore.Identity;
+using QbAutopost.Api.Auth;
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Database;
 using QbAutopost.Api.Endpoints;
@@ -23,6 +25,7 @@ using QbAutopost.Core.SavedRequests;
 using QbAutopost.Core.Security;
 using QbAutopost.Core.Store;
 using QbAutopost.Data;
+using QbAutopost.Data.Entities;
 using QbAutopost.QuickBooks;
 
 // T-901 (api-v1 §12): read appsettings.json from the exe's folder, not the working directory (server defect 1).
@@ -246,14 +249,39 @@ builder.Services.AddHostedService<JobWorker>();
 // gate NotConfigured) and nothing else changes. Registered after JobWorker; hosted services start in order, and
 // InFlightRecovery finishes before Kestrel binds, so the saved-request routes never see a request still `posting`.
 var database = builder.Configuration.GetSection("Database").Get<DatabaseSettings>() ?? new DatabaseSettings();
+var auth = builder.Configuration.GetSection("Auth").Get<AuthSettings>() ?? new AuthSettings();
 if (database.Configured)
 {
     builder.Services.AddQbAutopostData(database.ConnectionString, database.CommandTimeoutSeconds);
+
+    // T-1009 (spec 11.2, 11.3): Identity's stores need a scoped context; the pool still hands it out and takes it back.
+    builder.Services.AddScoped(sp => sp.GetRequiredService<IDbContextFactory<QbAutopostDbContext>>().CreateDbContext());
+    builder.Services
+        .AddIdentityCore<AppUser>(o =>
+        {
+            // Spec 11.2, builder's call: length is what matters, so every composition rule is off.
+            o.Password.RequiredLength = auth.Password.MinLength;
+            o.Password.RequireDigit = false;
+            o.Password.RequireLowercase = false;
+            o.Password.RequireUppercase = false;
+            o.Password.RequireNonAlphanumeric = false;
+            o.Lockout.AllowedForNewUsers = true;
+            o.Lockout.MaxFailedAccessAttempts = auth.Lockout.MaxFailedAttempts;
+            o.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(auth.Lockout.LockoutMinutes);
+            o.User.RequireUniqueEmail = true;
+        })
+        .AddRoles<IdentityRole>()
+        .AddEntityFrameworkStores<QbAutopostDbContext>();
 }
 else
 {
     builder.Services.AddSingleton<ISavedRequestStore, DisabledSavedRequestStore>();
 }
+
+// T-1009 (spec 10.11): CallerMiddleware resolves this only once the database gate is Ready, so without a database
+// (no Identity registered) a Bearer request answers 503 before anything asks for UserManager.
+builder.Services.AddMemoryCache();
+builder.Services.AddScoped<IUserGate, UserGate>();
 
 builder.Services.AddSingleton(sp =>
 {
@@ -362,7 +390,7 @@ try
     // T-912 (FR-A-16): in front of the key check on purpose — a 403 is a refusal by an identified caller, and an
     // audit that sat behind the check would never see it (handoff trap 17). It records once the answer is known.
     app.UseMiddleware<AuditMiddleware>();
-    app.UseMiddleware<ApiKeyMiddleware>();
+    app.UseMiddleware<CallerMiddleware>();
     // T-911 (FR-A-15): behind the key check, so a partition can be the caller rather than whatever address they
     // happen to be calling from today.
     app.UseRateLimiter();

@@ -98,7 +98,9 @@ public static class ApiRoutes
     }
 
     /// <summary>
-    /// T-910 (FR-A-13): the scope a route needs, or null when it needs no key at all (liveness and readiness).
+    /// T-910 (FR-A-13): the scope a route needs, or null when it needs no credential at all (liveness, readiness, and
+    /// since T-1009 <c>/auth/login</c> and <c>/auth/refresh</c>). A value may name alternatives
+    /// (<see cref="ApiScopes.AnyOf"/>), and <see cref="ApiScopes.SignedIn"/> asks for any signed-in person.
     /// <para>
     /// Scopes name what a caller may <i>do</i>, so the mapping is by effect, not by URL shape: anything that sends a
     /// write to QuickBooks needs <c>qb:post</c>, anything that only reads needs <c>qb:read</c>. A route nobody has
@@ -137,16 +139,40 @@ public static class ApiRoutes
             return null;
         }
 
-        // Named so the database route is a decision, not a side effect of the prefix below. It is health:read until
-        // T-1009 adds requests:read, which extends this line.
+        // Named so the database route is a decision, not a side effect of the prefix below. Saved-requests spec 11.3:
+        // either scope, so the dashboard (requests:read) can show a status light and monitoring (health:read) still can.
         if (p == "/health/database")
         {
-            return ApiScopes.HealthRead;
+            return ApiScopes.AnyOf(ApiScopes.RequestsRead, ApiScopes.HealthRead);
         }
 
         if (p.StartsWith("/health", Ordinal))
         {
             return ApiScopes.HealthRead;
+        }
+
+        // T-1009 (saved-requests spec 6, 11.2, 11.3, 11.4): mapped explicitly, before the /quickbooks/ fall-through
+        // below can open anything, and each falls back to admin rather than to a neighbour's scope.
+        if (IsUnder(p, "/saved-requests"))
+        {
+            return SavedRequestScope(method, p);
+        }
+
+        if (IsUnder(p, "/users"))
+        {
+            return ApiScopes.UsersManage;
+        }
+
+        if (IsUnder(p, "/auth"))
+        {
+            return AuthScope(method, p);
+        }
+
+        // Spec 11.1: the edit dropdowns read the cached lists, and that is all lists:read opens. Syncing the lists,
+        // which opens a QuickBooks session, stays qb:read below.
+        if (get && p.Equals("/quickbooks/lists", Ordinal))
+        {
+            return ApiScopes.ListsRead;
         }
 
         if (p.StartsWith("/rules/", Ordinal))
@@ -183,6 +209,68 @@ public static class ApiRoutes
             ? ApiScopes.QbRead
             : ApiScopes.Admin;
     }
+
+    /// <summary>
+    /// Spec 11.2: the routes a user whose <c>mustChangePassword</c> is set may still call; every other route answers
+    /// <c>403 password-change-required</c>.
+    /// </summary>
+    public static bool AllowsPendingPasswordChange(PathString path)
+    {
+        if (!path.HasValue)
+        {
+            return false;
+        }
+
+        var p = Flat(path.Value!).TrimEnd('/');
+        return p.Equals(AuthMe, Ordinal) || p.Equals(AuthChangePassword, Ordinal) || p.Equals(AuthLogout, Ordinal);
+    }
+
+    private const string AuthMe = "/auth/me";
+    private const string AuthChangePassword = "/auth/change-password";
+    private const string AuthLogout = "/auth/logout";
+
+    /// <summary>Spec 6 and 11.3: every GET reads; each change is named; anything else is admin, as everywhere.</summary>
+    private static string SavedRequestScope(string method, string p)
+    {
+        var segments = p.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (HttpMethods.IsGet(method))
+        {
+            return ApiScopes.RequestsRead;
+        }
+
+        return (segments.Length, method.ToUpperInvariant()) switch
+        {
+            (1, "POST") => ApiScopes.RequestsSubmit,
+            (2, "PUT") when !segments[1].Equals("stats", Ordinal) => ApiScopes.RequestsEdit,
+            (3, "POST") => segments[2].ToLowerInvariant() switch
+            {
+                "validate" or "discard" => ApiScopes.RequestsEdit,
+                "post" => ApiScopes.RequestsPost,
+                "restore" or "resolve" => ApiScopes.RequestsAdmin,
+                _ => ApiScopes.Admin,
+            },
+            _ => ApiScopes.Admin,
+        };
+    }
+
+    /// <summary>Spec 11.2: login and refresh need no credential; me, logout and change-password need a signed-in person.</summary>
+    private static string? AuthScope(string method, string p)
+    {
+        var post = HttpMethods.IsPost(method);
+        if (post && (p.Equals("/auth/login", Ordinal) || p.Equals("/auth/refresh", Ordinal)))
+        {
+            return null;
+        }
+
+        return (HttpMethods.IsGet(method) && p.Equals(AuthMe, Ordinal))
+               || (post && (p.Equals(AuthLogout, Ordinal) || p.Equals(AuthChangePassword, Ordinal)))
+            ? ApiScopes.SignedIn
+            : ApiScopes.Admin;
+    }
+
+    /// <summary>The route itself or anything below it, and not a longer sibling such as <c>/usersx</c>.</summary>
+    private static bool IsUnder(string path, string route) =>
+        path.Equals(route, Ordinal) || path.StartsWith(route + "/", Ordinal);
 
     /// <summary>The path without the version prefix, so one mapping serves both surfaces while T-901's flat routes live.</summary>
     private static string Flat(string path) =>

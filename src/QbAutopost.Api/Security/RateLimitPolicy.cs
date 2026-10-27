@@ -61,10 +61,11 @@ public static class RateLimitPolicy
     /// </summary>
     public static string PartitionKey(HttpContext context, RateLimitBucket bucket)
     {
-        var client = ApiKeyMiddleware.ClientOf(context);
-        var who = bucket == RateLimitBucket.Health || client is null
+        // T-1009: a signed-in user is a caller too, partitioned by user id, never sharing a key's budget.
+        var caller = CallerMiddleware.CallerOf(context);
+        var who = bucket == RateLimitBucket.Health || caller is null
             ? "ip:" + (context.Connection.RemoteIpAddress?.ToString() ?? "unknown")
-            : "client:" + client.Id;
+            : caller.Kind == CallerKind.User ? "user:" + caller.Id : "client:" + caller.Id;
         return $"{bucket}:{who}";
     }
 
@@ -81,7 +82,7 @@ public static class RateLimitPolicy
             }
 
             var bucket = BucketFor(context.Request.Method, context.Request.Path);
-            var permits = PermitsFor(bucket, limits, ApiKeyMiddleware.ClientOf(context));
+            var permits = PermitsFor(bucket, limits, CallerMiddleware.ClientOf(context));
             return RateLimitPartition.GetFixedWindowLimiter(PartitionKey(context, bucket), _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = permits,
@@ -103,7 +104,7 @@ public static class RateLimitPolicy
                 .CreateLogger(typeof(RateLimitPolicy))
                 .LogWarning(
                     "Rate limit reached by {ClientId} on {Method} {Path}; {RetrySeconds} s until it resets",
-                    ApiKeyMiddleware.ClientOf(http)?.Id ?? "(no client)",
+                    CallerMiddleware.CallerOf(http) is { } caller ? CallerMiddleware.LogIdOf(caller) : "(no client)",
                     http.Request.Method,
                     http.Request.Path.Value,
                     seconds);

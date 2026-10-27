@@ -1,14 +1,6 @@
-namespace QbAutopost.Core.SavedRequests;
+using QbAutopost.Core.Security;
 
-/// <summary>Scope names for saved requests. T-1009 moves or aliases these into the shared scope list.</summary>
-public static class SavedRequestScopes
-{
-    public const string Submit = "requests:submit";
-    public const string Read = "requests:read";
-    public const string Edit = "requests:edit";
-    public const string Post = "requests:post";
-    public const string Admin = "requests:admin";
-}
+namespace QbAutopost.Core.SavedRequests;
 
 /// <summary>Which actions a status and a set of scopes allow (spec §7.1). Pure; no I/O.</summary>
 public static class SavedRequestRules
@@ -35,19 +27,19 @@ public static class SavedRequestRules
         switch (status)
         {
             case SavedRequestStatus.Pending:
-                if (scopes.Contains(SavedRequestScopes.Edit))
+                if (scopes.Contains(ApiScopes.RequestsEdit))
                 {
                     allowed |= SavedRequestAction.Edit | SavedRequestAction.Validate | SavedRequestAction.Discard;
                 }
 
-                if (scopes.Contains(SavedRequestScopes.Post))
+                if (scopes.Contains(ApiScopes.RequestsPost))
                 {
                     allowed |= SavedRequestAction.Post;
                 }
 
                 break;
             case SavedRequestStatus.Discarded:
-                if (scopes.Contains(SavedRequestScopes.Admin))
+                if (scopes.Contains(ApiScopes.RequestsAdmin))
                 {
                     allowed |= SavedRequestAction.Restore;
                 }
@@ -55,7 +47,7 @@ public static class SavedRequestRules
                 break;
             case SavedRequestStatus.Partial:
             case SavedRequestStatus.Unknown:
-                if (scopes.Contains(SavedRequestScopes.Admin))
+                if (scopes.Contains(ApiScopes.RequestsAdmin))
                 {
                     allowed |= SavedRequestAction.Resolve;
                 }

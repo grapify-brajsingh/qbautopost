@@ -236,7 +236,7 @@ public static class QuickBooksEndpoints
         // T-910: the qbXML body carries every amount and name in the batch, so it needs the qb:debug scope (FR-A-6).
         var response = ValidationResponse.From(
             plan,
-            includeQbXml == true && ApiKeyMiddleware.HasScope(http, ApiScopes.QbDebug),
+            includeQbXml == true && CallerMiddleware.HasScope(http, ApiScopes.QbDebug),
             asked: includeQbXml == true);
         log.LogInformation(
             "Validated {Submitted} row(s) for reference {Reference}: {WouldPost} would post, {Held} held, {Duplicates} duplicate(s)",

@@ -31,9 +31,9 @@ public static class RequestLog
 
                 // T-912 (api-v1 §8): this line is written after the key check's LogContext scope has gone, so the
                 // caller has to be put on it here — otherwise the one line per request is the one without a client.
-                if (ApiKeyMiddleware.ClientOf(http) is { } client)
+                if (CallerMiddleware.CallerOf(http) is { } caller)
                 {
-                    context.Set(ApiKeyMiddleware.ClientIdProperty, client.Id);
+                    context.Set(CallerMiddleware.ClientIdProperty, CallerMiddleware.LogIdOf(caller));
                 }
             };
         });
