@@ -50,7 +50,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     /// Rule 1: no PostgreSQL either. The host gets this in-memory store, and a gate that starts <c>Ready</c>; a test
     /// moves the gate with <c>Gate.Set(...)</c>, or changes what an explicit refresh finds with <see cref="Schema"/>.
     /// </summary>
-    public FakeSavedRequestStore Store { get; } = new();
+    public FakeSavedRequestStore Store { get; }
 
     /// <summary>
     /// The fake gate; with <see cref="WithPostgres"/>, the host's real gate (resolving it starts the host).
@@ -73,9 +73,10 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     {
     }
 
-    private ApiFactory(string? postgres)
+    private ApiFactory(string? postgres, FakeSavedRequestStore? store = null)
     {
         _postgres = postgres;
+        Store = store ?? new FakeSavedRequestStore();
 
         // Not forced: the host's first start-up check makes it Ready, and runs recovery on Store first, as production does.
         _fakeGate = new DatabaseGate(
@@ -84,6 +85,12 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             NullLogger<DatabaseGate>.Instance,
             ct => Store.RecoverInFlightAsync(DateTime.UtcNow, ct));
     }
+
+    /// <summary>
+    /// T-1014: a fresh host (its own folder, gate and process state) over an existing <paramref name="store"/>, as a
+    /// restarted service finds the database: its start-up check runs in-flight recovery on that store first.
+    /// </summary>
+    public static ApiFactory Restarted(FakeSavedRequestStore store) => new(null, store);
 
     /// <summary>
     /// R14 (T-1010): the real host against a real PostgreSQL (Testcontainers), with the production wiring of

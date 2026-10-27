@@ -2198,7 +2198,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SyncPostResult"
+                  "allOf": [{ "$ref": "#/components/schemas/SyncPostResult" }, { "$ref": "#/components/schemas/SavedPostFields" }]
                 }
               }
             }
@@ -2208,7 +2208,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problem"
+                  "allOf": [{ "$ref": "#/components/schemas/Problem" }, { "$ref": "#/components/schemas/SavedPostFields" }]
                 }
               }
             }
@@ -2227,7 +2227,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problem"
+                  "allOf": [{ "$ref": "#/components/schemas/Problem" }, { "$ref": "#/components/schemas/SavedPostFields" }]
                 }
               }
             }
@@ -2257,7 +2257,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SyncPostProblem"
+                  "allOf": [{ "$ref": "#/components/schemas/SyncPostProblem" }, { "$ref": "#/components/schemas/SavedPostFields" }]
                 }
               }
             }
@@ -2267,7 +2267,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problem"
+                  "allOf": [{ "$ref": "#/components/schemas/Problem" }, { "$ref": "#/components/schemas/SavedPostFields" }]
                 }
               }
             }
@@ -2277,12 +2277,12 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SyncPostResult"
+                  "allOf": [{ "$ref": "#/components/schemas/SyncPostResult" }, { "$ref": "#/components/schemas/SavedPostFields" }]
                 }
               },
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problem"
+                  "allOf": [{ "$ref": "#/components/schemas/Problem" }, { "$ref": "#/components/schemas/SavedPostFields" }]
                 }
               }
             }
@@ -3260,6 +3260,19 @@
           "error": { "type": "string", "nullable": true },
           "startedUtc": { "type": "string", "format": "date-time" },
           "finishedUtc": { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "SavedPostFields": {
+        "type": "object",
+        "description": "What post by id adds to validate-and-post's body or problem (saved-requests §7.2). All three are present whenever an attempt was made. They are absent on 404, 412 and `database-unavailable`; of the 409s that claim nothing, `already-posting` carries only `attemptId` (the running attempt) and `not-postable` only `savedRequestStatus`.",
+        "properties": {
+          "savedRequestId": { "type": "integer", "format": "int64", "description": "The saved request's numeric id." },
+          "attemptId": { "type": "integer", "format": "int64", "description": "The attempt this post recorded: `GET /saved-requests/{id}/attempts/{attemptId}`." },
+          "savedRequestStatus": {
+            "type": "string",
+            "enum": ["pending", "posting", "posted", "partial", "unknown"],
+            "description": "The request's status after the attempt. Named apart from `status`, which stays validate-and-post's (Q-90). `posting` means the result could not be recorded and is in the evidence file."
+          }
         }
       },
       "SyncPostProblem": {

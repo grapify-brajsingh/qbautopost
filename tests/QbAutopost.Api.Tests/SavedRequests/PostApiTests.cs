@@ -264,6 +264,8 @@ public sealed class PostApiTests : IDisposable
         var attempt = Assert.Single(await AttemptsAsync(id));
         Assert.Equal(AttemptOutcome.Unknown, attempt.Outcome);
         Assert.Null(attempt.HttpStatus);
+        Assert.Equal("post-outcome-unknown: OperationCanceledException", attempt.Error);
+        Assert.DoesNotContain("simulated", attempt.Result!.ToJsonString());
     }
 
     /// <summary>R3: an exception before the worker took the post sent nothing, so the request may be posted again.</summary>
@@ -296,6 +298,9 @@ public sealed class PostApiTests : IDisposable
         Assert.Equal(SavedRequestStatus.Pending, await StatusAsync(id));
         var attempt = Assert.Single(await AttemptsAsync(id));
         Assert.Equal(AttemptOutcome.Error, attempt.Outcome);
+        Assert.Equal("post-not-started: InvalidOperationException", attempt.Error);
+        Assert.DoesNotContain("bad state", attempt.Result!.ToJsonString());
+        Assert.DoesNotContain("secret", attempt.Result!.ToJsonString());
         Assert.Equal(500, attempt.HttpStatus);
     }
 
@@ -580,16 +585,83 @@ public sealed class PostApiTests : IDisposable
         Assert.DoesNotContain(_host.N8nKey, text);
         Assert.Equal(SavedRequestStatus.Posting, await StatusAsync(id));
 
-        // A restart: start-up recovery runs before any route is served (spec 10.6).
-        var gate = new DatabaseGate(
-            _ => Task.FromResult(new SchemaStatus(true, true, [], null)),
-            true,
-            NullLogger<DatabaseGate>.Instance,
-            ct => Store.RecoverInFlightAsync(DateTime.UtcNow, ct));
-        await new InFlightRecovery(gate).StartAsync(CancellationToken.None);
+        // A restart: a new host over the same database; its start-up recovery runs before any route is served (spec 10.6).
+        using var restarted = ApiFactory.Restarted(Store);
+        using var reader = restarted.CreateClient();
+        reader.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", restarted.Users.TokenFor(DashboardRoles.Viewer));
+        using var after = await reader.GetAsync($"{SavedRequestTestHost.Route}/{id}");
 
-        Assert.Equal(SavedRequestStatus.Unknown, await StatusAsync(id));
+        Assert.Equal(HttpStatusCode.OK, after.StatusCode);
+        Assert.Equal("unknown", (await SavedRequestTestHost.BodyOf(after)).GetProperty("status").GetString());
+        Assert.Equal(AttemptOutcome.Unknown, Assert.Single(await AttemptsAsync(id)).Outcome);
         Assert.Single(Gateway.Writes);
+        Assert.Empty(restarted.Gateway.Requests);
+    }
+
+    /// <summary>
+    /// Fix round 1: anything that stops the result being turned into an answer (here the host's serialiser refuses a
+    /// <c>SyncPostResult</c>) must not lose what QuickBooks said: the attempt is <c>unknown</c>, never pending, and the
+    /// raw result is in the evidence file.
+    /// </summary>
+    [Fact]
+    public async Task Should_RecordUnknownAndWriteEvidence_When_TheResultCannotBeSerialised()
+    {
+        var id = await SaveAsync(SyncPostFixtures.PostedOneRow);
+        using var host = _host.Factory.WithWebHostBuilder(b => b.ConfigureTestServices(services =>
+            services.Configure<Microsoft.AspNetCore.Http.Json.JsonOptions>(o =>
+                o.SerializerOptions.Converters.Add(new RefusingConverter()))));
+        using var editor = host.CreateClient();
+        editor.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", _host.Factory.Users.TokenFor(DashboardRoles.Editor));
+
+        var (response, problem) = await PostAsync(editor, id);
+
+        using (response)
+        {
+            Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+            Assert.Equal("post-outcome-unknown", problem.GetProperty("type").GetString());
+            Assert.Equal("unknown", problem.GetProperty("savedRequestStatus").GetString());
+            Assert.DoesNotContain(RefusingConverter.Message, problem.GetRawText());
+        }
+
+        Assert.Single(Gateway.Writes);
+        Assert.Equal(SavedRequestStatus.Unknown, await StatusAsync(id));
+        var attempt = Assert.Single(await AttemptsAsync(id));
+        Assert.Equal(AttemptOutcome.Unknown, attempt.Outcome);
+        Assert.DoesNotContain(RefusingConverter.Message, attempt.Error);
+        var batch = Assert.Single(Directory.GetDirectories(BatchesRoot));
+        var file = Path.Combine(batch, "saved-request.json");
+        Assert.True(File.Exists(file), file);
+        using var evidence = JsonDocument.Parse(await File.ReadAllTextAsync(file));
+        Assert.Equal(id, evidence.RootElement.GetProperty("savedRequestId").GetInt64());
+        Assert.Equal("unknown", evidence.RootElement.GetProperty("outcome").GetString());
+        Assert.Equal(attempt.PostId, evidence.RootElement.GetProperty("rawResult").GetProperty("postId").GetString());
+        Assert.Equal("FAKE-1", evidence.RootElement.GetProperty("rawResult").GetProperty("posted")[0].GetProperty("txnId").GetString());
+    }
+
+    /// <summary>
+    /// Fix round 1, spec 9: an edit committed between the duplicate check and the claim (here it flags the request)
+    /// makes the claim stale. The person is told to reload; nothing they did not see is posted.
+    /// </summary>
+    [Fact]
+    public async Task Should_Return412AndPostNothing_When_TheRequestChangesBetweenTheCheckAndTheClaim()
+    {
+        var id = await SaveAsync(SyncPostFixtures.PostedOneRow);
+        Store.BeforeNextClaim = () => Store.Change(id, r => r with { DuplicateOfId = 99, DuplicateReasons = ["same-payload"] });
+        using var editor = _host.User(DashboardRoles.Editor);
+
+        var (response, problem) = await PostAsync(editor, id);
+
+        using (response)
+        {
+            Assert.Equal(HttpStatusCode.PreconditionFailed, response.StatusCode);
+            Assert.Equal("edited-by-someone-else", problem.GetProperty("type").GetString());
+        }
+
+        Assert.Empty(await AttemptsAsync(id));
+        Assert.Empty(Gateway.Requests);
+        Assert.Equal(SavedRequestStatus.Pending, await StatusAsync(id));
     }
 
     [Fact]
@@ -631,6 +703,18 @@ public sealed class PostApiTests : IDisposable
             });
             next(app);
         };
+    }
+
+    /// <summary>Refuses to write a <see cref="SyncPostResult"/>, as a serialiser fault would.</summary>
+    private sealed class RefusingConverter : System.Text.Json.Serialization.JsonConverter<SyncPostResult>
+    {
+        public const string Message = "simulated serialiser fault";
+
+        public override SyncPostResult Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+            throw new NotSupportedException();
+
+        public override void Write(Utf8JsonWriter writer, SyncPostResult value, JsonSerializerOptions options) =>
+            throw new InvalidOperationException(Message);
     }
 
     private sealed class ThrowingRunner(

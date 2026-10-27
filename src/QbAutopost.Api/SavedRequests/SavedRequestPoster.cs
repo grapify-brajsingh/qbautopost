@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using QbAutopost.Api.Configuration;
@@ -53,6 +54,12 @@ public sealed class SavedRequestPoster(
     /// </summary>
     public const string SavedRequestStatusField = "savedRequestStatus";
 
+    /// <summary>Plain web defaults: what evidence is written with when the host's serialiser cannot be trusted.</summary>
+    private static readonly JsonSerializerOptions RawOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
+
     /// <summary>Waits after the first and second failed tries to record a result; the third failure falls back to the evidence file.</summary>
     private static readonly TimeSpan[] CompleteBackoff = [TimeSpan.FromSeconds(0.5), TimeSpan.FromSeconds(1)];
 
@@ -74,10 +81,13 @@ public sealed class SavedRequestPoster(
             return new SavedPostOutcome(SavedPostKind.DuplicateUnconfirmed, null, null, current, StatusCodes.Status409Conflict);
         }
 
-        // 2. Spec 10.2: the claim, committed before anything is sent. From here on the caller's token bounds nothing:
-        // a claim abandoned half-way would leave a request posting with nothing running for it.
+        // 2. Spec 10.2: the claim, committed before anything is sent. It is made at the row version the duplicate check
+        // read (or the caller's If-Match), so an edit that lands in between (and could flag the request, or change
+        // what would be sent) makes it stale: 412, nothing claimed. From here on the caller's token bounds nothing: a
+        // claim abandoned half-way would leave a request posting with nothing running for it.
         var claim = await store.TryClaimAsync(
-            id, expectedRowVersion, caller.Actor, acknowledgeDuplicate: confirmDuplicate, clock.UtcNow, CancellationToken.None);
+            id, expectedRowVersion ?? current.RowVersion, caller.Actor, acknowledgeDuplicate: confirmDuplicate, clock.UtcNow,
+            CancellationToken.None);
         switch (claim.Kind)
         {
             case ClaimKind.NotFound:
@@ -105,8 +115,11 @@ public sealed class SavedRequestPoster(
         if (!read.Readable)
         {
             var refused = new SyncPost(SyncPostOutcome.Refused, read.Errors, null, null, false);
-            var status = await FinishAsync(record, attemptId, refused, new PostEnding(PostEndingKind.Unreadable, null, []));
-            return new SavedPostOutcome(SavedPostKind.Unreadable, refused, attemptId, record, StatusCodes.Status400BadRequest, status);
+            var (status, unreadableProblem) = await FinishAsync(
+                record, attemptId, refused, new PostEnding(PostEndingKind.Unreadable, null, []));
+            return unreadableProblem is null
+                ? new SavedPostOutcome(SavedPostKind.Unreadable, refused, attemptId, record, StatusCodes.Status400BadRequest, status)
+                : new SavedPostOutcome(SavedPostKind.Ran, null, attemptId, record, unreadableProblem.Status, status, unreadableProblem);
         }
 
         // 4-5. The engine, under its own token (validate-and-post 7). R3: `sending` is set by the engine as the first
@@ -123,8 +136,10 @@ public sealed class SavedRequestPoster(
         }
 
         // 6.
-        var newStatus = await FinishAsync(record, attemptId, post, EndingOf(post));
-        return new SavedPostOutcome(SavedPostKind.Ran, post, attemptId, record, SyncPostResponses.StatusOf(post), newStatus);
+        var (newStatus, problem) = await FinishAsync(record, attemptId, post, EndingOf(post));
+        return problem is null
+            ? new SavedPostOutcome(SavedPostKind.Ran, post, attemptId, record, SyncPostResponses.StatusOf(post), newStatus)
+            : new SavedPostOutcome(SavedPostKind.Ran, null, attemptId, record, problem.Status, newStatus, problem);
     }
 
     /// <summary>The fields the saved route adds to validate-and-post's answer (spec 7.2).</summary>
@@ -151,23 +166,91 @@ public sealed class SavedRequestPoster(
             post.Result?.Held.Select(h => h.Reason).OfType<string>().ToList() ?? []),
     };
 
-    /// <summary>Records an ending the engine returned, and answers the request's status afterwards.</summary>
-    private async Task<SavedRequestStatus> FinishAsync(SavedRequest record, long attemptId, SyncPost post, PostEnding ending)
+    /// <summary>
+    /// Records an ending the engine returned, and answers the request's status afterwards. The problem is null when
+    /// the engine's own answer can be given, and set when the ending could not be turned into a record.
+    /// </summary>
+    private async Task<(SavedRequestStatus Status, ProblemDetails? Problem)> FinishAsync(
+        SavedRequest record, long attemptId, SyncPost post, PostEnding ending)
     {
-        var verdict = AttemptOutcomes.From(ending);
-        var options = json.Value.SerializerOptions;
-        var body = SyncPostResponses.BodyOf(post, ExtraFields(record.Id, attemptId, verdict.NextStatus), options);
-        JsonNode? counts = post.Outcome switch
+        AttemptVerdict verdict;
+        AttemptCompletion completion;
+        try
         {
-            SyncPostOutcome.Held => JsonSerializer.SerializeToNode(post.Findings!.Counts, options),
-            SyncPostOutcome.Posted when post.Result is { } result => JsonSerializer.SerializeToNode(result.Counts, options),
-            _ => null,
-        };
-        var error = post.Outcome == SyncPostOutcome.Refused ? string.Join("; ", post.Errors) : post.Result?.Error;
-        return await RecordAsync(
-            record.Id, attemptId, verdict,
-            new AttemptCompletion(
-                verdict.Outcome, verdict.NextStatus, verdict.HttpStatus, post.Result?.PostId, body, counts, error, clock.UtcNow));
+            verdict = AttemptOutcomes.From(ending);
+            var options = json.Value.SerializerOptions;
+            var body = SyncPostResponses.BodyOf(post, ExtraFields(record.Id, attemptId, verdict.NextStatus), options);
+            JsonNode? counts = post.Outcome switch
+            {
+                SyncPostOutcome.Held => JsonSerializer.SerializeToNode(post.Findings!.Counts, options),
+                SyncPostOutcome.Posted when post.Result is { } result => JsonSerializer.SerializeToNode(result.Counts, options),
+                _ => null,
+            };
+            var error = post.Outcome == SyncPostOutcome.Refused ? string.Join("; ", post.Errors) : post.Result?.Error;
+            completion = new AttemptCompletion(
+                verdict.Outcome, verdict.NextStatus, verdict.HttpStatus, post.Result?.PostId, body, counts, error, clock.UtcNow);
+        }
+        catch (Exception ex)
+        {
+            return await UnrecordableEndingAsync(record, attemptId, post, ex);
+        }
+
+        return (await RecordAsync(record.Id, attemptId, verdict, completion), null);
+    }
+
+    /// <summary>
+    /// The engine answered but its ending could not be made into a record (a serialiser fault, a 200 without a
+    /// result). What QuickBooks did is neither lost nor guessed at: the attempt is <c>unknown</c> with fixed text, never
+    /// pending, and the engine's result as it stands goes to the evidence file whether or not the record is written.
+    /// </summary>
+    private async Task<(SavedRequestStatus, ProblemDetails)> UnrecordableEndingAsync(
+        SavedRequest record, long attemptId, SyncPost post, Exception ex)
+    {
+        log.LogError(
+            ex,
+            "Saved request {SavedRequestId}: the ending of attempt {AttemptId} (post {PostId}) could not be recorded as given; locked as unknown",
+            record.Id, attemptId, post.Result?.PostId);
+        var verdict = new AttemptVerdict(AttemptOutcome.Unknown, SavedRequestStatus.Unknown, null);
+        var problem = ProblemFor(record, PostEndingKind.ErrorAfterSend, ex)
+            .WithExtras(ExtraFields(record.Id, attemptId, SavedRequestStatus.Unknown));
+        var completion = new AttemptCompletion(
+            verdict.Outcome, verdict.NextStatus, verdict.HttpStatus, post.Result?.PostId, Serialised(problem), null,
+            $"result-not-recordable: {ex.GetType().Name}", clock.UtcNow);
+        var raw = RawResult(post);
+        var status = await RecordAsync(record.Id, attemptId, verdict, completion, raw);
+        if (status != SavedRequestStatus.Posting)
+        {
+            // When recording fails RecordAsync writes the evidence itself; when it succeeds the raw result still needs a home.
+            WriteEvidence(record.Id, attemptId, completion, raw);
+        }
+
+        problem.Extensions[SavedRequestStatusField] = SavedRequestJson.Name(status);
+        return (status, problem);
+    }
+
+    /// <summary>The engine's result with plain web defaults, for evidence only; null if even that fails.</summary>
+    private static JsonNode? RawResult(SyncPost post)
+    {
+        try
+        {
+            return post.Result is null ? null : JsonSerializer.SerializeToNode(post.Result, RawOptions);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static JsonNode? Serialised(ProblemDetails problem)
+    {
+        try
+        {
+            return JsonSerializer.SerializeToNode(problem, RawOptions);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -185,18 +268,19 @@ public sealed class SavedRequestPoster(
             "Saved request {SavedRequestId}: attempt {AttemptId} failed {When}; recorded as {Outcome}",
             record.Id, attemptId, sending ? "after the post was started" : "before anything was sent", verdict.Outcome);
 
-        var problem = ProblemFor(record, kind, ex);
-        var options = json.Value.SerializerOptions;
-        foreach (var (key, value) in ExtraFields(record.Id, attemptId, verdict.NextStatus))
+        var problem = ProblemFor(record, kind, ex).WithExtras(ExtraFields(record.Id, attemptId, verdict.NextStatus));
+        // The attempt's error is read by every requests:read caller, so it is fixed text: the exception's message can
+        // name server paths, and it goes to the log above, never to the record.
+        var error = kind switch
         {
-            problem.Extensions[key] = value;
-        }
-
+            PostEndingKind.ErrorAfterSend => "post-outcome-unknown",
+            PostEndingKind.Unavailable => "rules-file-missing",
+            _ => "post-not-started",
+        } + ": " + ex.GetType().Name;
         var status = await RecordAsync(
             record.Id, attemptId, verdict,
             new AttemptCompletion(
-                verdict.Outcome, verdict.NextStatus, verdict.HttpStatus, null,
-                JsonSerializer.SerializeToNode(problem, options), null, $"{ex.GetType().Name}: {ex.Message}", clock.UtcNow));
+                verdict.Outcome, verdict.NextStatus, verdict.HttpStatus, null, Serialised(problem), null, error, clock.UtcNow));
         problem.Extensions[SavedRequestStatusField] = SavedRequestJson.Name(status);
         return new SavedPostOutcome(SavedPostKind.Ran, null, attemptId, record, problem.Status, status, problem);
     }
@@ -232,7 +316,7 @@ public sealed class SavedRequestPoster(
     /// QuickBooks answered. Returns the request's status as it now stands.
     /// </summary>
     private async Task<SavedRequestStatus> RecordAsync(
-        long savedRequestId, long attemptId, AttemptVerdict verdict, AttemptCompletion completion)
+        long savedRequestId, long attemptId, AttemptVerdict verdict, AttemptCompletion completion, JsonNode? rawResult = null)
     {
         for (var attempt = 0; ; attempt++)
         {
@@ -253,7 +337,7 @@ public sealed class SavedRequestPoster(
             }
             catch (Exception ex)
             {
-                var file = WriteEvidence(savedRequestId, attemptId, completion);
+                var file = WriteEvidence(savedRequestId, attemptId, completion, rawResult);
                 log.LogError(
                     ex,
                     "Saved request {SavedRequestId}: the result of attempt {AttemptId} (post {PostId}) could not be recorded "
@@ -269,7 +353,7 @@ public sealed class SavedRequestPoster(
     /// <c>&lt;ApiBatches&gt;/saved-requests/&lt;attemptId&gt;.json</c> when there is no post id. It holds what the attempt
     /// would have recorded and nothing else, so no secret can reach it. Returns the path, or null if it too failed.
     /// </summary>
-    private string? WriteEvidence(long savedRequestId, long attemptId, AttemptCompletion completion)
+    private string? WriteEvidence(long savedRequestId, long attemptId, AttemptCompletion completion, JsonNode? rawResult)
     {
         try
         {
@@ -291,6 +375,12 @@ public sealed class SavedRequestPoster(
                 ["counts"] = completion.Counts?.DeepClone(),
                 ["result"] = completion.Result?.DeepClone(),
             };
+            if (rawResult is not null)
+            {
+                // The engine's own result, kept when the answer could not be built from it.
+                evidence["rawResult"] = rawResult.DeepClone();
+            }
+
             File.WriteAllText(path, evidence.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
             return path;
         }
@@ -301,5 +391,19 @@ public sealed class SavedRequestPoster(
                 savedRequestId, attemptId);
             return null;
         }
+    }
+}
+
+/// <summary>Adds the saved route's fields to a problem's extensions.</summary>
+internal static class ProblemDetailsExtras
+{
+    public static ProblemDetails WithExtras(this ProblemDetails problem, IDictionary<string, object?> extras)
+    {
+        foreach (var (key, value) in extras)
+        {
+            problem.Extensions[key] = value;
+        }
+
+        return problem;
     }
 }

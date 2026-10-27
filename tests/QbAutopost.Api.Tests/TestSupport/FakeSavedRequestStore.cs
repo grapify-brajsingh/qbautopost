@@ -288,9 +288,25 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
         }
     }
 
+    /// <summary>T-1014: runs once, at the start of the next <see cref="TryClaimAsync"/>, to stage a change that lands between a read and the claim.</summary>
+    public Action? BeforeNextClaim { get; set; }
+
+    /// <summary>T-1014: a change committed by someone else, written directly; bumps the row version as every update does.</summary>
+    public void Change(long id, Func<SavedRequest, SavedRequest> change)
+    {
+        lock (_gate)
+        {
+            var r = _requests[id];
+            _requests[id] = change(r) with { RowVersion = r.RowVersion + 1 };
+        }
+    }
+
     public Task<ClaimResult> TryClaimAsync(
         long id, int? expectedRowVersion, string actor, bool acknowledgeDuplicate, DateTime nowUtc, CancellationToken ct)
     {
+        var before = BeforeNextClaim;
+        BeforeNextClaim = null;
+        before?.Invoke();
         lock (_gate)
         {
             if (!_requests.TryGetValue(id, out var r))
