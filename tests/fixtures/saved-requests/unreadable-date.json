@@ -1,0 +1,1 @@
+{ "reference": "r1", "controlTotal": 10.00, "transactions": [ { "kind": "Deposit", "date": "03/08/2026", "account": "Chase Checking", "amount": 10, "description": "x" } ] }
