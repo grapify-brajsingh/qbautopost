@@ -1683,6 +1683,460 @@
             }
           }
         }
+      },
+      "put": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "editSavedRequest",
+        "summary": "Replace the payload of a pending saved request; the old payload stays as an earlier version.",
+        "description": "Saved-requests §6.3, §8. The body is `{ \"payload\": { ...the full validate-and-post body... }, \"note\": \"...\" }`: a full payload, not a patch. `If-Match` is required. A payload that differs from the current one becomes version n+1 with its change list (numbers are compared as decimals, so `184.3` and `184.30` are equal), validation and the duplicate rules run again, and an `edited` event is written. An identical payload answers `200` and writes nothing. An unreadable payload is stored and flagged like a save. The API never recalculates `controlTotal`: change it together with an amount, or validation reports the mismatch. Only a `pending` request can be edited.",
+        "x-required-scope": "requests:edit",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "The row version from the last `GET` (its `ETag`), in quotes.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "payload"
+                ],
+                "properties": {
+                  "payload": {
+                    "$ref": "#/components/schemas/SyncPostRequest"
+                  },
+                  "note": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Why it was changed; kept with the version."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The saved request after the edit (or unchanged, when the payload was identical).",
+            "headers": {
+              "ETag": {
+                "description": "The new row version, in quotes.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`not-a-json-object`: the body is not an object with a `payload` object (or not UTF-8); nothing was stored. `invalid-request`: `note` is not text.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not-editable`: the request is not `pending`; the detail names its status. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: the `If-Match` row version is not the current one. The body carries the current `rowVersion` and `updatedBy` (`{ id, name }`), so the dashboard can say who changed it. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is over `Api:MaxRequestBodyBytes`; nothing was stored.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`precondition-required`: `If-Match` is missing; nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/saved-requests/{id}/validate": {
+      "post": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "validateSavedRequest",
+        "summary": "Re-run validation and the duplicate rules for the current version and store the new snapshot.",
+        "description": "Saved-requests §6.4. Takes no body. Rules, lists and the ledger change after a snapshot was taken, so this refreshes it (`validation.validatedUtc` moves) and writes a `validated` event. It bumps the row version, so an `ETag` held before goes stale. The snapshot is advisory: Post always validates again. Only a `pending` request can be validated.",
+        "x-required-scope": "requests:edit",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The saved request with its refreshed snapshot.",
+            "headers": {
+              "ETag": {
+                "description": "The new row version, in quotes.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not-editable`: the request is not `pending`; the detail names its status. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/saved-requests/{id}/discard": {
+      "post": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "discardSavedRequest",
+        "summary": "Discard a pending saved request, with a reason; an admin can restore it.",
+        "description": "Saved-requests §7.1. The body is `{ \"reason\": \"...\" }`, 1 to 500 characters after trimming. The reason is kept as `discardReason` and in a `discarded` event. A discarded request is never posted and is not compared for duplicates. `If-Match` is optional here; when sent, it must be the current row version.",
+        "x-required-scope": "requests:edit",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "The row version from the last `GET`, in quotes. Optional.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The discarded request.",
+            "headers": {
+              "ETag": {
+                "description": "The new row version, in quotes.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid-request`: the reason is missing, blank or over 500 characters; nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not-discardable`: the request is not `pending`; the detail names its status. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: the `If-Match` row version is not the current one. The body carries the current `rowVersion` and `updatedBy` (`{ id, name }`), so the dashboard can say who changed it. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/saved-requests/{id}/restore": {
+      "post": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "restoreSavedRequest",
+        "summary": "Return a discarded saved request to pending (admin only).",
+        "description": "Saved-requests §7.1. Takes no body. Clears `discardReason` and writes a `restored` event. `If-Match` is optional; when sent, it must be the current row version.",
+        "x-required-scope": "requests:admin",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "The row version from the last `GET`, in quotes. Optional.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The request, `pending` again.",
+            "headers": {
+              "ETag": {
+                "description": "The new row version, in quotes.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not-restorable`: the request is not `discarded`; the detail names its status. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: the `If-Match` row version is not the current one. The body carries the current `rowVersion` and `updatedBy` (`{ id, name }`), so the dashboard can say who changed it. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/saved-requests/{id}/original": {

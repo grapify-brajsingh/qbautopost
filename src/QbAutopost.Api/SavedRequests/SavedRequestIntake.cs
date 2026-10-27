@@ -95,7 +95,7 @@ public sealed class SavedRequestIntake(
 
         var now = clock.UtcNow;
         var read = SavedPayloadReader.Read(payload);
-        var snapshot = validator.Validate(read, current.CurrentVersion + 1, now);
+        var snapshot = validator.Validate(read, current.CurrentVersion + 1, now, id);
         var canonical = PayloadCanonicalizer.Sha256(payload);
         var fingerprints = Fingerprints(read, now);
         var duplicate = await DetectAsync(canonical, read, fingerprints, id, now, ct);
@@ -119,7 +119,7 @@ public sealed class SavedRequestIntake(
 
         var now = clock.UtcNow;
         var read = SavedPayloadReader.Read(current.CurrentPayload);
-        var snapshot = validator.Validate(read, current.CurrentVersion, now);
+        var snapshot = validator.Validate(read, current.CurrentVersion, now, id);
         var fingerprints = Fingerprints(read, now);
         var duplicate = await DetectAsync(current.CanonicalSha256, read, fingerprints, id, now, ct);
 

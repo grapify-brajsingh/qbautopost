@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using QbAutopost.Api.Tests.TestSupport;
 using QbAutopost.Core.Security;
 
@@ -109,6 +110,54 @@ public sealed class SavedRequestTestHost : IDisposable
         Assert.Equal(System.Net.HttpStatusCode.Created, response.StatusCode);
         response.Dispose();
         return body.GetProperty("id").GetInt64();
+    }
+
+    /// <summary>The <c>before</c> or <c>after</c> payload of a diff fixture, as JSON text.</summary>
+    public static string DiffPart(string part) =>
+        JsonNode.Parse(Fixture("diff-payee-edit.json"))![part]!.ToJsonString();
+
+    /// <summary>Saves the <c>before</c> payload of the payee diff fixture and returns the new id.</summary>
+    public async Task<long> SaveBeforeAsync()
+    {
+        var (response, body) = await SaveAsync(DiffPart("before"));
+        Assert.Equal(System.Net.HttpStatusCode.Created, response.StatusCode);
+        response.Dispose();
+        return body.GetProperty("id").GetInt64();
+    }
+
+    /// <summary>PUT <c>{ payload, note }</c> with <paramref name="ifMatch"/> (null: no header) as <paramref name="client"/>.</summary>
+    public static async Task<HttpResponseMessage> PutAsync(
+        HttpClient client, long id, string payloadJson, string? ifMatch, string? note = null) =>
+        await PutRawAsync(
+            client, id,
+            new JsonObject { ["payload"] = JsonNode.Parse(payloadJson), ["note"] = note }.ToJsonString(), ifMatch);
+
+    public static async Task<HttpResponseMessage> PutRawAsync(HttpClient client, long id, string body, string? ifMatch)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Put, $"{Route}/{id}") { Content = Json(body) };
+        if (ifMatch is not null)
+        {
+            request.Headers.TryAddWithoutValidation("If-Match", ifMatch);
+        }
+
+        return await client.SendAsync(request);
+    }
+
+    public static async Task<HttpResponseMessage> PostActionAsync(
+        HttpClient client, long id, string action, string? body = null, string? ifMatch = null)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{Route}/{id}/{action}");
+        if (body is not null)
+        {
+            request.Content = Json(body);
+        }
+
+        if (ifMatch is not null)
+        {
+            request.Headers.TryAddWithoutValidation("If-Match", ifMatch);
+        }
+
+        return await client.SendAsync(request);
     }
 
     public static async Task<JsonElement> BodyOf(HttpResponseMessage response) =>

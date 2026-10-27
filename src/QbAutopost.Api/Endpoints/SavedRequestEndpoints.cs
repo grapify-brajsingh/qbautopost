@@ -1,10 +1,13 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Options;
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Database;
 using QbAutopost.Api.SavedRequests;
 using QbAutopost.Api.Security;
+using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.SavedRequests;
 
 namespace QbAutopost.Api.Endpoints;
@@ -14,7 +17,7 @@ namespace QbAutopost.Api.Endpoints;
 /// dashboard. Served under <c>/api/v1</c> only, behind the database gate (spec 10.7: <c>503 database-unavailable</c>
 /// with <c>Retry-After: 30</c>, before any store call). The scope of each route is <see cref="ApiRoutes.ScopeFor"/>'s.
 /// <para>
-/// T-1012 maps the save and the reads. Edit, validate, discard and restore are T-1013; post and resolve are T-1014.
+/// T-1012 maps the save and the reads; T-1013 adds edit, validate, discard and restore. Post and resolve are T-1014.
 /// </para>
 /// <para>
 /// Every answer is written with <see cref="SavedRequestJson.Options"/> (kebab-case enums), and every <c>{id}</c> goes
@@ -25,6 +28,9 @@ public static class SavedRequestEndpoints
 {
     private const int DefaultPageSize = 25;
     private const string DefaultSort = "-created";
+
+    /// <summary>Spec 7.1: the longest discard reason, after trimming.</summary>
+    public const int MaxDiscardReasonLength = 500;
 
     private static readonly HashSet<string> Sorts = new(StringComparer.Ordinal)
     {
@@ -44,6 +50,10 @@ public static class SavedRequestEndpoints
         group.MapGet("/", ListAsync);
         group.MapGet("/stats", StatsAsync);
         group.MapGet("/{id}", GetAsync);
+        group.MapPut("/{id}", EditAsync);
+        group.MapPost("/{id}/validate", ValidateAsync);
+        group.MapPost("/{id}/discard", DiscardAsync);
+        group.MapPost("/{id}/restore", RestoreAsync);
         group.MapGet("/{id}/original", OriginalAsync);
         group.MapGet("/{id}/versions", VersionsAsync);
         group.MapGet("/{id}/versions/{n}", VersionAsync);
@@ -66,25 +76,13 @@ public static class SavedRequestEndpoints
     /// </summary>
     private static async Task<IResult> SaveAsync(HttpContext http, SavedRequestIntake intake, CancellationToken ct)
     {
-        string raw;
-        try
+        var (raw, failure) = await ReadBodyAsync(http, ct);
+        if (failure is not null)
         {
-            http.Request.EnableBuffering();
-            http.Request.Body.Position = 0;
-            using var reader = new StreamReader(http.Request.Body, StrictUtf8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
-            raw = await reader.ReadToEndAsync(ct);
-        }
-        catch (DecoderFallbackException)
-        {
-            return NotAJsonObject("The body is not valid UTF-8.");
-        }
-        catch (BadHttpRequestException ex) when (ex.StatusCode == StatusCodes.Status413PayloadTooLarge)
-        {
-            // A chunked body declares no length, so only the server can stop it mid-flight (RequestSizeMiddleware).
-            return Problem(StatusCodes.Status413PayloadTooLarge, "Request body too large", ex.Message, "payload-too-large");
+            return failure;
         }
 
-        if (!SavedRequestIntake.TryParseObject(raw, out _))
+        if (!SavedRequestIntake.TryParseObject(raw!, out _))
         {
             return NotAJsonObject("The body must be one JSON object: the validate-and-post body (validate-and-post §4).");
         }
@@ -98,7 +96,7 @@ public static class SavedRequestEndpoints
         }
 
         var caller = CallerMiddleware.CallerOf(http)!;
-        var result = await intake.SaveAsync(raw, key.Length == 0 ? null : key, caller, ct);
+        var result = await intake.SaveAsync(raw!, key.Length == 0 ? null : key, caller, ct);
         var record = result.Record;
         switch (result.Kind)
         {
@@ -188,10 +186,7 @@ public static class SavedRequestEndpoints
             return NotFound();
         }
 
-        var version = await store.VersionAsync(record.Id, record.CurrentVersion, ct);
-        var names = await actors.ResolveAsync(SavedRequestViews.ActorsOf(record), ct);
-        http.Response.Headers.ETag = $"\"{record.RowVersion.ToString(CultureInfo.InvariantCulture)}\"";
-        return Json(SavedRequestViews.Detail(record, version?.ReadErrors ?? [], CallerMiddleware.CallerOf(http)!, names));
+        return await DetailAsync(http, record, store, actors, ct);
     }
 
     /// <summary>Spec 5.1, 6: the body exactly as it was received, byte for byte; never re-serialised.</summary>
@@ -264,7 +259,209 @@ public static class SavedRequestEndpoints
         return Json(new ItemsView<EventView>(events.Select(e => SavedRequestViews.Event(e, names)).ToList()));
     }
 
+    // ---- edit, validate, discard, restore ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// Spec 6.3. <c>If-Match</c> is required (<c>428</c>); a stale one is <c>412 edited-by-someone-else</c> naming the
+    /// current <c>rowVersion</c> and who last changed the request; anything but <c>pending</c> is <c>409 not-editable</c>.
+    /// An unreadable payload is stored and flagged, like a save. An identical payload answers <c>200</c> and writes nothing.
+    /// Nothing recomputes the control total (CLAUDE.md rule 3): it is whatever the editor sent.
+    /// </summary>
+    private static async Task<IResult> EditAsync(
+        HttpContext http, string id, SavedRequestIntake intake, ISavedRequestStore store, ActorDirectory actors, CancellationToken ct)
+    {
+        if (IfMatchOf(http) is not { } expected)
+        {
+            return Problem(
+                StatusCodes.Status428PreconditionRequired, "If-Match required",
+                "Send the request's ETag in If-Match (GET /saved-requests/{id} returns it).", "precondition-required");
+        }
+
+        var (raw, failure) = await ReadBodyAsync(http, ct);
+        if (failure is not null)
+        {
+            return failure;
+        }
+
+        if (!SavedRequestIntake.TryParseObject(raw!, out var body)
+            || !body.TryGetProperty("payload", out var payload) || payload.ValueKind != JsonValueKind.Object)
+        {
+            return NotAJsonObject("The body must be { \"payload\": { ...the validate-and-post body... }, \"note\": \"...\" }.");
+        }
+
+        string? note = null;
+        if (body.TryGetProperty("note", out var noteElement) && noteElement.ValueKind != JsonValueKind.Null)
+        {
+            if (noteElement.ValueKind != JsonValueKind.String)
+            {
+                return BadRequest("Invalid note", "note must be text.");
+            }
+
+            note = string.IsNullOrWhiteSpace(noteElement.GetString()) ? null : noteElement.GetString()!.Trim();
+        }
+
+        if (!SavedRequestId.TryParse(id, out var requestId))
+        {
+            return NotFound();
+        }
+
+        var result = await intake.EditAsync(requestId, expected, payload, note, CallerMiddleware.CallerOf(http)!, ct);
+        return await MutationAnswerAsync(http, result, "not-editable", "Not editable", "edited", store, actors, ct);
+    }
+
+    /// <summary>Spec 6.4: re-runs validation and the duplicate rules for the current version. Pending only.</summary>
+    private static async Task<IResult> ValidateAsync(
+        HttpContext http, string id, SavedRequestIntake intake, ISavedRequestStore store, ActorDirectory actors, CancellationToken ct)
+    {
+        if (!SavedRequestId.TryParse(id, out var requestId))
+        {
+            return NotFound();
+        }
+
+        var result = await intake.RevalidateAsync(requestId, CallerMiddleware.CallerOf(http)!, ct);
+        return await MutationAnswerAsync(http, result, "not-editable", "Not editable", "validated", store, actors, ct);
+    }
+
+    /// <summary>Spec 7.1: pending to discarded, with a reason of 1 to 500 characters after trimming. <c>If-Match</c> is honoured when sent.</summary>
+    private static async Task<IResult> DiscardAsync(
+        HttpContext http, string id, ISavedRequestStore store, ActorDirectory actors, IClock clock, CancellationToken ct)
+    {
+        var (raw, failure) = await ReadBodyAsync(http, ct);
+        if (failure is not null)
+        {
+            return failure;
+        }
+
+        string? reason = null;
+        if (SavedRequestIntake.TryParseObject(raw!, out var body)
+            && body.TryGetProperty("reason", out var reasonElement) && reasonElement.ValueKind == JsonValueKind.String)
+        {
+            reason = reasonElement.GetString()!.Trim();
+        }
+
+        if (reason is null or { Length: 0 } || reason.Length > MaxDiscardReasonLength)
+        {
+            return BadRequest("Reason required", $"Send {{ \"reason\": \"...\" }}, 1 to {MaxDiscardReasonLength} characters.");
+        }
+
+        if (!SavedRequestId.TryParse(id, out var requestId))
+        {
+            return NotFound();
+        }
+
+        var result = await store.ChangeStatusAsync(
+            requestId, IfMatchOf(http), SavedRequestStatus.Pending, SavedRequestStatus.Discarded,
+            CallerMiddleware.CallerOf(http)!.Actor, clock.UtcNow, SavedRequestEvents.Discarded,
+            new JsonObject { ["reason"] = reason }, ct);
+        return await MutationAnswerAsync(http, result, "not-discardable", "Not discardable", "discarded", store, actors, ct);
+    }
+
+    /// <summary>Spec 7.1: discarded back to pending, for an admin (the scope is <see cref="ApiRoutes.ScopeFor"/>'s). Clears the reason.</summary>
+    private static async Task<IResult> RestoreAsync(
+        HttpContext http, string id, ISavedRequestStore store, ActorDirectory actors, IClock clock, CancellationToken ct)
+    {
+        if (!SavedRequestId.TryParse(id, out var requestId))
+        {
+            return NotFound();
+        }
+
+        var result = await store.ChangeStatusAsync(
+            requestId, IfMatchOf(http), SavedRequestStatus.Discarded, SavedRequestStatus.Pending,
+            CallerMiddleware.CallerOf(http)!.Actor, clock.UtcNow, SavedRequestEvents.Restored, null, ct);
+        return await MutationAnswerAsync(http, result, "not-restorable", "Not restorable", "restored", store, actors, ct);
+    }
+
+    /// <summary>
+    /// The one answer every change gives. Not found is <c>404</c>; a stale row version is <c>412</c> with the current
+    /// <c>rowVersion</c> and the last person to change it; a status the change does not apply to is <c>409</c> naming the
+    /// status; anything else is the record, with its new <c>ETag</c> and <c>allowedActions</c> for the caller.
+    /// </summary>
+    private static async Task<IResult> MutationAnswerAsync(
+        HttpContext http, MutationResult result, string conflictType, string conflictTitle, string verb,
+        ISavedRequestStore store, ActorDirectory actors, CancellationToken ct)
+    {
+        var record = result.Record;
+        switch (result.Kind)
+        {
+            case MutationKind.NotFound:
+                return NotFound();
+            case MutationKind.Stale:
+                var by = (await actors.ResolveAsync([record!.UpdatedBy], ct)).Of(record.UpdatedBy);
+                return Results.Problem(
+                    statusCode: StatusCodes.Status412PreconditionFailed,
+                    title: "Edited by someone else",
+                    detail: $"{record.PublicRef} was changed by {by.Name}. Reload it and try again. Nothing was {verb}.",
+                    type: "edited-by-someone-else",
+                    extensions: new Dictionary<string, object?>
+                    {
+                        ["rowVersion"] = record.RowVersion,
+                        ["updatedBy"] = new { id = by.Id, name = by.Name },
+                    });
+            case MutationKind.WrongStatus:
+                return Problem(
+                    StatusCodes.Status409Conflict, conflictTitle,
+                    $"{record!.PublicRef} is {SavedRequestJson.Name(record.Status)}, so this is not allowed. Nothing was {verb}.",
+                    conflictType);
+            default:
+                return await DetailAsync(http, record!, store, actors, ct);
+        }
+    }
+
     // ---- shared steps -----------------------------------------------------------------------------------------------
+
+    /// <summary>Spec 6.2: the record with its <c>ETag</c> and the caller's <c>allowedActions</c>.</summary>
+    private static async Task<IResult> DetailAsync(
+        HttpContext http, SavedRequest record, ISavedRequestStore store, ActorDirectory actors, CancellationToken ct)
+    {
+        var version = await store.VersionAsync(record.Id, record.CurrentVersion, ct);
+        var names = await actors.ResolveAsync(SavedRequestViews.ActorsOf(record), ct);
+        http.Response.Headers.ETag = $"\"{record.RowVersion.ToString(CultureInfo.InvariantCulture)}\"";
+        return Json(SavedRequestViews.Detail(record, version?.ReadErrors ?? [], CallerMiddleware.CallerOf(http)!, names));
+    }
+
+    /// <summary>
+    /// The request body as UTF-8 text, or the answer to give instead: invalid UTF-8 is <c>400 not-a-json-object</c> and a
+    /// chunked body over the limit is <c>413</c> (a declared length is <c>RequestSizeMiddleware</c>'s, before this runs).
+    /// </summary>
+    private static async Task<(string? Raw, IResult? Failure)> ReadBodyAsync(HttpContext http, CancellationToken ct)
+    {
+        try
+        {
+            http.Request.EnableBuffering();
+            http.Request.Body.Position = 0;
+            using var reader = new StreamReader(http.Request.Body, StrictUtf8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+            return (await reader.ReadToEndAsync(ct), null);
+        }
+        catch (DecoderFallbackException)
+        {
+            return (null, NotAJsonObject("The body is not valid UTF-8."));
+        }
+        catch (BadHttpRequestException ex) when (ex.StatusCode == StatusCodes.Status413PayloadTooLarge)
+        {
+            // A chunked body declares no length, so only the server can stop it mid-flight (RequestSizeMiddleware).
+            return (null, Problem(StatusCodes.Status413PayloadTooLarge, "Request body too large", ex.Message, "payload-too-large"));
+        }
+    }
+
+    /// <summary>
+    /// The row version in <c>If-Match</c>, or null when the header is absent. Something that is not a whole number
+    /// can never be a row version, so it becomes -1 and the store answers it as stale.
+    /// </summary>
+    private static int? IfMatchOf(HttpContext http)
+    {
+        var header = http.Request.Headers.IfMatch.ToString().Trim();
+        if (header.Length == 0)
+        {
+            return null;
+        }
+
+        if (header.StartsWith("W/", StringComparison.Ordinal))
+        {
+            header = header[2..];
+        }
+
+        return int.TryParse(header.Trim('"'), NumberStyles.None, CultureInfo.InvariantCulture, out var version) ? version : -1;
+    }
 
     private static async Task<SavedRequest?> FindAsync(ISavedRequestStore store, string id, CancellationToken ct) =>
         SavedRequestId.TryParse(id, out var value) ? await store.GetAsync(value, ct) : null;

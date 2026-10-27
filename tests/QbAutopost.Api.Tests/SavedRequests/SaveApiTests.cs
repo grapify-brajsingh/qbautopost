@@ -1,4 +1,13 @@
 using System.Net;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
+using QbAutopost.Api.Jobs;
+using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Api;
+using QbAutopost.Core.Pipeline;
+using QbAutopost.Core.Store;
 using QbAutopost.Api.Database;
 using QbAutopost.Api.Endpoints;
 using QbAutopost.Api.Tests.TestSupport;
@@ -190,5 +199,38 @@ public sealed class SaveApiTests : IDisposable
         Assert.Equal("database-unavailable", problem.GetProperty("type").GetString());
         Assert.Equal("30", Assert.Single(response.Headers.GetValues("Retry-After")));
         Assert.Equal(0, (await Store.StatsAsync(CancellationToken.None)).Total);
+    }
+
+    /// <summary>R24: whatever stops the plan, the save still succeeds and the body names no path.</summary>
+    [Fact]
+    public async Task Should_SaveWithUnavailableSnapshot_When_PlannerThrowsAnything()
+    {
+        const string secretPath = @"C:\secret\serverules.json";
+        using var host = _host.Factory.WithWebHostBuilder(b => b.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<DirectPostRunner>();
+            services.AddSingleton<DirectPostRunner>(sp =>
+                ActivatorUtilities.CreateInstance<ThrowingRunner>(sp, new InvalidOperationException("bad state at " + secretPath)));
+        }));
+        using var client = host.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", _host.N8nKey);
+
+        var (response, body) = await _host.SaveAsync(SavedRequestTestHost.Fixture("n8n-good.json"), client: client);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var validation = body.GetProperty("validation");
+        Assert.Equal("unavailable", validation.GetProperty("state").GetString());
+        Assert.Equal("validation could not run", validation.GetProperty("reason").GetString());
+        Assert.False(body.GetProperty("needsAttention").GetBoolean());
+        Assert.DoesNotContain("secret", body.GetRawText());
+        Assert.Equal(1, (await Store.StatsAsync(CancellationToken.None)).Total);
+    }
+
+    private sealed class ThrowingRunner(
+        Exception failure, PipelineOptions options, DirectPlanner planner, ApiBatchStore batches, IQbGateway gateway,
+        IClock clock, ILogger<DirectPostRunner> log)
+        : DirectPostRunner(options, planner, batches, gateway, clock, log)
+    {
+        public override DirectPlan Plan(DirectRequest request) => throw failure;
     }
 }

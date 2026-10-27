@@ -1,4 +1,3 @@
-using System.Text.Json;
 using QbAutopost.Api.Jobs;
 using QbAutopost.Core.Api;
 using QbAutopost.Core.SavedRequests;
@@ -16,7 +15,14 @@ namespace QbAutopost.Api.SavedRequests;
 /// </summary>
 public sealed class SavedRequestValidator(DirectPostRunner runner, ILogger<SavedRequestValidator> log)
 {
-    public ValidationSnapshot Validate(PayloadRead read, int versionNumber, DateTime nowUtc)
+    /// <summary>Shown to callers when the plan threw for a reason other than the rules file; never an exception message.</summary>
+    public const string CouldNotRun = "validation could not run";
+
+    /// <summary>Shown to callers when the rules file is missing (spec 10.8).</summary>
+    public const string RulesMissing = "rules file missing";
+
+    /// <param name="savedRequestId">For the log line only; null while a new request is being saved.</param>
+    public ValidationSnapshot Validate(PayloadRead read, int versionNumber, DateTime nowUtc, long? savedRequestId = null)
     {
         if (!read.Readable)
         {
@@ -34,13 +40,19 @@ public sealed class SavedRequestValidator(DirectPostRunner runner, ILogger<Saved
         {
             plan = runner.Plan(request.ToDirectRequest());
         }
-        catch (Exception ex) when (ex is IOException or JsonException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Spec 6.1 step 4 and 10.8: the rules file is missing (T-920's RulesFileNotFoundException is an
-            // IOException) or a list cannot be read. The check is down, not the request: the save still succeeds and
-            // the snapshot says so. The message names a path on this server, never a secret.
-            log.LogWarning("Validation of saved version {Version} could not run: {Error}", versionNumber, ex.Message);
-            return Snapshot(ValidationState.Unavailable, versionNumber, nowUtc, [ex.Message]);
+            // R24, spec 6.1 step 4 and 10.8: whatever stops the plan (rules file missing, a list that cannot be read,
+            // a bug), the check is down, not the request. The save or edit still succeeds with an `unavailable`
+            // snapshot, so the payload is never lost. The text callers see is fixed: an exception message can name a
+            // path on this server. The log carries the exception type and the id, never the message.
+            log.LogWarning(
+                "Validation of saved request {SavedRequestId} version {Version} could not run: {ExceptionType}",
+                savedRequestId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "new", versionNumber,
+                ex.GetType().Name);
+            return Snapshot(
+                ValidationState.Unavailable, versionNumber, nowUtc,
+                [ex is QbAutopost.Core.Mapping.RulesFileNotFoundException ? RulesMissing : CouldNotRun]);
         }
 
         if (plan.Errors.Count > 0)
