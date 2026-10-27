@@ -11,6 +11,7 @@ using QbAutopost.Core.Mapping;
 using QbAutopost.Core.SavedRequests;
 using QbAutopost.Core.Security;
 using QbAutopost.Core.Store;
+using Serilog.Context;
 using HttpJsonOptions = Microsoft.AspNetCore.Http.Json.JsonOptions;
 
 namespace QbAutopost.Api.SavedRequests;
@@ -45,6 +46,7 @@ public sealed class SavedRequestPoster(
     /// <summary>The fields the post-by-id answer adds to validate-and-post's (spec 7.2).</summary>
     public const string SavedRequestIdField = "savedRequestId";
     public const string AttemptIdField = "attemptId";
+    public const string PostIdField = "postId";
 
     /// <summary>
     /// SPEC-GAP T-1014: spec 7.2 calls this the request's new <c>status</c>, but <c>status</c> is already the HTTP
@@ -66,6 +68,9 @@ public sealed class SavedRequestPoster(
     public async Task<SavedPostOutcome> PostAsync(
         long id, int? expectedRowVersion, bool confirmDuplicate, Caller caller, CancellationToken ct)
     {
+        // Spec 12: every line from here on, the engine's included, names the saved request.
+        using var requestScope = LogContext.PushProperty(SavedRequestIdField, id);
+
         // 1. Spec 9: a flagged request needs the person to say so. Checked before the claim, so no attempt is created.
         var current = await store.GetAsync(id, ct);
         if (current is null)
@@ -105,7 +110,7 @@ public sealed class SavedRequestPoster(
 
         var attemptId = claim.AttemptId!.Value;
         var record = claim.Record!;
-        using var scope = log.BeginScope(new Dictionary<string, object> { ["savedRequestId"] = id, ["attemptId"] = attemptId });
+        using var attemptScope = LogContext.PushProperty(AttemptIdField, attemptId);
         log.LogInformation(
             "Saved request {SavedRequestId}: attempt {AttemptId} claimed version {Version} for {Actor}",
             id, attemptId, claim.VersionNumber, caller.Actor);
@@ -135,7 +140,8 @@ public sealed class SavedRequestPoster(
             return await FailAsync(record, attemptId, ex, sending);
         }
 
-        // 6.
+        // 6. QuickBooks has answered: the recording lines name the post too.
+        using var postScope = post.Result?.PostId is { } postId ? LogContext.PushProperty(PostIdField, postId) : null;
         var (newStatus, problem) = await FinishAsync(record, attemptId, post, EndingOf(post));
         return problem is null
             ? new SavedPostOutcome(SavedPostKind.Ran, post, attemptId, record, SyncPostResponses.StatusOf(post), newStatus)

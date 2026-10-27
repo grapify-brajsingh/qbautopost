@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using QbAutopost.Core.Api;
+using QbAutopost.Core.Jobs;
 using QbAutopost.Core.SavedRequests;
 using QbAutopost.Core.Security;
 
@@ -146,9 +147,25 @@ public sealed record AttemptDetailView(
     ActorView? ResolvedBy,
     DateTime? ResolvedUtc,
     string? ResolutionNote,
-    JsonNode? Result)
+    JsonNode? Result,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] LedgerBatchView? LedgerBatch = null)
     : AttemptView(Id, VersionNumber, Outcome, HttpStatus, PostId, Counts, Error, StartedUtc, FinishedUtc, StartedBy,
         ResolvedBy, ResolvedUtc, ResolutionNote);
+
+/// <summary>A row QuickBooks accepted, as the ledger recorded it: what an admin looks up in QuickBooks (spec 10.6).</summary>
+public sealed record LedgerPostedRowView(int Index, string TxnId, string RequestId, string Kind, string Account, string? Payee, decimal Amount);
+
+/// <summary>
+/// Spec 10.6: the ledger batch behind an attempt's <c>postId</c>, read from the batch store that
+/// <c>GET /api/v1/batches/{id}</c> reads, so an admin can check QuickBooks before resolving an unknown or partial post.
+/// </summary>
+public sealed record LedgerBatchView(
+    string BatchId,
+    JobStatus Status,
+    DirectPostCounts Counts,
+    DirectPostTotals Totals,
+    string? Error,
+    IReadOnlyList<LedgerPostedRowView> Posted);
 
 public sealed record EventView(long Id, string Kind, JsonNode? Detail, DateTime AtUtc, ActorView Actor);
 
@@ -217,9 +234,17 @@ public static class SavedRequestViews
         new(a.Id, a.VersionNumber, a.Outcome, a.HttpStatus, a.PostId, a.Counts, a.Error, a.StartedUtc, a.FinishedUtc,
             names.Of(a.StartedBy), a.ResolvedBy is { } by ? names.Of(by) : null, a.ResolvedUtc, a.ResolutionNote);
 
-    public static AttemptDetailView AttemptDetail(PostAttempt a, ActorNames names) =>
+    public static AttemptDetailView AttemptDetail(PostAttempt a, ActorNames names, DirectPostResult? ledger = null) =>
         new(a.Id, a.VersionNumber, a.Outcome, a.HttpStatus, a.PostId, a.Counts, a.Error, a.StartedUtc, a.FinishedUtc,
-            names.Of(a.StartedBy), a.ResolvedBy is { } by ? names.Of(by) : null, a.ResolvedUtc, a.ResolutionNote, a.Result);
+            names.Of(a.StartedBy), a.ResolvedBy is { } by ? names.Of(by) : null, a.ResolvedUtc, a.ResolutionNote, a.Result,
+            ledger is null ? null : LedgerBatch(ledger));
+
+    public static LedgerBatchView LedgerBatch(DirectPostResult batch) =>
+        new(
+            batch.BatchId, batch.Status, batch.Counts, batch.Totals, batch.Error,
+            batch.Posted.Select(r => new LedgerPostedRowView(
+                r.Index, r.TxnId, r.RequestId, JsonNamingPolicy.CamelCase.ConvertName(r.Kind.ToString()), r.Account, r.Payee, r.Amount))
+                .ToList());
 
     public static EventView Event(SavedRequestEvent e, ActorNames names) => new(e.Id, e.Kind, e.Detail, e.AtUtc, names.Of(e.Actor));
 

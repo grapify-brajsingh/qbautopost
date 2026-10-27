@@ -2139,6 +2139,129 @@
         }
       }
     },
+    "/api/v1/saved-requests/{id}/resolve": {
+      "post": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "resolveSavedRequest",
+        "summary": "Settle an unknown or partial post (admin only).",
+        "description": "Saved-requests §10.6. After a person has checked QuickBooks (the attempt's `ledgerBatch`, from `GET /saved-requests/{id}/attempts/{attemptId}`, lists the batch and the transaction ids to look up). `posted` moves the request to `posted` and copies the attempt's `postId`; `not-posted` moves it to `pending`. Only `unknown` can go either way; `partial` can only be `posted` (accepted as is): to post the remaining rows, create a new saved request. The note is required, 1 to 500 characters after trimming; the resolver and the note are stored on the attempt and in a `resolved` event. Nothing is sent to QuickBooks. `If-Match` is optional; when sent, it must be the current row version.",
+        "x-required-scope": "requests:admin",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "The row version from the last `GET`, in quotes. Optional.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["outcome", "note"],
+                "properties": {
+                  "outcome": { "type": "string", "enum": ["posted", "not-posted"], "description": "What a person found in QuickBooks." },
+                  "note": { "type": "string", "minLength": 1, "maxLength": 500, "description": "Why, after trimming. Required." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The request, `posted` or `pending`.",
+            "headers": {
+              "ETag": {
+                "description": "The new row version, in quotes.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid-request`: the body is not an object with a valid `outcome` and a note of 1 to 500 characters. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not-resolvable`: the request is not `unknown` or `partial`, or it is `partial` and the outcome is `not-posted`; the detail names its status. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: the `If-Match` row version is not the current one. The body carries the current `rowVersion` and `updatedBy`. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/saved-requests/{id}/post": {
       "post": {
         "tags": [
@@ -2233,7 +2356,7 @@
             }
           },
           "412": {
-            "description": "`edited-by-someone-else`: `If-Match` is not the current row version. The body carries the current `rowVersion` and `updatedBy`. Nothing was claimed or sent.",
+            "description": "`edited-by-someone-else`: `If-Match` is not the current row version, or the request changed between the duplicate check and the claim (the claim is made at the row version the check read). The body carries the current `rowVersion` and `updatedBy`. Nothing was claimed or sent.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2552,7 +2675,7 @@
         ],
         "operationId": "getSavedRequestAttempt",
         "summary": "One attempt with the full stored result.",
-        "description": "`result` is the validate-and-post answer (200) or its problem body, stored as returned.",
+        "description": "`result` is the validate-and-post answer (200) or its problem body, stored as returned. When the attempt has a `postId`, `ledgerBatch` is the batch behind it, read from the same store as `GET /batches/{id}`, so an admin can check QuickBooks before resolving an unknown or partial post (§10.6). It is left out when the batch file is missing or unreadable; that never fails this read.",
         "x-required-scope": "requests:read",
         "security": [
           {
@@ -3270,7 +3393,7 @@
           "attemptId": { "type": "integer", "format": "int64", "description": "The attempt this post recorded: `GET /saved-requests/{id}/attempts/{attemptId}`." },
           "savedRequestStatus": {
             "type": "string",
-            "enum": ["pending", "posting", "posted", "partial", "unknown"],
+            "enum": ["pending", "posting", "posted", "partial", "unknown", "discarded"],
             "description": "The request's status after the attempt. Named apart from `status`, which stays validate-and-post's (Q-90). `posting` means the result could not be recorded and is in the evidence file."
           }
         }
@@ -4452,6 +4575,50 @@
             "type": "object",
             "nullable": true,
             "additionalProperties": true
+          },
+          "ledgerBatch": {
+            "$ref": "#/components/schemas/LedgerBatch"
+          }
+        }
+      },
+      "LedgerBatch": {
+        "type": "object",
+        "description": "The ledger batch of an attempt's `postId` (§10.6). Absent when the attempt has no `postId` or the batch cannot be read.",
+        "properties": {
+          "batchId": { "type": "string" },
+          "status": { "type": "string", "description": "The batch's job status, e.g. `posted`, `partial`, `failed`." },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "submitted": { "type": "integer", "format": "int32" },
+              "posted": { "type": "integer", "format": "int32" },
+              "held": { "type": "integer", "format": "int32" },
+              "skipped": { "type": "integer", "format": "int32" }
+            }
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "submitted": { "type": "number", "format": "decimal" },
+              "posted": { "type": "number", "format": "decimal" }
+            }
+          },
+          "error": { "type": "string", "nullable": true },
+          "posted": {
+            "type": "array",
+            "description": "The rows QuickBooks accepted, with the transaction ids to look up.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": { "type": "integer", "format": "int32" },
+                "txnId": { "type": "string" },
+                "requestId": { "type": "string" },
+                "kind": { "type": "string" },
+                "account": { "type": "string" },
+                "payee": { "type": "string", "nullable": true },
+                "amount": { "type": "number", "format": "decimal" }
+              }
+            }
           }
         }
       },

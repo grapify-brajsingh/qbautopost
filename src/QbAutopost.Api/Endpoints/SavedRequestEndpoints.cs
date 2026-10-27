@@ -9,6 +9,9 @@ using QbAutopost.Api.SavedRequests;
 using QbAutopost.Api.Security;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.SavedRequests;
+using QbAutopost.Core.Api;
+using QbAutopost.Core.Store;
+using Serilog.Context;
 
 namespace QbAutopost.Api.Endpoints;
 
@@ -46,6 +49,7 @@ public static class SavedRequestEndpoints
     public static IEndpointRouteBuilder MapSavedRequestEndpoints(this IEndpointRouteBuilder v1)
     {
         var group = v1.MapGroup("/saved-requests").RequireDatabase();
+        group.AddEndpointFilter(SavedRequestLogContext);
         group.MapPost("/", SaveAsync);
         group.MapGet("/", ListAsync);
         group.MapGet("/stats", StatsAsync);
@@ -55,6 +59,7 @@ public static class SavedRequestEndpoints
         group.MapPost("/{id}/discard", DiscardAsync);
         group.MapPost("/{id}/restore", RestoreAsync);
         group.MapPost("/{id}/post", PostAsync);
+        group.MapPost("/{id}/resolve", ResolveAsync);
         group.MapGet("/{id}/original", OriginalAsync);
         group.MapGet("/{id}/versions", VersionsAsync);
         group.MapGet("/{id}/versions/{n}", VersionAsync);
@@ -62,6 +67,22 @@ public static class SavedRequestEndpoints
         group.MapGet("/{id}/attempts/{attemptId}", AttemptAsync);
         group.MapGet("/{id}/events", EventsAsync);
         return v1;
+    }
+
+    /// <summary>
+    /// Spec 12: every line written while a route with an <c>{id}</c> runs carries <c>savedRequestId</c>, beside the
+    /// <c>requestId</c> and <c>clientId</c> the middleware pushed. An id that is not one adds nothing: the answer is 404.
+    /// </summary>
+    private static async ValueTask<object?> SavedRequestLogContext(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+    {
+        var raw = context.HttpContext.Request.RouteValues["id"]?.ToString();
+        if (raw is null || !SavedRequestId.TryParse(raw, out var id))
+        {
+            return await next(context);
+        }
+
+        using var scope = LogContext.PushProperty(SavedRequestPoster.SavedRequestIdField, id);
+        return await next(context);
     }
 
     // ---- save -------------------------------------------------------------------------------------------------------
@@ -234,8 +255,15 @@ public static class SavedRequestEndpoints
         return Json(new ItemsView<AttemptView>(attempts.Select(a => SavedRequestViews.Attempt(a, names)).ToList()));
     }
 
+    /// <summary>
+    /// Spec 6.3, 10.6: one attempt with its stored result. When it has a <c>postId</c> the ledger batch behind it is
+    /// added (<c>ledgerBatch</c>), read from the batch store <c>GET /batches/{id}</c> reads. A batch that is missing or
+    /// cannot be read is left out and logged: it must never fail the read, because the admin needs the rest of the
+    /// attempt precisely when the batch is in doubt.
+    /// </summary>
     private static async Task<IResult> AttemptAsync(
-        string id, string attemptId, ISavedRequestStore store, ActorDirectory actors, CancellationToken ct)
+        string id, string attemptId, ISavedRequestStore store, ActorDirectory actors, ApiBatchStore batches,
+        ILoggerFactory loggers, CancellationToken ct)
     {
         if (!long.TryParse(attemptId, NumberStyles.None, CultureInfo.InvariantCulture, out var attempt) || attempt < 1
             || !SavedRequestId.TryParse(id, out var requestId)
@@ -244,8 +272,33 @@ public static class SavedRequestEndpoints
             return NotFound();
         }
 
+        using var scope = LogContext.PushProperty(SavedRequestPoster.AttemptIdField, found.Id);
+        var ledger = found.PostId is { } postId ? LoadLedgerBatch(batches, postId, requestId, loggers) : null;
         var names = await actors.ResolveAsync([found.StartedBy, found.ResolvedBy], ct);
-        return Json(SavedRequestViews.AttemptDetail(found, names));
+        return Json(SavedRequestViews.AttemptDetail(found, names, ledger));
+    }
+
+    private static DirectPostResult? LoadLedgerBatch(ApiBatchStore batches, string postId, long requestId, ILoggerFactory loggers)
+    {
+        var log = loggers.CreateLogger(typeof(SavedRequestEndpoints));
+        using var scope = LogContext.PushProperty("postId", postId);
+        try
+        {
+            var batch = batches.Load(postId);
+            if (batch is null)
+            {
+                log.LogWarning("Saved request {SavedRequestId}: ledger batch {PostId} is missing or unreadable; left out of the attempt", requestId, postId);
+            }
+
+            return batch;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            log.LogWarning(
+                "Saved request {SavedRequestId}: ledger batch {PostId} could not be read ({Error}); left out of the attempt",
+                requestId, postId, ex.GetType().Name);
+            return null;
+        }
     }
 
     private static async Task<IResult> EventsAsync(string id, ISavedRequestStore store, ActorDirectory actors, CancellationToken ct)
@@ -370,6 +423,80 @@ public static class SavedRequestEndpoints
             requestId, IfMatchOf(http), SavedRequestStatus.Discarded, SavedRequestStatus.Pending,
             CallerMiddleware.CallerOf(http)!.Actor, clock.UtcNow, SavedRequestEvents.Restored, null, ct);
         return await MutationAnswerAsync(http, result, "not-restorable", "Not restorable", "restored", store, actors, ct);
+    }
+
+    // ---- resolve ----------------------------------------------------------------------------------------------------
+
+    /// <summary>Spec 10.6: the longest resolution note, after trimming (the same bound as a discard reason).</summary>
+    public const int MaxResolveNoteLength = 500;
+
+    /// <summary>
+    /// Spec 10.6, admin only (the scope is <see cref="ApiRoutes.ScopeFor"/>'s): settles an <c>unknown</c> or
+    /// <c>partial</c> request after a person has checked QuickBooks. Body <c>{ "outcome": "posted" | "not-posted",
+    /// "note": "..." }</c>, the note 1 to 500 characters after trimming. Any other status, and <c>not-posted</c> for a
+    /// partial post (rows have landed; removing them is undo's job), is <c>409 not-resolvable</c>. <c>If-Match</c> is
+    /// honoured when sent. Nothing is sent to QuickBooks.
+    /// </summary>
+    private static async Task<IResult> ResolveAsync(
+        HttpContext http, string id, ISavedRequestStore store, ActorDirectory actors, IClock clock, CancellationToken ct)
+    {
+        var (raw, failure) = await ReadBodyAsync(http, ct);
+        if (failure is not null)
+        {
+            return failure;
+        }
+
+        ResolveOutcome? outcome = null;
+        string? note = null;
+        if (SavedRequestIntake.TryParseObject(raw!, out var body))
+        {
+            if (body.TryGetProperty("outcome", out var outcomeElement) && outcomeElement.ValueKind == JsonValueKind.String)
+            {
+                outcome = outcomeElement.GetString() switch
+                {
+                    "posted" => ResolveOutcome.Posted,
+                    "not-posted" => ResolveOutcome.NotPosted,
+                    _ => null,
+                };
+            }
+
+            if (body.TryGetProperty("note", out var noteElement) && noteElement.ValueKind == JsonValueKind.String)
+            {
+                note = noteElement.GetString()!.Trim();
+            }
+        }
+
+        if (outcome is null || note is null or { Length: 0 } || note.Length > MaxResolveNoteLength)
+        {
+            return BadRequest(
+                "Outcome and note required",
+                $"Send {{ \"outcome\": \"posted\" | \"not-posted\", \"note\": \"...\" }}, the note 1 to {MaxResolveNoteLength} characters. "
+                + "Nothing was resolved.");
+        }
+
+        if (!SavedRequestId.TryParse(id, out var requestId))
+        {
+            return NotFound();
+        }
+
+        // The store's ResolveAsync takes no row version, so a sent If-Match is checked here. The status test that
+        // decides the move is still the store's, in the same transaction as the write.
+        if (IfMatchOf(http) is { } expected)
+        {
+            if (await store.GetAsync(requestId, ct) is not { } current)
+            {
+                return NotFound();
+            }
+
+            if (current.RowVersion != expected)
+            {
+                return await MutationAnswerAsync(
+                    http, new MutationResult(MutationKind.Stale, current), "not-resolvable", "Not resolvable", "resolved", store, actors, ct);
+            }
+        }
+
+        var result = await store.ResolveAsync(requestId, outcome.Value, note, CallerMiddleware.CallerOf(http)!.Actor, clock.UtcNow, ct);
+        return await MutationAnswerAsync(http, result, "not-resolvable", "Not resolvable", "resolved", store, actors, ct);
     }
 
     // ---- post -------------------------------------------------------------------------------------------------------
