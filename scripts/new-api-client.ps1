@@ -37,6 +37,10 @@
 
 .EXAMPLE
     .\new-api-client.ps1 -Id acme-erp -Rotate -RotateHours 48
+
+.EXAMPLE
+    # The n8n mailbox workflow after the saved-requests switch-over (runbook 10.6): it may only submit.
+    .\new-api-client.ps1 -Id n8n-requests -Name 'n8n mailbox' -Scopes requests:submit -ClientsFile C:\qb-autopost\clients.json
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(

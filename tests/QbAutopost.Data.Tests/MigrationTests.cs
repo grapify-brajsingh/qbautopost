@@ -35,7 +35,7 @@ public sealed class MigrationTests(PostgresFixture postgres) : IClassFixture<Pos
     [PostgresFact]
     public async Task Should_ApplyAllMigrations_When_DatabaseIsEmpty()
     {
-        await using var db = CreateContext(await postgres.CreateDatabaseAsync());
+        await using var db = CreateContext(await postgres.CreateAdminDatabaseAsync());
 
         await db.Database.MigrateAsync();
         var status = await SchemaState.CheckAsync(db, CancellationToken.None);
@@ -49,7 +49,7 @@ public sealed class MigrationTests(PostgresFixture postgres) : IClassFixture<Pos
     [PostgresFact]
     public async Task Should_ReportOutOfDate_When_LastMigrationNotApplied()
     {
-        await using var db = CreateContext(await postgres.CreateDatabaseAsync());
+        await using var db = CreateContext(await postgres.CreateAdminDatabaseAsync());
         var migrations = db.Database.GetMigrations().ToList();
         if (migrations.Count > 1)
         {

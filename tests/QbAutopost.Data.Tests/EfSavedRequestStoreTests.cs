@@ -17,6 +17,7 @@ public sealed class EfSavedRequestStoreTests(PostgresFixture postgres)
     : SavedRequestStoreContract, IClassFixture<PostgresFixture>, IAsyncLifetime
 {
     private ServiceProvider? _services;
+    private string? _connectionString;
 
     public async Task InitializeAsync()
     {
@@ -25,11 +26,9 @@ public sealed class EfSavedRequestStoreTests(PostgresFixture postgres)
             return;
         }
 
-        var connectionString = await postgres.CreateDatabaseAsync();
+        var connectionString = _connectionString = await postgres.CreateDatabaseAsync();
         _services = new ServiceCollection().AddQbAutopostData(connectionString, commandTimeoutSeconds: 30).BuildServiceProvider();
-        var factory = _services.GetRequiredService<IDbContextFactory<QbAutopostDbContext>>();
-        await using var db = await factory.CreateDbContextAsync();
-        await db.Database.MigrateAsync();
+        await PostgresFixture.MigrateAsync(connectionString);
     }
 
     public async Task DisposeAsync()
@@ -37,6 +36,11 @@ public sealed class EfSavedRequestStoreTests(PostgresFixture postgres)
         if (_services is not null)
         {
             await _services.DisposeAsync();
+        }
+
+        if (_connectionString is not null)
+        {
+            Api.TestDatabase.Release(_connectionString);
         }
     }
 

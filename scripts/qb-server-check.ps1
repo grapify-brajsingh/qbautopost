@@ -4,7 +4,10 @@
   T-609 helper: runs the manual QuickBooks check against a running QbAutopost API, one step at a time.
 
 .DESCRIPTION
-  Steps, in order: health -> sync -> dryrun -> post -> undo.
+  Steps, in order: health -> postgres -> sync -> dryrun -> post -> undo.
+  The postgres step (T-1016) checks the PostgreSQL service is running, the database answers the API's own
+  GET /api/v1/health/database (reachable, schema current), and the newest dump in <QuickBooks:BackupFolder>\postgres is
+  younger than -MaxDumpAgeHours (36). It changes nothing.
   Run it on the QuickBooks server, in the interactive session of the account QuickBooks runs under,
   with Company:FilePath pointing at a COPY of the company file.
   Every call goes to the versioned routes (/api/v1/...) and carries a key.
@@ -15,13 +18,14 @@
 
 .EXAMPLE
   .\scripts\qb-server-check.ps1 -Step health
+  .\scripts\qb-server-check.ps1 -Step postgres -BackupFolder D:\qb-backups
   .\scripts\qb-server-check.ps1 -Step dryrun -Folder C:\qb-jobs\2026-08-tropicana
   .\scripts\qb-server-check.ps1 -Step post -JobId 2026-08-tropicana -ConfirmCopy
   .\scripts\qb-server-check.ps1 -Step undo -BatchId '2026-08-tropicana#1' -ConfirmCopy
 #>
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('health', 'sync', 'dryrun', 'post', 'undo')]
+    [ValidateSet('health', 'postgres', 'sync', 'dryrun', 'post', 'undo')]
     [string] $Step,
     [string] $BaseUrl = 'http://127.0.0.1:5080',
     [string] $ApiKey = $env:QBAUTOPOST__Api__ApiKey,
@@ -30,6 +34,9 @@ param(
     [string] $BatchId,
     [switch] $ConfirmCopy,
     [switch] $Force,
+    [string] $PostgresService = 'postgresql-x64-16',
+    [string] $BackupFolder = $env:QBAUTOPOST__QuickBooks__BackupFolder,
+    [int] $MaxDumpAgeHours = 36,
     [int] $WaitSeconds = 900
 )
 
@@ -77,7 +84,64 @@ function Require-Copy {
     }
 }
 
+function Test-PostgresStep {
+    $failed = $false
+
+    $service = Get-Service -Name $PostgresService -ErrorAction SilentlyContinue
+    if (-not $service) {
+        Write-Warning "PostgreSQL service '$PostgresService' not found (deploy\install-postgres.ps1)."
+        $failed = $true
+    }
+    elseif ($service.Status -ne 'Running') {
+        Write-Warning "PostgreSQL service '$PostgresService' is $($service.Status)."
+        $failed = $true
+    }
+    else {
+        Write-Host "OK   service $PostgresService is running."
+    }
+
+    # The API's own check uses the application role, so it proves the connection string and the schema, not just the port.
+    try {
+        $db = Invoke-Api GET '/api/v1/health/database' $null
+        Show $db
+        Write-Host 'OK   GET /api/v1/health/database answered 200.'
+    }
+    catch {
+        Write-Warning "Database not healthy: $($_.ErrorDetails.Message)"
+        $failed = $true
+    }
+
+    $folder = $BackupFolder
+    if (-not $folder) { Write-Warning 'No backup folder: pass -BackupFolder (QuickBooks:BackupFolder).'; $failed = $true }
+    else {
+        $dumps = @()
+        $target = Join-Path $folder 'postgres'
+        if (Test-Path -LiteralPath $target) {
+            $dumps = @(Get-ChildItem -LiteralPath $target -Filter 'qbautopost-*.dump' | Sort-Object LastWriteTime -Descending)
+        }
+        if ($dumps.Count -eq 0) {
+            Write-Warning "No qbautopost-*.dump in $target."
+            $failed = $true
+        }
+        else {
+            $age = (Get-Date) - $dumps[0].LastWriteTime
+            if ($age.TotalHours -ge $MaxDumpAgeHours) {
+                Write-Warning ('Newest dump {0} is {1:N1} h old (limit {2} h).' -f $dumps[0].Name, $age.TotalHours, $MaxDumpAgeHours)
+                $failed = $true
+            }
+            else {
+                Write-Host ('OK   newest dump {0} is {1:N1} h old ({2} kept).' -f $dumps[0].Name, $age.TotalHours, $dumps.Count)
+            }
+        }
+    }
+
+    if ($failed) { exit 1 }
+}
+
 switch ($Step) {
+    'postgres' {
+        Test-PostgresStep
+    }
     'health' {
         # T-910/T-914: the QuickBooks health route opens a QuickBooks session, so it needs a key with the health:read scope.
         # Only /api/v1/health and /api/v1/health/ready answer without one. A 503 still carries the JSON body.

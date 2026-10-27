@@ -1,4 +1,3 @@
-using Microsoft.EntityFrameworkCore;
 using Npgsql;
 
 namespace QbAutopost.Data.Tests.Api;
@@ -16,10 +15,5 @@ public static class TestDatabase
         NpgsqlConnection.ClearPool(connection);
     }
 
-    public static async Task MigrateAsync(string connectionString)
-    {
-        var options = new DbContextOptionsBuilder<QbAutopostDbContext>().UseNpgsql(connectionString).Options;
-        await using var db = new QbAutopostDbContext(options);
-        await db.Database.MigrateAsync();
-    }
+    public static Task MigrateAsync(string connectionString) => PostgresFixture.MigrateAsync(connectionString);
 }
