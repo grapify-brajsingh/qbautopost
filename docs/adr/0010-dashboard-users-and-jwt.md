@@ -51,4 +51,6 @@ the `admin` scope and the legacy shared key.
 
 ### Risks
 - A weak or leaked JWT signing key lets anyone mint tokens: the key comes from configuration/environment, is never
-  logged, and the host refuses to start without it when the database feature is on.
+  logged. When `Auth:Jwt:SigningKey` is empty or shorter than 32 bytes, a Bearer request answers
+  `503 auth-not-configured` while API-key routes keep working, so a dashboard misconfiguration cannot stop the
+  existing API (spec §3).

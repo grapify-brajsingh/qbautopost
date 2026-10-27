@@ -362,7 +362,6 @@ Every row starts `todo`; "Files" lists the planned paths, "Verified by" is fille
 | 2026-09-22 | D-2: two validation endpoints — the QuickBooks company file, and the transaction data | owner answer; one overloaded "validate" would mix a COM round trip with an offline check |
 | 2026-09-22 | D-3: `/api/v1` prefix, legacy flat routes kept one release; **Scalar** for the reference UI, **no Swagger/Swashbuckle** | owner answer (UI) and owner instruction (2026-09-22, no Swagger). Consequence: .NET 8 has no built-in OpenAPI generator, so the document is hand-authored and drift-tested |
 | 2026-09-22 | D-4: remote callers — per-caller keys with scopes, TLS off-loopback, rate limits, 400-day audit | owner answer; the single shared key was safe only because the bind was loopback |
-
 | 2026-10-27 | **M10 starts: PostgreSQL is allowed for saved requests, their history and dashboard users only** (ADR-0009); JSON files stay the store for ledger, rules, lists, job status, idempotency and audit | Owner request, ticket #2. The ledger does not move: G4 and undo read `ledger.json` |
 | 2026-10-27 | **Q-80 answered yes: five packages approved** (Npgsql EF provider, EF Design, Identity EF, JwtBearer, Testcontainers.PostgreSql) with the pins recorded in Q-80 | Owner approval, 2026-10-27 |
 | 2026-10-27 | Dashboard users sign in with Identity + HMAC JWT (15 min) and a rotating refresh cookie (7 d); `requests:edit/post/admin` and `users:manage` are people-only (ADR-0010) | A named person must press Post; an API key never satisfies those scopes |
