@@ -25,7 +25,10 @@ public static class AttemptOutcomes
         // Partial already locks the request, so a no-response row inside it changes nothing.
         JobStatus.Partial => new(AttemptOutcome.Partial, SavedRequestStatus.Partial, 200),
         // Failed alone cannot tell "nothing landed" from "nothing confirmed": a no-response row means the qbXML was sent.
-        JobStatus.Failed when ending.HeldReasons.Contains(HoldReasons.QuickBooksNoResponse) =>
+        // SPEC-GAP T-1014: so does a busy row. It is only ever written when the write itself outlived the busy timeout
+        // (DirectPostRunner, JobPipeline: "may or may not have been applied"), which is no-response by another name.
+        JobStatus.Failed when ending.HeldReasons.Contains(HoldReasons.QuickBooksNoResponse)
+                              || ending.HeldReasons.Contains(HoldReasons.QuickBooksBusy) =>
             new(AttemptOutcome.Unknown, SavedRequestStatus.Unknown, 200),
         JobStatus.Failed => new(AttemptOutcome.Failed, SavedRequestStatus.Pending, 200),
         // SPEC-GAP T-1002: a completed ending with no or a non-terminal status is unexplained; lock rather than allow a re-post.

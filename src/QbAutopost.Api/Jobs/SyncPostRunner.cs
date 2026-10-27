@@ -46,7 +46,12 @@ public sealed record SyncPost(
 /// </summary>
 public sealed class SyncPostRunner(JobQueue queue, DirectPostRunner runner, ILogger<SyncPostRunner> log)
 {
-    public async Task<SyncPost> RunAsync(SyncPostRequest request, CancellationToken ct)
+    /// <param name="onSending">
+    /// T-1014 (ruling R3): called as the first step of the work on the worker, before the batch is begun. A caller that
+    /// sees an exception can then tell "nothing was started" (never called) from "QuickBooks may have it" (called).
+    /// A busy ending never calls it.
+    /// </param>
+    public async Task<SyncPost> RunAsync(SyncPostRequest request, CancellationToken ct, Action? onSending = null)
     {
         if (UnsupportedFields(request) is { Count: > 0 } unsupported)
         {
@@ -82,7 +87,13 @@ public sealed class SyncPostRunner(JobQueue queue, DirectPostRunner runner, ILog
         // leave QuickBooks in a state nobody recorded. The ledger row is written either way, and §8 is how the
         // caller finds out what happened.
         var (ran, result) = await queue.TryRunExclusiveAsync(
-            label, workerCt => PostAsync(direct, plan, workerCt), ct);
+            label,
+            workerCt =>
+            {
+                onSending?.Invoke();
+                return PostAsync(direct, plan, workerCt);
+            },
+            ct);
 
         if (!ran)
         {

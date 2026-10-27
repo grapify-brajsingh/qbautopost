@@ -1,0 +1,7 @@
+{
+  "reference": "zemen-2019-12",
+  "controlTotal": 184.32,
+  "transactions": [
+    { "externalId": "row-1", "kind": "Check", "date": "2026-08-05", "amount": 184.32, "account": "Chase Checking 4521", "payee": "HOME DEPOT #6412", "memo": "HOME DEPOT #6412 PURCHASE", "last4": "4521" }
+  ]
+}

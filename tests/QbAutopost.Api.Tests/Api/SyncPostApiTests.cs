@@ -34,38 +34,8 @@ public sealed class SyncPostApiTests : IDisposable
 
     private string BatchesRoot => _factory.Dir.Combine("data", "api-batches");
 
-    private static object Row(
-        string externalId = "row-1",
-        decimal amount = 184.32m,
-        string? payee = "HOME DEPOT #6412",
-        string? memo = null,
-        string kind = "Check",
-        string date = "2026-08-05") =>
-        new
-        {
-            externalId,
-            kind,
-            date,
-            amount,
-            account = "Chase Checking 4521",
-            payee,
-            memo = memo ?? "HOME DEPOT #6412 PURCHASE",
-            last4 = "4521",
-        };
-
-    /// <summary>A row no rule and no list can resolve, so the planner holds it before the SDK is ever touched.</summary>
-    private static object UnresolvableRow(string externalId = "row-2") =>
-        Row(externalId, payee: "NEVER HEARD OF THEM", memo: "NEVER HEARD OF THEM LLC");
-
-    private static object Request(params object[] rows) => new
-    {
-        reference = "zemen-2019-12",
-        controlTotal = rows.Sum(r => (decimal)r.GetType().GetProperty("amount")!.GetValue(r)!),
-        transactions = rows,
-    };
-
     private async Task<(HttpStatusCode Status, JsonElement Body)> PostAsync(
-        object request, WebApplicationFactory<Program>? host = null, string? idempotencyKey = null)
+        string fixture, WebApplicationFactory<Program>? host = null, string? idempotencyKey = null)
     {
         using var client = (host ?? _factory).CreateClient();
         client.DefaultRequestHeaders.Add("X-Api-Key", ApiFactory.ApiKey);
@@ -74,7 +44,7 @@ public sealed class SyncPostApiTests : IDisposable
             client.DefaultRequestHeaders.Add("Idempotency-Key", idempotencyKey);
         }
 
-        using var response = await client.PostAsJsonAsync(Route, request, ApiFactory.Json);
+        using var response = await client.PostAsync(Route, SyncPostFixtures.Content(fixture));
         return (response.StatusCode, await response.Content.ReadFromJsonAsync<JsonElement>());
     }
 
@@ -82,7 +52,7 @@ public sealed class SyncPostApiTests : IDisposable
     [Fact]
     public async Task Should_PostEveryRowAndReturnTheTxnIds_When_NothingIsHeld()
     {
-        var (status, body) = await PostAsync(Request(Row(), Row("row-2", 99.10m, "SHELL OIL 4491", "SHELL OIL 4491")));
+        var (status, body) = await PostAsync(SyncPostFixtures.Posted);
 
         Assert.Equal(HttpStatusCode.OK, status);
         Assert.Equal("posted", body.GetProperty("status").GetString());
@@ -101,9 +71,7 @@ public sealed class SyncPostApiTests : IDisposable
     [Fact]
     public async Task Should_PostNothingAtAll_When_OneRowOfManyWouldBeHeld()
     {
-        var rows = Request(Row(), UnresolvableRow(), Row("row-3", 42.50m, "SHELL OIL 4491", "SHELL OIL 4491"));
-
-        var (status, body) = await PostAsync(rows);
+        var (status, body) = await PostAsync(SyncPostFixtures.Held);
 
         Assert.Equal(HttpStatusCode.UnprocessableEntity, status);
         Assert.Empty(_factory.Gateway.Requests);
@@ -137,22 +105,9 @@ public sealed class SyncPostApiTests : IDisposable
             Vendors = ["Home Depot"],
         });
 
-        // The row names its own expense account, so the mapper gets past tiers 1-2 and the list check is what
+        // The second row names its own expense account, so the mapper gets past tiers 1-2 and the list check is what
         // stops it. Without that it would hold on `no-account-rule` first, and a held row is never name-checked.
-        var stranger = new
-        {
-            externalId = "row-2",
-            kind = "Check",
-            date = "2026-08-05",
-            amount = 50.00m,
-            account = "Chase Checking 4521",
-            lineAccount = "Repairs and Maintenance",
-            payee = "NEVER HEARD OF THEM",
-            memo = "NEVER HEARD OF THEM LLC",
-            last4 = "4521",
-        };
-
-        var (status, body) = await PostAsync(Request(Row(), stranger));
+        var (status, body) = await PostAsync(SyncPostFixtures.HeldUnknownPayee);
 
         Assert.Equal(HttpStatusCode.UnprocessableEntity, status);
         Assert.Empty(_factory.Gateway.Requests);
@@ -166,7 +121,7 @@ public sealed class SyncPostApiTests : IDisposable
     [Fact]
     public async Task Should_ReportEveryFinding_When_SeveralRowsWouldBeHeld()
     {
-        var (status, body) = await PostAsync(Request(Row(), UnresolvableRow(), UnresolvableRow("row-3")));
+        var (status, body) = await PostAsync(SyncPostFixtures.HeldSeveral);
 
         Assert.Equal(HttpStatusCode.UnprocessableEntity, status);
         Assert.Equal(2, body.GetProperty("validation").GetArrayLength());
@@ -177,15 +132,7 @@ public sealed class SyncPostApiTests : IDisposable
     [Fact]
     public async Task Should_Answer400_When_TheRequestAsksForADryRun()
     {
-        var request = new
-        {
-            reference = "zemen-2019-12",
-            dryRun = true,
-            controlTotal = 184.32m,
-            transactions = new[] { Row() },
-        };
-
-        var (status, body) = await PostAsync(request);
+        var (status, body) = await PostAsync(SyncPostFixtures.DryRunRefused);
 
         Assert.Equal(HttpStatusCode.BadRequest, status);
         Assert.Contains("dry-run-not-supported", body.GetProperty("detail").GetString());
@@ -199,15 +146,7 @@ public sealed class SyncPostApiTests : IDisposable
     [Fact]
     public async Task Should_Answer400_When_TheRequestSendsDryRunFalse()
     {
-        var request = new
-        {
-            reference = "zemen-2019-12",
-            dryRun = false,
-            controlTotal = 184.32m,
-            transactions = new[] { Row() },
-        };
-
-        var (status, _) = await PostAsync(request);
+        var (status, _) = await PostAsync(SyncPostFixtures.DryRunFalseRefused);
 
         Assert.Equal(HttpStatusCode.BadRequest, status);
         Assert.Empty(_factory.Gateway.Requests);
@@ -216,15 +155,7 @@ public sealed class SyncPostApiTests : IDisposable
     [Fact]
     public async Task Should_Answer400_When_TheRequestAsksForModelAccounts()
     {
-        var request = new
-        {
-            reference = "zemen-2019-12",
-            allowModelAccounts = true,
-            controlTotal = 184.32m,
-            transactions = new[] { Row() },
-        };
-
-        var (status, body) = await PostAsync(request);
+        var (status, body) = await PostAsync(SyncPostFixtures.ModelAccountsRefused);
 
         Assert.Equal(HttpStatusCode.BadRequest, status);
         Assert.Contains("allowModelAccounts", body.GetProperty("detail").GetString());
@@ -235,9 +166,7 @@ public sealed class SyncPostApiTests : IDisposable
     [Fact]
     public async Task Should_Answer400AndAlterNoAmount_When_TheControlTotalDoesNotMatch()
     {
-        var request = new { reference = "bad-total", controlTotal = 1.00m, transactions = new[] { Row() } };
-
-        var (status, body) = await PostAsync(request);
+        var (status, body) = await PostAsync(SyncPostFixtures.ControlTotalRefused);
 
         Assert.Equal(HttpStatusCode.BadRequest, status);
         Assert.Contains("control-total-mismatch", body.GetProperty("detail").GetString());
@@ -260,7 +189,7 @@ public sealed class SyncPostApiTests : IDisposable
             "folder-job", async _ => { await release.Task; return 0; }, CancellationToken.None);
 
         using var client = _factory.CreateAuthorizedClient();
-        using var response = await client.PostAsJsonAsync(Route, Request(Row()), ApiFactory.Json);
+        using var response = await client.PostAsync(Route, SyncPostFixtures.Content(SyncPostFixtures.PostedOneRow));
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Equal("5", response.Headers.GetValues("Retry-After").Single());
@@ -286,7 +215,7 @@ public sealed class SyncPostApiTests : IDisposable
         File.SetLastWriteTimeUtc(Path.Combine(backups, "old.QBB"), DateTime.UtcNow.AddDays(-5));
         using var host = _factory.WithSetting("QuickBooks:BackupFolder", backups);
 
-        var (status, _) = await PostAsync(Request(Row()), host);
+        var (status, _) = await PostAsync(SyncPostFixtures.PostedOneRow, host);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, status);
         Assert.Empty(_factory.Gateway.Writes);
@@ -298,7 +227,7 @@ public sealed class SyncPostApiTests : IDisposable
     {
         _factory.Gateway.Throw = new QuickBooksUnavailableException("simulated");
 
-        var (status, body) = await PostAsync(Request(Row()));
+        var (status, body) = await PostAsync(SyncPostFixtures.PostedOneRow);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, status);
         // Nothing reached QuickBooks, so nothing is in the ledger and the request can simply be sent again.
@@ -315,7 +244,7 @@ public sealed class SyncPostApiTests : IDisposable
     {
         _factory.Gateway.Throw = new QuickBooksUnavailableException("simulated");
 
-        var (_, body) = await PostAsync(Request(Row()));
+        var (_, body) = await PostAsync(SyncPostFixtures.PostedOneRow);
 
         var postId = body.GetProperty("postId").GetString()!;
         var request = Path.Combine(BatchesRoot, postId, ApiBatchStore.RequestFile);
@@ -327,7 +256,7 @@ public sealed class SyncPostApiTests : IDisposable
     [Fact]
     public async Task Should_UndoExactlyThisPost_When_ThePostIdIsHandedToUndo()
     {
-        var (_, body) = await PostAsync(Request(Row()));
+        var (_, body) = await PostAsync(SyncPostFixtures.PostedOneRow);
         var postId = body.GetProperty("postId").GetString()!;
         var ledger = new LedgerStore(_factory.LedgerFile).Load();
         Assert.Contains(ledger.Jobs, j => j.BatchId == postId);
@@ -350,10 +279,8 @@ public sealed class SyncPostApiTests : IDisposable
     [Fact]
     public async Task Should_PostOnceAndReturnTheSameTxnIds_When_TheSameKeyIsSentTwice()
     {
-        var request = Request(Row());
-
-        var (first, firstBody) = await PostAsync(request, idempotencyKey: "zemen-2019-12-attempt-1");
-        var (second, secondBody) = await PostAsync(request, idempotencyKey: "zemen-2019-12-attempt-1");
+        var (first, firstBody) = await PostAsync(SyncPostFixtures.PostedOneRow, idempotencyKey: "zemen-2019-12-attempt-1");
+        var (second, secondBody) = await PostAsync(SyncPostFixtures.PostedOneRow, idempotencyKey: "zemen-2019-12-attempt-1");
 
         Assert.Equal(HttpStatusCode.OK, first);
         Assert.Equal(HttpStatusCode.OK, second);
@@ -375,7 +302,7 @@ public sealed class SyncPostApiTests : IDisposable
     {
         using var client = KeyedClient(ApiScopes.QbRead);
 
-        using var response = await client.PostAsJsonAsync(Route, Request(Row()), ApiFactory.Json);
+        using var response = await client.PostAsync(Route, SyncPostFixtures.Content(SyncPostFixtures.PostedOneRow));
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         var problem = await response.ReadProblemAsync();
@@ -388,7 +315,7 @@ public sealed class SyncPostApiTests : IDisposable
     {
         using var client = KeyedClient(ApiScopes.QbPost);
 
-        using var response = await client.PostAsJsonAsync(Route, Request(Row()), ApiFactory.Json);
+        using var response = await client.PostAsync(Route, SyncPostFixtures.Content(SyncPostFixtures.PostedOneRow));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -401,7 +328,7 @@ public sealed class SyncPostApiTests : IDisposable
     [Fact]
     public async Task Should_OfferNoBatchToPoll_When_ThePostSucceeds()
     {
-        var (_, body) = await PostAsync(Request(Row()));
+        var (_, body) = await PostAsync(SyncPostFixtures.PostedOneRow);
 
         Assert.False(body.TryGetProperty("batchId", out _));
         Assert.False(body.TryGetProperty("dryRun", out _));
@@ -417,10 +344,10 @@ public sealed class SyncPostApiTests : IDisposable
     [Fact]
     public async Task Should_Answer422NamingTheEarlierPost_When_TheSameRowsAreSentAgainWithoutAKey()
     {
-        var (_, first) = await PostAsync(Request(Row()));
+        var (_, first) = await PostAsync(SyncPostFixtures.PostedOneRow);
         var postId = first.GetProperty("postId").GetString();
 
-        var (status, body) = await PostAsync(Request(Row()));
+        var (status, body) = await PostAsync(SyncPostFixtures.PostedOneRow);
 
         Assert.Equal(HttpStatusCode.UnprocessableEntity, status);
         Assert.Single(_factory.Gateway.Writes);

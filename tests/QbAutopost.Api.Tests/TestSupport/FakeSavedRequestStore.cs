@@ -333,10 +333,23 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
         }
     }
 
+    /// <summary>T-1014: the next this-many <see cref="CompleteAttemptAsync"/> calls fail as a database timeout and write nothing.</summary>
+    public int FailCompletes { get; set; }
+
+    /// <summary>T-1014: how many times <see cref="CompleteAttemptAsync"/> was called, failed calls included.</summary>
+    public int CompleteCalls { get; private set; }
+
     public Task CompleteAttemptAsync(long attemptId, AttemptCompletion completion, CancellationToken ct)
     {
         lock (_gate)
         {
+            CompleteCalls++;
+            if (FailCompletes > 0)
+            {
+                FailCompletes--;
+                throw new TimeoutException("simulated: the database did not answer");
+            }
+
             var (requestId, index) = FindAttempt(attemptId);
             if (requestId is null || _attempts[requestId.Value][index].Outcome != AttemptOutcome.InProgress)
                 throw new InvalidOperationException($"Attempt {attemptId} is unknown or no longer in progress.");

@@ -56,6 +56,16 @@ public sealed class AttemptOutcomesTests
             AttemptOutcomes.From(new PostEnding(
                 PostEndingKind.Completed, JobStatus.Failed, [HoldReasons.UnknownAccount, HoldReasons.QuickBooksNoResponse])));
 
+    /// <summary>
+    /// SPEC-GAP T-1014: <c>quickbooks-busy</c> on a held row means the write was sent and QuickBooks did not answer
+    /// within the busy timeout (DirectPostRunner: "may or may not have been applied"), the same fact as no-response.
+    /// </summary>
+    [Fact]
+    public void Should_LockAsUnknown_When_CompletedFailedWithBusyTimeoutRow() =>
+        Assert.Equal(
+            new AttemptVerdict(AttemptOutcome.Unknown, SavedRequestStatus.Unknown, 200),
+            AttemptOutcomes.From(new PostEnding(PostEndingKind.Completed, JobStatus.Failed, [HoldReasons.QuickBooksBusy])));
+
     [Fact]
     public void Should_StayPartial_When_CompletedPartialWithNoResponseRow() =>
         Assert.Equal(

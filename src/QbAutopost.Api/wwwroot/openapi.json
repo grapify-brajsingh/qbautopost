@@ -2139,6 +2139,157 @@
         }
       }
     },
+    "/api/v1/saved-requests/{id}/post": {
+      "post": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "postSavedRequest",
+        "summary": "Post the current version through validate-and-post, and record the attempt.",
+        "description": "Saved-requests §7.2, §9, §10.2-§10.6. The request is claimed (pending to posting, with an `in-progress` attempt) and the claim is committed before anything is sent, so of two people pressing Post exactly one posts and the other is answered `409 already-posting`. The current version is then posted by validate-and-post's own engine and the answer is **validate-and-post's status code and body**, unchanged, plus `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt). Every ending is recorded on the attempt with its HTTP status, post id, counts and the body returned. Nothing is retried automatically. The post runs to the end even if the caller disconnects: read `GET /saved-requests/{id}` until it is no longer `posting`. A request flagged as a possible duplicate needs `{ \"confirmDuplicate\": true }`; the confirming user and time are stored. Only `pending` requests can be posted.",
+        "x-required-scope": "requests:post",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "The request's ETag from `GET /saved-requests/{id}`. When sent and stale the answer is `412` and nothing is claimed, so a person never posts a version they have not seen.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "confirmDuplicate": {
+                    "type": "boolean",
+                    "description": "Required (`true`) to post a request flagged as a possible duplicate (§9). G4 still runs inside the post."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "validate-and-post's `200`: posted (request `posted`), `partial` (request `partial`, locked), or `failed`. A `failed` post with a row held for `quickbooks-no-response` or `quickbooks-busy` was sent and not confirmed, so the request goes to `unknown`, locked until an admin resolves it; any other `failed` returns it to `pending`. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case). If the result could not be recorded, `savedRequestStatus` is `posting` and the result is in the evidence file.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncPostResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "validate-and-post's `400` (control total, too many rows, `dryRun`, `allowModelAccounts`, ...), or the current version could not be bound: then `errors` names each JSON path. Recorded as `refused`; the request is `pending` again. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "`already-posting` (with the running `attemptId`), `already-posted` (with the `postId`), `not-postable` (partial, unknown or discarded; `savedRequestStatus` names it) or `duplicate-unconfirmed` (`duplicate: { of, status, reasons }`): nothing was claimed or sent. Or validate-and-post's busy `409` with `Retry-After`: recorded as `busy`, the request is `pending` again. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: `If-Match` is not the current row version. The body carries the current `rowVersion` and `updatedBy`. Nothing was claimed or sent.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is over `Api:MaxRequestBodyBytes`; nothing was claimed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validate-and-post's `422`: at least one row would be held, so none was sent. Recorded as `held`; the request is `pending` again. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncPostProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`post-not-started`: the engine failed before the post was started; nothing was sent and the request is `pending` again (attempt `error`). Or `post-outcome-unknown`: it failed after the post was started, QuickBooks may have it, and the request is `unknown`, locked until an admin resolves it. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "validate-and-post's `503` (backup too old, QuickBooks unreachable: a `SyncPostResult` body) or the rules file is missing (problem details): nothing was sent, recorded as `unavailable`, the request is `pending` again. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case). Or `database-unavailable` (`Retry-After: 30`): nothing was read, claimed or sent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncPostResult"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/saved-requests/{id}/original": {
       "get": {
         "tags": [

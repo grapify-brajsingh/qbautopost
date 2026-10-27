@@ -17,7 +17,7 @@ namespace QbAutopost.Api.Endpoints;
 /// dashboard. Served under <c>/api/v1</c> only, behind the database gate (spec 10.7: <c>503 database-unavailable</c>
 /// with <c>Retry-After: 30</c>, before any store call). The scope of each route is <see cref="ApiRoutes.ScopeFor"/>'s.
 /// <para>
-/// T-1012 maps the save and the reads; T-1013 adds edit, validate, discard and restore. Post and resolve are T-1014.
+/// T-1012 maps the save and the reads; T-1013 adds edit, validate, discard and restore; T-1014 adds post.
 /// </para>
 /// <para>
 /// Every answer is written with <see cref="SavedRequestJson.Options"/> (kebab-case enums), and every <c>{id}</c> goes
@@ -54,6 +54,7 @@ public static class SavedRequestEndpoints
         group.MapPost("/{id}/validate", ValidateAsync);
         group.MapPost("/{id}/discard", DiscardAsync);
         group.MapPost("/{id}/restore", RestoreAsync);
+        group.MapPost("/{id}/post", PostAsync);
         group.MapGet("/{id}/original", OriginalAsync);
         group.MapGet("/{id}/versions", VersionsAsync);
         group.MapGet("/{id}/versions/{n}", VersionAsync);
@@ -369,6 +370,132 @@ public static class SavedRequestEndpoints
             requestId, IfMatchOf(http), SavedRequestStatus.Discarded, SavedRequestStatus.Pending,
             CallerMiddleware.CallerOf(http)!.Actor, clock.UtcNow, SavedRequestEvents.Restored, null, ct);
         return await MutationAnswerAsync(http, result, "not-restorable", "Not restorable", "restored", store, actors, ct);
+    }
+
+    // ---- post -------------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Spec 7.2, 9, 10.2-10.5: posts the current version through validate-and-post's engine
+    /// (<see cref="SavedRequestPoster"/>). The body is optional: nothing, or <c>{ "confirmDuplicate": true }</c> for a
+    /// request flagged as a possible duplicate. <c>If-Match</c> is honoured when sent (412 when stale).
+    /// <para>
+    /// When the engine ran, the answer is validate-and-post's own status and body (<see cref="SyncPostResponses"/>)
+    /// plus <c>savedRequestId</c>, <c>attemptId</c> and <c>savedRequestStatus</c>. Otherwise it is 404, 412, or 409
+    /// <c>already-posting</c> (with the running attempt's id), <c>already-posted</c> (with the post id),
+    /// <c>not-postable</c> or <c>duplicate-unconfirmed</c> (naming the other request and its status), and nothing was
+    /// claimed or sent.
+    /// </para>
+    /// </summary>
+    private static async Task<IResult> PostAsync(
+        HttpContext http, string id, SavedRequestPoster poster, ISavedRequestStore store, ActorDirectory actors,
+        CancellationToken ct)
+    {
+        var (raw, failure) = await ReadBodyAsync(http, ct);
+        if (failure is not null)
+        {
+            return failure;
+        }
+
+        if (ConfirmDuplicateOf(raw!) is not { } confirmDuplicate)
+        {
+            return BadRequest(
+                "Invalid body", "Send no body, or { \"confirmDuplicate\": true } to post a possible duplicate. Nothing was posted.");
+        }
+
+        if (!SavedRequestId.TryParse(id, out var requestId))
+        {
+            return NotFound();
+        }
+
+        var outcome = await poster.PostAsync(requestId, IfMatchOf(http), confirmDuplicate, CallerMiddleware.CallerOf(http)!, ct);
+        var record = outcome.Record;
+        switch (outcome.Kind)
+        {
+            case SavedPostKind.NotFound:
+                return NotFound();
+            case SavedPostKind.Stale:
+                return await MutationAnswerAsync(
+                    http, new MutationResult(MutationKind.Stale, record), "not-postable", "Not postable", "posted", store, actors, ct);
+            case SavedPostKind.AlreadyPosting:
+                return Results.Problem(
+                    statusCode: StatusCodes.Status409Conflict,
+                    title: "Already posting",
+                    type: "already-posting",
+                    detail: $"{record!.PublicRef} is being posted by attempt {outcome.AttemptId}. Nothing was sent by this "
+                            + "request. Read the request until it is no longer posting.",
+                    extensions: new Dictionary<string, object?> { [SavedRequestPoster.AttemptIdField] = outcome.AttemptId });
+            case SavedPostKind.AlreadyPosted:
+                return Results.Problem(
+                    statusCode: StatusCodes.Status409Conflict,
+                    title: "Already posted",
+                    type: "already-posted",
+                    detail: $"{record!.PublicRef} is already in QuickBooks as post {record.PostId}. Nothing was sent. "
+                            + "A correction is an undo of that post and a new saved request.",
+                    extensions: new Dictionary<string, object?> { ["postId"] = record.PostId });
+            case SavedPostKind.NotPostable:
+                return Results.Problem(
+                    statusCode: StatusCodes.Status409Conflict,
+                    title: "Not postable",
+                    type: "not-postable",
+                    detail: $"{record!.PublicRef} is {SavedRequestJson.Name(record.Status)}, so it cannot be posted. Nothing was sent.",
+                    extensions: new Dictionary<string, object?>
+                    {
+                        [SavedRequestPoster.SavedRequestStatusField] = SavedRequestJson.Name(record.Status),
+                    });
+            case SavedPostKind.DuplicateUnconfirmed:
+                var other = record!.DuplicateOfId is { } of ? await store.GetAsync(of, ct) : null;
+                return Results.Problem(
+                    statusCode: StatusCodes.Status409Conflict,
+                    title: "Possible duplicate",
+                    type: "duplicate-unconfirmed",
+                    detail: $"{record.PublicRef} may duplicate {other?.PublicRef ?? "another saved request"}"
+                            + (other is null ? "" : $", which is {SavedRequestJson.Name(other.Status)}")
+                            + ". Nothing was posted. Send { \"confirmDuplicate\": true } to post it anyway.",
+                    extensions: new Dictionary<string, object?>
+                    {
+                        ["duplicate"] = new Dictionary<string, object?>
+                        {
+                            ["of"] = record.DuplicateOfId,
+                            ["status"] = other is null ? null : SavedRequestJson.Name(other.Status),
+                            ["reasons"] = record.DuplicateReasons,
+                        },
+                    });
+        }
+
+        // Ran or Unreadable: an attempt exists, and the answer says which and where the request now stands.
+        if (outcome.Problem is { } problem)
+        {
+            return TypedResults.Problem(problem);
+        }
+
+        return SyncPostResponses.ToResult(
+            outcome.Post!, http, SavedRequestPoster.ExtraFields(record!.Id, outcome.AttemptId!.Value, outcome.Status!.Value));
+    }
+
+    /// <summary>The post body's <c>confirmDuplicate</c>: false when there is no body, null when the body is anything else.</summary>
+    private static bool? ConfirmDuplicateOf(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        if (!SavedRequestIntake.TryParseObject(raw, out var body))
+        {
+            return null;
+        }
+
+        if (!body.TryGetProperty("confirmDuplicate", out var confirm) || confirm.ValueKind == JsonValueKind.Null)
+        {
+            return false;
+        }
+
+        return confirm.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => null,
+        };
     }
 
     /// <summary>

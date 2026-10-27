@@ -42,12 +42,17 @@ public sealed class RulesFileExceptionHandler(
             ProblemDetails = new ProblemDetails
             {
                 Status = StatusCodes.Status503ServiceUnavailable,
-                Title = "The rules file is missing",
-                Detail =
-                    $"Company:RulesFile resolved to '{missing.FileName}' and nothing is there. Relative paths are "
-                    + "resolved against the content root - the folder the executable is in - not the working "
-                    + "directory. Check /health/ready, which reports this before a request has to.",
+                Title = Title,
+                Detail = DetailOf(missing),
             },
         });
     }
+
+    public const string Title = "The rules file is missing";
+
+    /// <summary>T-1014: shared with the post-by-id route, which records this same answer on the attempt.</summary>
+    public static string DetailOf(RulesFileNotFoundException missing) =>
+        $"Company:RulesFile resolved to '{missing.FileName}' and nothing is there. Relative paths are "
+        + "resolved against the content root - the folder the executable is in - not the working "
+        + "directory. Check /health/ready, which reports this before a request has to.";
 }

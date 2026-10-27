@@ -27,6 +27,12 @@ public sealed class FakeQbGateway : IQbGateway
 
     public bool Hang { get; set; }
 
+    /// <summary>
+    /// T-1014: when set, a write message set is recorded and then waits for this task before it is answered, so a test
+    /// can hold a post mid-send (two racing posts, a client that disconnects) and then let it finish.
+    /// </summary>
+    public Task? WriteGate { get; set; }
+
     public Exception? QueryThrow { get; set; }
 
     public bool QueryHang { get; set; }
@@ -70,6 +76,11 @@ public sealed class FakeQbGateway : IQbGateway
         {
             FailWritesTimes--;
             throw new QuickBooksUnavailableException("simulated: could not open a session");
+        }
+
+        if (!readOnly && WriteGate is { } gate)
+        {
+            await gate.WaitAsync(ct);
         }
 
         if (readOnly ? QueryHang : Hang)

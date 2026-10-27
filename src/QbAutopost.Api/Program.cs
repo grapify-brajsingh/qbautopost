@@ -236,6 +236,8 @@ builder.Services.AddSingleton<SyncPostRunner>();
 builder.Services.AddSingleton<SavedRequestValidator>();
 builder.Services.AddSingleton<SavedRequestIntake>();
 builder.Services.AddSingleton<ActorDirectory>();
+// T-1014 (saved-requests spec 7.2, 10.2-10.6): post by id through SyncPostRunner, recording every ending.
+builder.Services.AddSingleton<SavedRequestPoster>();
 // T-914 (FR-A-7): the same StatementReader the job uses, so a validate and the job it predicts cannot disagree.
 builder.Services.AddSingleton<FolderValidator>();
 builder.Services.AddSingleton<JobPipeline>();
