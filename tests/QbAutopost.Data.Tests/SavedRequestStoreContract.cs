@@ -7,7 +7,9 @@ namespace QbAutopost.Data.Tests;
 
 /// <summary>
 /// What every <see cref="ISavedRequestStore"/> must do (spec §5.2, §9, §10). Store-agnostic: it reads only what the
-/// interface returns, so the in-memory fake and the EF Core store run the same tests.
+/// interface returns, so the in-memory fake and the EF Core store run the same tests. Tests are
+/// <see cref="ContractFactAttribute"/> / <see cref="ContractTheoryAttribute"/>, so on a <see cref="RequiresPostgresAttribute"/>
+/// subclass they skip, like <see cref="PostgresFactAttribute"/>, when Docker cannot provide a PostgreSQL.
 /// </summary>
 public abstract class SavedRequestStoreContract
 {
@@ -91,7 +93,7 @@ public abstract class SavedRequestStoreContract
 
     // ---- create and idempotency ------------------------------------------------------------------------------
 
-    [Fact]
+    [ContractFact]
     public async Task Should_StoreVersion1AndOriginalBody_When_Created()
     {
         var store = CreateStore();
@@ -120,7 +122,7 @@ public abstract class SavedRequestStoreContract
         Assert.Equal(PayloadCanonicalizer.Canonicalize(JsonDocument.Parse(body).RootElement), PayloadCanonicalizer.Canonicalize(v1.Payload));
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_ReplayExisting_When_SameSourceAndKeyAndBody()
     {
         var store = CreateStore();
@@ -134,7 +136,7 @@ public abstract class SavedRequestStoreContract
         Assert.Single(await store.EventsAsync(first.Record.Id, default));
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_ReportKeyReused_When_SameKeyDifferentBody()
     {
         var store = CreateStore();
@@ -146,7 +148,7 @@ public abstract class SavedRequestStoreContract
         Assert.Equal(1, (await store.ListAsync(Query(), default)).Total);
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_CreateSeparately_When_SameKeyDifferentSource()
     {
         var store = CreateStore();
@@ -160,7 +162,7 @@ public abstract class SavedRequestStoreContract
 
     // ---- editing -----------------------------------------------------------------------------------------------
 
-    [Fact]
+    [ContractFact]
     public async Task Should_AppendVersionAndBumpRowVersion_When_ExpectedRowVersionMatches()
     {
         var store = CreateStore();
@@ -182,7 +184,7 @@ public abstract class SavedRequestStoreContract
         Assert.Equal(2, (await store.VersionsAsync(r.Id, default)).Count);
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_ReturnStale_When_ExpectedRowVersionIsOld()
     {
         var store = CreateStore();
@@ -194,7 +196,7 @@ public abstract class SavedRequestStoreContract
         Assert.Single(await store.VersionsAsync(r.Id, default));
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_ReturnWrongStatus_When_AppendingToNonPending()
     {
         var store = CreateStore();
@@ -207,7 +209,7 @@ public abstract class SavedRequestStoreContract
         Assert.Single(await store.VersionsAsync(r.Id, default));
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_ReturnUnchanged_When_CanonicalHashEqualsCurrent()
     {
         var store = CreateStore();
@@ -226,7 +228,7 @@ public abstract class SavedRequestStoreContract
         Assert.Single(await store.EventsAsync(r.Id, default));
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_KeepVersion1Unchanged_When_EditedThreeTimes()
     {
         var store = CreateStore();
@@ -252,7 +254,7 @@ public abstract class SavedRequestStoreContract
 
     // ---- claiming and completing -----------------------------------------------------------------------------
 
-    [Fact]
+    [ContractFact]
     public async Task Should_ClaimOnce_When_TwoClaimsRace()
     {
         var store = CreateStore();
@@ -271,7 +273,7 @@ public abstract class SavedRequestStoreContract
         Assert.Equal(r.RowVersion + 1, after.RowVersion);
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_StartInProgressAttempt_When_Claimed()
     {
         var store = CreateStore();
@@ -293,7 +295,7 @@ public abstract class SavedRequestStoreContract
         Assert.Equal(SavedRequestStatus.Posting, claim.Record.Status);
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_RecordDuplicateAcknowledgement_When_ClaimAcknowledges()
     {
         var store = CreateStore();
@@ -313,7 +315,7 @@ public abstract class SavedRequestStoreContract
         Assert.Null(untouched.DuplicateAcknowledgedUtc);
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_RefuseClaim_When_Posted()
     {
         var store = CreateStore();
@@ -325,7 +327,7 @@ public abstract class SavedRequestStoreContract
         Assert.Single(await store.AttemptsAsync(posted.Id, default));
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_RefuseClaim_When_Discarded()
     {
         var store = CreateStore();
@@ -338,7 +340,7 @@ public abstract class SavedRequestStoreContract
         Assert.Empty(await store.AttemptsAsync(r.Id, default));
     }
 
-    [Theory]
+    [ContractTheory]
     [InlineData(SavedRequestStatus.Unknown, AttemptOutcome.Unknown)]
     [InlineData(SavedRequestStatus.Partial, AttemptOutcome.Partial)]
     public async Task Should_RefuseClaim_When_Unknown(SavedRequestStatus status, AttemptOutcome outcome)
@@ -352,7 +354,7 @@ public abstract class SavedRequestStoreContract
         Assert.Single(await store.AttemptsAsync(r.Id, default));
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_ReturnNotFound_When_ClaimingMissingRequest()
     {
         var claim = await CreateStore().TryClaimAsync(999, null, Actor, false, T0, default);
@@ -361,7 +363,7 @@ public abstract class SavedRequestStoreContract
         Assert.Null(claim.AttemptId);
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_ReturnStale_When_ClaimExpectedRowVersionIsOld()
     {
         var store = CreateStore();
@@ -374,7 +376,7 @@ public abstract class SavedRequestStoreContract
         Assert.Empty(await store.AttemptsAsync(r.Id, default));
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_RecordAttemptAndMoveStatus_When_Completed()
     {
         var store = CreateStore();
@@ -398,7 +400,7 @@ public abstract class SavedRequestStoreContract
         Assert.Equal(attemptId, after.LastAttempt!.Id);
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_ReturnToPendingWithoutPostId_When_CompletedAsHeld()
     {
         var store = CreateStore();
@@ -413,7 +415,7 @@ public abstract class SavedRequestStoreContract
         Assert.Equal(AttemptOutcome.Held, (await store.AttemptAsync(r.Id, attemptId, default))!.Outcome);
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_Throw_When_CompletingAnAttemptTwice()
     {
         var store = CreateStore();
@@ -427,7 +429,7 @@ public abstract class SavedRequestStoreContract
         Assert.Equal(SavedRequestStatus.Posted, (await store.GetAsync(r.Id, default))!.Status);
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_MarkUnknown_When_RecoveringInFlight()
     {
         var store = CreateStore();
@@ -451,7 +453,7 @@ public abstract class SavedRequestStoreContract
 
     // ---- resolving ---------------------------------------------------------------------------------------------
 
-    [Fact]
+    [ContractFact]
     public async Task Should_ResolvePartialOnlyToPosted()
     {
         var store = CreateStore();
@@ -470,7 +472,7 @@ public abstract class SavedRequestStoreContract
         Assert.Equal("accepted as is", attempt.ResolutionNote);
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_ReturnToPending_When_UnknownResolvedNotPosted()
     {
         var store = CreateStore();
@@ -484,7 +486,7 @@ public abstract class SavedRequestStoreContract
         Assert.Equal("checked QuickBooks", (await store.AttemptsAsync(unknown.Id, default)).Single().ResolutionNote);
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_ReturnWrongStatus_When_ResolvingPendingRequest()
     {
         var store = CreateStore();
@@ -497,7 +499,7 @@ public abstract class SavedRequestStoreContract
 
     // ---- status changes and validation ------------------------------------------------------------------------
 
-    [Fact]
+    [ContractFact]
     public async Task Should_StoreDiscardReasonAndClearItOnRestore_When_StatusChanges()
     {
         var store = CreateStore();
@@ -522,7 +524,7 @@ public abstract class SavedRequestStoreContract
         Assert.Null(restored.Record.DiscardReason);
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_StoreSnapshotAndFlag_When_SettingValidation()
     {
         var store = CreateStore();
@@ -544,7 +546,7 @@ public abstract class SavedRequestStoreContract
         Assert.Equal(MutationKind.Stale, stale.Kind);
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_FlagNeedsAttention_When_PayloadIsUnreadable()
     {
         var store = CreateStore();
@@ -560,7 +562,7 @@ public abstract class SavedRequestStoreContract
 
     // ---- listing -----------------------------------------------------------------------------------------------
 
-    [Fact]
+    [ContractFact]
     public async Task Should_FilterAndPage_When_Listing()
     {
         var store = CreateStore();
@@ -595,7 +597,7 @@ public abstract class SavedRequestStoreContract
         Assert.Equal(3, lastPage.PageSize);
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_FilterByDuplicateFlag_When_Listing()
     {
         var store = CreateStore();
@@ -610,7 +612,41 @@ public abstract class SavedRequestStoreContract
         Assert.Equal(original.Id, flagged.Items.Single().DuplicateOfId);
     }
 
-    [Fact]
+    [ContractFact]
+    public async Task Should_SortNullControlTotalLast_When_SortingByControlTotalEitherWay()
+    {
+        var store = CreateStore();
+        var ten = await SaveAsync(store, BodyOf(reference: "TEN", amount: 10m), T0.AddMinutes(1));
+        var none = await SaveAsync(store, """{"transactions":5}""", T0.AddMinutes(2));
+        var big = await SaveAsync(store, BodyOf(reference: "BIG", amount: 25m), T0.AddMinutes(3));
+
+        var ascending = await store.ListAsync(Query(sort: "controlTotal"), default);
+        var descending = await store.ListAsync(Query(sort: "-controlTotal"), default);
+
+        Assert.Null(none.ControlTotal);
+        Assert.Equal(new[] { ten.Id, big.Id, none.Id }, ascending.Items.Select(i => i.Id));
+        Assert.Equal(new[] { big.Id, ten.Id, none.Id }, descending.Items.Select(i => i.Id));
+    }
+
+    [ContractFact]
+    public async Task Should_MatchWildcardCharactersLiterally_When_Searching()
+    {
+        var store = CreateStore();
+        var underscore = await SaveAsync(store, BodyOf(reference: "A_1", payee: "A.C Ltd"));
+        await SaveAsync(store, BodyOf(reference: "AB1", payee: "ABC Ltd"));
+        var percent = await SaveAsync(store, BodyOf(reference: "50%"));
+        await SaveAsync(store, BodyOf(reference: "500"));
+
+        var byUnderscore = await store.ListAsync(Query(q: "a_1"), default);
+        var byPercent = await store.ListAsync(Query(q: "50%"), default);
+        var byDot = await store.ListAsync(Query(q: "a.c"), default);
+
+        Assert.Equal(new[] { underscore.Id }, byUnderscore.Items.Select(i => i.Id));
+        Assert.Equal(new[] { percent.Id }, byPercent.Items.Select(i => i.Id));
+        Assert.Equal(new[] { underscore.Id }, byDot.Items.Select(i => i.Id));
+    }
+
+    [ContractFact]
     public async Task Should_CountByStatus_When_Stats()
     {
         var store = CreateStore();
@@ -626,7 +662,7 @@ public abstract class SavedRequestStoreContract
         Assert.Equal(1, stats.NeedsAttention);
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_ExcludeDiscardedAndOld_When_ListingDuplicateCandidates()
     {
         var store = CreateStore();
@@ -648,7 +684,7 @@ public abstract class SavedRequestStoreContract
         Assert.DoesNotContain(candidates, c => c.Id == old.Id || c.Id == discarded.Id);
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_ReturnLatestVersionFingerprints_When_ListingCandidatesAfterAppend()
     {
         var store = CreateStore();
@@ -665,7 +701,7 @@ public abstract class SavedRequestStoreContract
 
     // ---- events ------------------------------------------------------------------------------------------------
 
-    [Fact]
+    [ContractFact]
     public async Task Should_WriteOneEventPerMutation()
     {
         var store = CreateStore();
@@ -693,7 +729,7 @@ public abstract class SavedRequestStoreContract
             await KindsAsync(store, r.Id));
     }
 
-    [Fact]
+    [ContractFact]
     public async Task Should_WriteFlaggedDuplicateEvent_When_CreatedAsDuplicate()
     {
         var store = CreateStore();

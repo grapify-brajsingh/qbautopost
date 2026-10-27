@@ -488,9 +488,10 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
             "updated" => descending
                 ? rows.OrderByDescending(r => r.UpdatedUtc).ThenByDescending(r => r.Id)
                 : rows.OrderBy(r => r.UpdatedUtc).ThenBy(r => r.Id),
+            // A request with no control total sorts last both ways (NULLS LAST), as the EF Core store does.
             "controlTotal" => descending
-                ? rows.OrderByDescending(r => r.ControlTotal).ThenByDescending(r => r.Id)
-                : rows.OrderBy(r => r.ControlTotal).ThenBy(r => r.Id),
+                ? rows.OrderBy(r => r.ControlTotal is null).ThenByDescending(r => r.ControlTotal).ThenByDescending(r => r.Id)
+                : rows.OrderBy(r => r.ControlTotal is null).ThenBy(r => r.ControlTotal).ThenBy(r => r.Id),
             _ => rows.OrderByDescending(r => r.CreatedUtc).ThenByDescending(r => r.Id),
         };
     }

@@ -48,8 +48,10 @@ public sealed class PostgresFixture : IAsyncLifetime
         try
         {
             var container = new PostgreSqlBuilder("postgres:16").Build();
-            // Discovery may run on a synchronization context; start off it so the wait cannot deadlock.
-            Task.Run(() => container.StartAsync()).GetAwaiter().GetResult();
+            // Discovery may run on a synchronization context; start off it so the wait cannot deadlock. A start that
+            // hangs (an image pull that never finishes) is cancelled after two minutes and becomes a skip below.
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+            Task.Run(() => container.StartAsync(timeout.Token)).GetAwaiter().GetResult();
             return new Shared(container, null);
         }
         catch (Exception ex)
