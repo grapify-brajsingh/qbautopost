@@ -37,6 +37,10 @@ public class SavedPayloadReaderTests
         AssertOneError(Fixture("unreadable-transactions-null.json"), "$.transactions");
 
     [Fact]
+    public void Should_BeUnreadable_When_TransactionContainsNull() =>
+        AssertOneError(Fixture("unreadable-transactions-null-row.json"), "$.transactions[0]");
+
+    [Fact]
     public void Should_BeUnreadable_When_TransactionsIsObject() =>
         AssertOneError(Fixture("unreadable-transactions-object.json"), "$.transactions");
 

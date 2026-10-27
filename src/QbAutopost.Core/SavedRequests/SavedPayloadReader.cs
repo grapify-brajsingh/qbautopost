@@ -25,6 +25,9 @@ public static class SavedPayloadReader
             if (request is null) return Unreadable("$: payload is null");
             // An explicit null binds to a non-nullable property without an exception; it is not a request we can run.
             if ((object?)request.Transactions is null) return Unreadable("$.transactions: must be an array");
+            for (var i = 0; i < request.Transactions.Count; i++)
+                if ((object?)request.Transactions[i] is null)
+                    return Unreadable($"$.transactions[{i}]: must be an object");
             return new PayloadRead(request, []);
         }
         catch (JsonException ex)
