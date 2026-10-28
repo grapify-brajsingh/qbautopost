@@ -1434,7 +1434,7 @@
         ],
         "operationId": "editSavedRequest",
         "summary": "Replace the payload of a pending saved request; the old payload stays as an earlier version.",
-        "description": "Saved-requests §6.3, §8. The body is `{ \"payload\": { ...the full validate-and-post body... }, \"note\": \"...\" }`: a full payload, not a patch. `If-Match` is required. A payload that differs from the current one becomes version n+1 with its change list (numbers are compared as decimals, so `184.3` and `184.30` are equal), validation and the duplicate rules run again, and an `edited` event is written. An identical payload answers `200` and writes nothing. An unreadable payload is stored and flagged like a save. The API never recalculates `controlTotal`: change it together with an amount, or validation reports the mismatch. Only a `pending` request can be edited.",
+        "description": "Saved-requests §6.3, §8. The body is `{ \"payload\": { ...the full validate-and-post body... }, \"note\": \"...\" }`: a full payload, not a patch. `If-Match` is required. A payload that differs from the current one becomes version n+1 with its change list (numbers are compared as decimals, so `184.3` and `184.30` are equal), validation and the duplicate rules run again, and an `edited` event is written. An identical payload answers `200` and writes nothing. An unreadable payload is stored and flagged like a save. The API never recalculates `controlTotal`: change it together with an amount, or validation reports the mismatch. Only a `pending` request can be edited. **v2 (§7, §7.1):** the payload is hashed and diffed by the v2 rules (top-level `email` and `pushId` are ignored, and a row's missing `post` equals `true`, so turning a row off is `replace $.transactions[i].post true → false`); a payload that differs only there answers `200` unchanged. A row without an `externalId` gets `edit<v>-<n>` (`v` the new version number, `n` its 1-based position). The edit never changes `email` or `pushId`. Both snapshots are refreshed; the reply shows the v2 one, which honours `post: false`.",
         "x-required-scope": "requests:edit",
         "security": [
           {
@@ -1489,7 +1489,7 @@
         },
         "responses": {
           "200": {
-            "description": "The saved request after the edit (or unchanged, when the payload was identical).",
+            "description": "The saved request after the edit (or unchanged, when the payload was identical), as the v2 detail (the same shape as `GET /api/v2/saved-requests/{id}`).",
             "headers": {
               "ETag": {
                 "description": "The new row version, in quotes.",
@@ -1501,7 +1501,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SavedRequestDetail"
+                  "$ref": "#/components/schemas/SavedRequestDetailV2"
                 }
               }
             }
@@ -1527,11 +1527,11 @@
             }
           },
           "412": {
-            "description": "`edited-by-someone-else`: the `If-Match` row version is not the current one. The body carries the current `rowVersion` and `updatedBy` (`{ id, name }`), so the dashboard can say who changed it. Nothing was changed.",
+            "description": "`edited-by-someone-else`: the `If-Match` row version is not the current one. The body carries the current `rowVersion`, `updatedUtc` and `updatedBy` (`{ id, name }`), so the dashboard can say who changed it and when. Nothing was changed.",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problem"
+                  "$ref": "#/components/schemas/EditedBySomeoneElseProblem"
                 }
               }
             }
@@ -1585,7 +1585,7 @@
         ],
         "operationId": "validateSavedRequest",
         "summary": "Re-run validation and the duplicate rules for the current version and store the new snapshot.",
-        "description": "Saved-requests §6.4. Takes no body. Rules, lists and the ledger change after a snapshot was taken, so this refreshes it (`validation.validatedUtc` moves) and writes a `validated` event. It bumps the row version, so an `ETag` held before goes stale. The snapshot is advisory: Post always validates again. Only a `pending` request can be validated.",
+        "description": "Saved-requests §6.4. Takes no body. Rules, lists and the ledger change after a snapshot was taken, so this refreshes it (`validation.validatedUtc` moves) and writes a `validated` event. It bumps the row version, so an `ETag` held before goes stale. The snapshot is advisory: Post always validates again. Only a `pending` request can be validated. **v2 (§6.4):** both snapshots are refreshed; the reply shows the v2 one, which sets the rows marked `post: false` aside.",
         "x-required-scope": "requests:edit",
         "security": [
           {
@@ -1608,7 +1608,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The saved request with its refreshed snapshot.",
+            "description": "The saved request with its refreshed snapshot, as the v2 detail (the same shape as `GET /api/v2/saved-requests/{id}`).",
             "headers": {
               "ETag": {
                 "description": "The new row version, in quotes.",
@@ -1620,7 +1620,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SavedRequestDetail"
+                  "$ref": "#/components/schemas/SavedRequestDetailV2"
                 }
               }
             }
@@ -1631,6 +1631,16 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: the request was edited between this validation's read and its write. The body carries the current `rowVersion`, `updatedUtc` and `updatedBy` (`{ id, name }`), so the dashboard can say who changed it and when. Nothing was validated.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditedBySomeoneElseProblem"
                 }
               }
             }
@@ -1716,7 +1726,7 @@
         },
         "responses": {
           "200": {
-            "description": "The discarded request.",
+            "description": "The discarded request, as the v2 detail (the same shape as `GET /api/v2/saved-requests/{id}`).",
             "headers": {
               "ETag": {
                 "description": "The new row version, in quotes.",
@@ -1728,7 +1738,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SavedRequestDetail"
+                  "$ref": "#/components/schemas/SavedRequestDetailV2"
                 }
               }
             }
@@ -1754,11 +1764,11 @@
             }
           },
           "412": {
-            "description": "`edited-by-someone-else`: the `If-Match` row version is not the current one. The body carries the current `rowVersion` and `updatedBy` (`{ id, name }`), so the dashboard can say who changed it. Nothing was changed.",
+            "description": "`edited-by-someone-else`: the `If-Match` row version is not the current one. The body carries the current `rowVersion`, `updatedUtc` and `updatedBy` (`{ id, name }`), so the dashboard can say who changed it and when. Nothing was changed.",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problem"
+                  "$ref": "#/components/schemas/EditedBySomeoneElseProblem"
                 }
               }
             }
@@ -1824,7 +1834,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The request, `pending` again.",
+            "description": "The request, `pending` again, as the v2 detail (the same shape as `GET /api/v2/saved-requests/{id}`).",
             "headers": {
               "ETag": {
                 "description": "The new row version, in quotes.",
@@ -1836,7 +1846,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SavedRequestDetail"
+                  "$ref": "#/components/schemas/SavedRequestDetailV2"
                 }
               }
             }
@@ -1852,11 +1862,11 @@
             }
           },
           "412": {
-            "description": "`edited-by-someone-else`: the `If-Match` row version is not the current one. The body carries the current `rowVersion` and `updatedBy` (`{ id, name }`), so the dashboard can say who changed it. Nothing was changed.",
+            "description": "`edited-by-someone-else`: the `If-Match` row version is not the current one. The body carries the current `rowVersion`, `updatedUtc` and `updatedBy` (`{ id, name }`), so the dashboard can say who changed it and when. Nothing was changed.",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problem"
+                  "$ref": "#/components/schemas/EditedBySomeoneElseProblem"
                 }
               }
             }
@@ -1952,7 +1962,7 @@
         },
         "responses": {
           "200": {
-            "description": "The request, `posted` or `pending`.",
+            "description": "The request, `posted` or `pending`, as the v2 detail (the same shape as `GET /api/v2/saved-requests/{id}`).",
             "headers": {
               "ETag": {
                 "description": "The new row version, in quotes.",
@@ -1964,7 +1974,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SavedRequestDetail"
+                  "$ref": "#/components/schemas/SavedRequestDetailV2"
                 }
               }
             }
@@ -1990,11 +2000,11 @@
             }
           },
           "412": {
-            "description": "`edited-by-someone-else`: the `If-Match` row version is not the current one. The body carries the current `rowVersion` and `updatedBy`. Nothing was changed.",
+            "description": "`edited-by-someone-else`: the `If-Match` row version is not the current one. The body carries the current `rowVersion`, `updatedUtc` and `updatedBy` (`{ id, name }`), so the dashboard can say who changed it and when. Nothing was changed.",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problem"
+                  "$ref": "#/components/schemas/EditedBySomeoneElseProblem"
                 }
               }
             }
@@ -2136,11 +2146,11 @@
             }
           },
           "412": {
-            "description": "`edited-by-someone-else`: `If-Match` is not the current row version, or the request changed between the duplicate check and the claim (the claim is made at the row version the check read). The body carries the current `rowVersion` and `updatedBy`. Nothing was claimed or sent.",
+            "description": "`edited-by-someone-else`: `If-Match` is not the current row version, or the request changed between the duplicate check and the claim (the claim is made at the row version the check read). The body carries the current `rowVersion`, `updatedUtc` and `updatedBy`. Nothing was claimed or sent.",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problem"
+                  "$ref": "#/components/schemas/EditedBySomeoneElseProblem"
                 }
               }
             }
@@ -3927,6 +3937,41 @@
               },
               "publicRef": {
                 "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "EditedBySomeoneElseProblem": {
+        "description": "Dashboard v2 §10 4.5: `edited-by-someone-else`. Every v2 `412` (edit, validate, post, discard, restore, resolve) carries the current `rowVersion`, when the request was last changed (`updatedUtc`) and by whom (`updatedBy`).",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "rowVersion": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The current row version; send it as `If-Match` after reloading."
+              },
+              "updatedUtc": {
+                "type": "string",
+                "format": "date-time",
+                "description": "When the request was last changed."
+              },
+              "updatedBy": {
+                "type": "object",
+                "description": "Who changed it last: a user id or `api-client:<id>`, and the name to show.",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }

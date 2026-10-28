@@ -51,7 +51,7 @@ public interface ISavedRequestStore
     /// the duplicate flag of the current version; writes one <c>validated</c> event.
     /// Bumps the row version (it is an update, so an ETag held by the dashboard goes stale).
     /// <see cref="MutationKind.WrongStatus"/> unless pending;
-    /// <see cref="MutationKind.Stale"/> when the v1 snapshot is for another version than the current one.
+    /// <see cref="MutationKind.Stale"/> when either snapshot is for another version than the current one.
     /// </summary>
     Task<MutationResult> SetValidationAsync(
         long id, ValidationSnapshot snapshot, ValidationSnapshot snapshotV2, DuplicateMatch duplicate, string actor,

@@ -328,6 +328,7 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
         {
             if (r.Status != SavedRequestStatus.Pending) return MutationKind.WrongStatus;
             if (snapshot.VersionNumber != r.CurrentVersion) return MutationKind.Stale;
+            if (snapshotV2.VersionNumber != r.CurrentVersion) return MutationKind.Stale;
 
             var readable = await db.SavedRequestVersions
                 .Where(v => v.SavedRequestId == id && v.Number == r.CurrentVersion)

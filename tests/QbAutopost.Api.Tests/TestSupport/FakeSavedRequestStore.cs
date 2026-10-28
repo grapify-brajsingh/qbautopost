@@ -242,15 +242,22 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestStore
         }
     }
 
+    /// <summary>T-1112: runs once, at the start of the next <see cref="SetValidationAsync"/>, to stage a change that lands between the validator's read and the write.</summary>
+    public Action? BeforeNextSetValidation { get; set; }
+
     public Task<MutationResult> SetValidationAsync(
         long id, ValidationSnapshot snapshot, ValidationSnapshot snapshotV2, DuplicateMatch duplicate, string actor,
         DateTime nowUtc, CancellationToken ct)
     {
+        var before = BeforeNextSetValidation;
+        BeforeNextSetValidation = null;
+        before?.Invoke();
         lock (_gate)
         {
             if (!_requests.TryGetValue(id, out var r)) return Mutation(MutationKind.NotFound, null);
             if (r.Status != SavedRequestStatus.Pending) return Mutation(MutationKind.WrongStatus, r);
             if (snapshot.VersionNumber != r.CurrentVersion) return Mutation(MutationKind.Stale, r);
+            if (snapshotV2.VersionNumber != r.CurrentVersion) return Mutation(MutationKind.Stale, r);
 
             var readable = _versions[id].Single(v => v.Number == r.CurrentVersion).Readable;
             var updated = r with

@@ -49,7 +49,8 @@ public static class SavedRequestEndpoints
 
     /// <param name="flavor">
     /// T-1109: the surface being mapped. T-1110 gave v2 its own save; T-1111 maps the v2 list, stats, detail and
-    /// attempt detail to their own handlers (dashboard v2 spec 3, 9, 10); T-1112 and T-1113 do the rest.
+    /// attempt detail to their own handlers (dashboard v2 spec 3, 9, 10); T-1112 gives the v2 changes the v2 detail
+    /// and the v2 412 (spec 10 item 4.5); T-1113 does the rest.
     /// </param>
     public static IEndpointRouteBuilder MapSavedRequestEndpoints(this IEndpointRouteBuilder v1, ApiFlavor flavor = ApiFlavor.V1)
     {
@@ -71,12 +72,31 @@ public static class SavedRequestEndpoints
             group.MapGet("/{id}/attempts/{attemptId}", AttemptAsync);
         }
 
-        group.MapPut("/{id}", EditAsync);
-        group.MapPost("/{id}/validate", ValidateAsync);
-        group.MapPost("/{id}/discard", DiscardAsync);
-        group.MapPost("/{id}/restore", RestoreAsync);
-        group.MapPost("/{id}/post", PostAsync);
-        group.MapPost("/{id}/resolve", ResolveAsync);
+        // T-1112: the changes share one handler per route; the flavor picks the reply (the v2 detail, the v2 412).
+        group.MapPut(
+            "/{id}",
+            (HttpContext http, string id, SavedRequestIntake intake, ISavedRequestStore store, ActorDirectory actors, CancellationToken ct) =>
+                EditAsync(http, id, intake, store, actors, flavor, ct));
+        group.MapPost(
+            "/{id}/validate",
+            (HttpContext http, string id, SavedRequestIntake intake, ISavedRequestStore store, ActorDirectory actors, CancellationToken ct) =>
+                ValidateAsync(http, id, intake, store, actors, flavor, ct));
+        group.MapPost(
+            "/{id}/discard",
+            (HttpContext http, string id, ISavedRequestStore store, ActorDirectory actors, IClock clock, CancellationToken ct) =>
+                DiscardAsync(http, id, store, actors, clock, flavor, ct));
+        group.MapPost(
+            "/{id}/restore",
+            (HttpContext http, string id, ISavedRequestStore store, ActorDirectory actors, IClock clock, CancellationToken ct) =>
+                RestoreAsync(http, id, store, actors, clock, flavor, ct));
+        group.MapPost(
+            "/{id}/post",
+            (HttpContext http, string id, SavedRequestPoster poster, ISavedRequestStore store, ActorDirectory actors, CancellationToken ct) =>
+                PostAsync(http, id, poster, store, actors, flavor, ct));
+        group.MapPost(
+            "/{id}/resolve",
+            (HttpContext http, string id, ISavedRequestStore store, ActorDirectory actors, IClock clock, CancellationToken ct) =>
+                ResolveAsync(http, id, store, actors, clock, flavor, ct));
         group.MapGet("/{id}/original", OriginalAsync);
         group.MapGet("/{id}/versions", VersionsAsync);
         group.MapGet("/{id}/versions/{n}", VersionAsync);
@@ -293,7 +313,17 @@ public static class SavedRequestEndpoints
         HttpContext http, string id, ISavedRequestStore store, ISavedRequestV2Store v2, ActorDirectory actors,
         ApiBatchStore batches, ILoggerFactory loggers, CancellationToken ct)
     {
-        if (!SavedRequestId.TryParse(id, out var requestId) || await v2.GetV2Async(requestId, ct) is not { } record)
+        return SavedRequestId.TryParse(id, out var requestId)
+            ? await DetailV2Async(http, requestId, store, v2, actors, batches, loggers, ct)
+            : NotFound();
+    }
+
+    /// <summary>The v2 detail of <paramref name="requestId"/> with its <c>ETag</c>, or <c>404</c> when there is no such request.</summary>
+    private static async Task<IResult> DetailV2Async(
+        HttpContext http, long requestId, ISavedRequestStore store, ISavedRequestV2Store v2, ActorDirectory actors,
+        ApiBatchStore batches, ILoggerFactory loggers, CancellationToken ct)
+    {
+        if (await v2.GetV2Async(requestId, ct) is not { } record)
         {
             return NotFound();
         }
@@ -481,7 +511,8 @@ public static class SavedRequestEndpoints
     /// Nothing recomputes the control total (CLAUDE.md rule 3): it is whatever the editor sent.
     /// </summary>
     private static async Task<IResult> EditAsync(
-        HttpContext http, string id, SavedRequestIntake intake, ISavedRequestStore store, ActorDirectory actors, CancellationToken ct)
+        HttpContext http, string id, SavedRequestIntake intake, ISavedRequestStore store, ActorDirectory actors,
+        ApiFlavor flavor, CancellationToken ct)
     {
         if (IfMatchOf(http) is not { } expected)
         {
@@ -523,13 +554,14 @@ public static class SavedRequestEndpoints
             return NotFound();
         }
 
-        var result = await intake.EditAsync(requestId, expected, payload, note, CallerMiddleware.CallerOf(http)!, ct);
-        return await MutationAnswerAsync(http, result, "not-editable", "Not editable", "edited", store, actors, ct);
+        var result = await intake.EditAsync(requestId, expected, payload, note, CallerMiddleware.CallerOf(http)!, ct, flavor);
+        return await MutationAnswerAsync(http, result, "not-editable", "Not editable", "edited", store, actors, flavor, ct);
     }
 
     /// <summary>Spec 6.4: re-runs validation and the duplicate rules for the current version. Pending only.</summary>
     private static async Task<IResult> ValidateAsync(
-        HttpContext http, string id, SavedRequestIntake intake, ISavedRequestStore store, ActorDirectory actors, CancellationToken ct)
+        HttpContext http, string id, SavedRequestIntake intake, ISavedRequestStore store, ActorDirectory actors,
+        ApiFlavor flavor, CancellationToken ct)
     {
         if (!SavedRequestId.TryParse(id, out var requestId))
         {
@@ -537,12 +569,13 @@ public static class SavedRequestEndpoints
         }
 
         var result = await intake.RevalidateAsync(requestId, CallerMiddleware.CallerOf(http)!, ct);
-        return await MutationAnswerAsync(http, result, "not-editable", "Not editable", "validated", store, actors, ct);
+        return await MutationAnswerAsync(http, result, "not-editable", "Not editable", "validated", store, actors, flavor, ct);
     }
 
     /// <summary>Spec 7.1: pending to discarded, with a reason of 1 to 500 characters after trimming. <c>If-Match</c> is honoured when sent.</summary>
     private static async Task<IResult> DiscardAsync(
-        HttpContext http, string id, ISavedRequestStore store, ActorDirectory actors, IClock clock, CancellationToken ct)
+        HttpContext http, string id, ISavedRequestStore store, ActorDirectory actors, IClock clock, ApiFlavor flavor,
+        CancellationToken ct)
     {
         var (raw, failure) = await ReadBodyAsync(http, ct);
         if (failure is not null)
@@ -571,12 +604,13 @@ public static class SavedRequestEndpoints
             requestId, IfMatchOf(http), SavedRequestStatus.Pending, SavedRequestStatus.Discarded,
             CallerMiddleware.CallerOf(http)!.Actor, clock.UtcNow, SavedRequestEvents.Discarded,
             new JsonObject { ["reason"] = reason }, ct);
-        return await MutationAnswerAsync(http, result, "not-discardable", "Not discardable", "discarded", store, actors, ct);
+        return await MutationAnswerAsync(http, result, "not-discardable", "Not discardable", "discarded", store, actors, flavor, ct);
     }
 
     /// <summary>Spec 7.1: discarded back to pending, for an admin (the scope is <see cref="ApiRoutes.ScopeFor"/>'s). Clears the reason.</summary>
     private static async Task<IResult> RestoreAsync(
-        HttpContext http, string id, ISavedRequestStore store, ActorDirectory actors, IClock clock, CancellationToken ct)
+        HttpContext http, string id, ISavedRequestStore store, ActorDirectory actors, IClock clock, ApiFlavor flavor,
+        CancellationToken ct)
     {
         if (!SavedRequestId.TryParse(id, out var requestId))
         {
@@ -586,7 +620,7 @@ public static class SavedRequestEndpoints
         var result = await store.ChangeStatusAsync(
             requestId, IfMatchOf(http), SavedRequestStatus.Discarded, SavedRequestStatus.Pending,
             CallerMiddleware.CallerOf(http)!.Actor, clock.UtcNow, SavedRequestEvents.Restored, null, ct);
-        return await MutationAnswerAsync(http, result, "not-restorable", "Not restorable", "restored", store, actors, ct);
+        return await MutationAnswerAsync(http, result, "not-restorable", "Not restorable", "restored", store, actors, flavor, ct);
     }
 
     // ---- resolve ----------------------------------------------------------------------------------------------------
@@ -602,7 +636,8 @@ public static class SavedRequestEndpoints
     /// honoured when sent. Nothing is sent to QuickBooks.
     /// </summary>
     private static async Task<IResult> ResolveAsync(
-        HttpContext http, string id, ISavedRequestStore store, ActorDirectory actors, IClock clock, CancellationToken ct)
+        HttpContext http, string id, ISavedRequestStore store, ActorDirectory actors, IClock clock, ApiFlavor flavor,
+        CancellationToken ct)
     {
         var (raw, failure) = await ReadBodyAsync(http, ct);
         if (failure is not null)
@@ -655,12 +690,12 @@ public static class SavedRequestEndpoints
             if (current.RowVersion != expected)
             {
                 return await MutationAnswerAsync(
-                    http, new MutationResult(MutationKind.Stale, current), "not-resolvable", "Not resolvable", "resolved", store, actors, ct);
+                    http, new MutationResult(MutationKind.Stale, current), "not-resolvable", "Not resolvable", "resolved", store, actors, flavor, ct);
             }
         }
 
         var result = await store.ResolveAsync(requestId, outcome.Value, note, CallerMiddleware.CallerOf(http)!.Actor, clock.UtcNow, ct);
-        return await MutationAnswerAsync(http, result, "not-resolvable", "Not resolvable", "resolved", store, actors, ct);
+        return await MutationAnswerAsync(http, result, "not-resolvable", "Not resolvable", "resolved", store, actors, flavor, ct);
     }
 
     // ---- post -------------------------------------------------------------------------------------------------------
@@ -679,7 +714,7 @@ public static class SavedRequestEndpoints
     /// </summary>
     private static async Task<IResult> PostAsync(
         HttpContext http, string id, SavedRequestPoster poster, ISavedRequestStore store, ActorDirectory actors,
-        CancellationToken ct)
+        ApiFlavor flavor, CancellationToken ct)
     {
         var (raw, failure) = await ReadBodyAsync(http, ct);
         if (failure is not null)
@@ -706,7 +741,7 @@ public static class SavedRequestEndpoints
                 return NotFound();
             case SavedPostKind.Stale:
                 return await MutationAnswerAsync(
-                    http, new MutationResult(MutationKind.Stale, record), "not-postable", "Not postable", "posted", store, actors, ct);
+                    http, new MutationResult(MutationKind.Stale, record), "not-postable", "Not postable", "posted", store, actors, flavor, ct);
             case SavedPostKind.AlreadyPosting:
                 return Results.Problem(
                     statusCode: StatusCodes.Status409Conflict,
@@ -793,10 +828,14 @@ public static class SavedRequestEndpoints
     /// The one answer every change gives. Not found is <c>404</c>; a stale row version is <c>412</c> with the current
     /// <c>rowVersion</c> and the last person to change it; a status the change does not apply to is <c>409</c> naming the
     /// status; anything else is the record, with its new <c>ETag</c> and <c>allowedActions</c> for the caller.
+    /// <para>
+    /// Dashboard v2 (spec 3, 10 item 4.5): the v2 412 also carries <c>updatedUtc</c>, and the record is the v2 detail,
+    /// the same shape as <c>GET /api/v2/saved-requests/{id}</c>.
+    /// </para>
     /// </summary>
     private static async Task<IResult> MutationAnswerAsync(
         HttpContext http, MutationResult result, string conflictType, string conflictTitle, string verb,
-        ISavedRequestStore store, ActorDirectory actors, CancellationToken ct)
+        ISavedRequestStore store, ActorDirectory actors, ApiFlavor flavor, CancellationToken ct)
     {
         var record = result.Record;
         switch (result.Kind)
@@ -805,23 +844,34 @@ public static class SavedRequestEndpoints
                 return NotFound();
             case MutationKind.Stale:
                 var by = (await actors.ResolveAsync([record!.UpdatedBy], ct)).Of(record.UpdatedBy);
+                var extras = new Dictionary<string, object?>
+                {
+                    ["rowVersion"] = record.RowVersion,
+                    ["updatedBy"] = new { id = by.Id, name = by.Name },
+                };
+                if (flavor == ApiFlavor.V2)
+                {
+                    extras["updatedUtc"] = record.UpdatedUtc;
+                }
+
                 return Results.Problem(
                     statusCode: StatusCodes.Status412PreconditionFailed,
                     title: "Edited by someone else",
                     detail: $"{record.PublicRef} was changed by {by.Name}. Reload it and try again. Nothing was {verb}.",
                     type: "edited-by-someone-else",
-                    extensions: new Dictionary<string, object?>
-                    {
-                        ["rowVersion"] = record.RowVersion,
-                        ["updatedBy"] = new { id = by.Id, name = by.Name },
-                    });
+                    extensions: extras);
             case MutationKind.WrongStatus:
                 return Problem(
                     StatusCodes.Status409Conflict, conflictTitle,
                     $"{record!.PublicRef} is {SavedRequestJson.Name(record.Status)}, so this is not allowed. Nothing was {verb}.",
                     conflictType);
             default:
-                return await DetailAsync(http, record!, store, actors, ct);
+                return flavor == ApiFlavor.V2
+                    ? await DetailV2Async(
+                        http, record!.Id, store, http.RequestServices.GetRequiredService<ISavedRequestV2Store>(), actors,
+                        http.RequestServices.GetRequiredService<ApiBatchStore>(),
+                        http.RequestServices.GetRequiredService<ILoggerFactory>(), ct)
+                    : await DetailAsync(http, record!, store, actors, ct);
         }
     }
 
