@@ -150,7 +150,7 @@ optional.
 - **Repeated `pushId`.** The checks run in this order:
   1. `Idempotency-Key` first, unchanged.
   2. The same `pushId` with the same original-body SHA-256 → `200` with the existing record and
-     `Idempotent-Replayed: true`.
+     `Idempotency-Replayed: true`.
   3. The same `pushId` with a **different** body → **`409 push-id-reused`**, naming `savedRequestId` and `publicRef`.
      Nothing is stored (Q-94).
   - **Order.** When an `Idempotency-Key` is sent and matches a record, the key's rules decide **alone**, exactly as

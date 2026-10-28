@@ -109,7 +109,8 @@ public sealed class V2SaveTests : IDisposable
         using var again = await SaveV2Async(Fixture(WithEmail));
 
         Assert.Equal(HttpStatusCode.OK, again.StatusCode);
-        Assert.Equal("true", Assert.Single(again.Headers.GetValues("Idempotent-Replayed")));
+        Assert.Equal("true", Assert.Single(again.Headers.GetValues("Idempotency-Replayed")));
+        Assert.False(again.Headers.Contains("Idempotent-Replayed"));
         Assert.Equal(first, (await SavedRequestTestHost.BodyOf(again)).GetProperty("id").GetInt64());
         Assert.Null(await Store.GetAsync(first + 1, CancellationToken.None));
     }

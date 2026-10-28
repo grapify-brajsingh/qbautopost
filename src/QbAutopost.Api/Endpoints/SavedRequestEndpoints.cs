@@ -33,9 +33,6 @@ public static class SavedRequestEndpoints
     private const int DefaultPageSize = 25;
     private const string DefaultSort = "-created";
 
-    /// <summary>Dashboard v2 spec 5.2: the replay header as that spec spells it, sent on v2 replays only (Q-101).</summary>
-    public const string PushIdReplayedHeader = "Idempotent-Replayed";
-
     /// <summary>Spec 7.1: the longest discard reason, after trimming.</summary>
     public const int MaxDiscardReasonLength = 500;
 
@@ -143,15 +140,7 @@ public static class SavedRequestEndpoints
                     "idempotency-key-reused");
             case CreateKind.Replayed:
                 http.Response.Headers[IdempotencyMiddleware.ReplayedHeader] = "true";
-                if (flavor == ApiFlavor.V2)
-                {
-                    // SPEC-GAP T-1110 (Q-101): dashboard v2 spec 5.2 spells the replay header Idempotent-Replayed, while
-                    // every replay so far says Idempotency-Replayed. A v2 replay says both until the owner picks one.
-                    http.Response.Headers[PushIdReplayedHeader] = "true";
-                    return Json(SavedRequestViewsV2.Saved(record));
-                }
-
-                return Json(SavedRequestViews.Saved(record));
+                return flavor == ApiFlavor.V2 ? Json(SavedRequestViewsV2.Saved(record)) : Json(SavedRequestViews.Saved(record));
             case CreateKind.PushIdReused when flavor == ApiFlavor.V2:
                 return PushIdReused(record);
             case CreateKind.PushIdReused:

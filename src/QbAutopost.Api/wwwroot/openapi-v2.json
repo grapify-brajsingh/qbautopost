@@ -1013,12 +1013,6 @@
                 "schema": {
                   "type": "string"
                 }
-              },
-              "Idempotent-Replayed": {
-                "description": "`true`, the same answer under the spelling of dashboard v2 §5.2 (Q-101).",
-                "schema": {
-                  "type": "string"
-                }
               }
             },
             "content": {
