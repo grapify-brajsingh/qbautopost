@@ -16,6 +16,12 @@ public sealed class DeployScriptsTests
     [InlineData("deploy/install-task.ps1")]
     [InlineData("scripts/shadow-diff.ps1")]
     [InlineData("scripts/new-api-client.ps1")]
+    [InlineData("scripts/qb-server-check.ps1")]
+    [InlineData("deploy/install-postgres.ps1")]
+    [InlineData("deploy/apply-migrations.ps1")]
+    [InlineData("deploy/backup-postgres.ps1")]
+    [InlineData("deploy/pg-common.ps1")]
+    [InlineData("deploy/grants.sql")]
     public void Should_BeAsciiOnly_When_ReadingOperatorScript(string file)
     {
         var bytes = File.ReadAllBytes(Path.Combine(RepoRoot.Find(), file));
@@ -26,6 +32,9 @@ public sealed class DeployScriptsTests
     [Theory]
     [InlineData("start-all.ps1")]
     [InlineData("install-task.ps1")]
+    [InlineData("install-postgres.ps1")]
+    [InlineData("apply-migrations.ps1")]
+    [InlineData("backup-postgres.ps1")]
     public void Should_SupportWhatIf_When_ReadingDeployScript(string file)
     {
         Assert.Contains("SupportsShouldProcess", Script(file), StringComparison.Ordinal);
@@ -94,6 +103,100 @@ public sealed class DeployScriptsTests
         var script = File.ReadAllText(Path.Combine(RepoRoot.Find(), "scripts", "shadow-diff.ps1"));
 
         Assert.DoesNotContain(forbidden, script, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// T-1016 / CLAUDE.md rule 6: a generated password reaches machine environment variables and a child process's
+    /// PGPASSWORD, never a command line, a file or a committed default. Windows PowerShell 5.1 only: no 7-only operators.
+    /// </summary>
+    [Theory]
+    [InlineData("install-postgres.ps1")]
+    [InlineData("apply-migrations.ps1")]
+    [InlineData("backup-postgres.ps1")]
+    [InlineData("pg-common.ps1")]
+    public void Should_KeepPasswordsOffCommandLinesAndOutOfFiles_When_ReadingPostgresScript(string file)
+    {
+        var script = Script(file);
+
+        Assert.DoesNotContain("--password", script, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("--superpassword", script, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("PGPASSWORD=", script, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("postgres://", script, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("-W ", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("Set-Content", script, StringComparison.Ordinal);
+        Assert.DoesNotContain(" ?? ", script, StringComparison.Ordinal);
+        Assert.DoesNotContain(" && ", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("-AsPlainText", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_BindToLoopbackAndWriteMachineVariables_When_ReadingInstallPostgres()
+    {
+        var script = Script("install-postgres.ps1");
+
+        Assert.Contains("listen_addresses = '127.0.0.1'", script, StringComparison.Ordinal);
+        Assert.Contains("'Machine'", script, StringComparison.Ordinal);
+        Assert.Contains("QBAUTOPOST__Database__ConnectionString", script, StringComparison.Ordinal);
+        Assert.Contains("QBAUTOPOST_MIGRATION_CONNECTION", script, StringComparison.Ordinal);
+        Assert.Contains("QBAUTOPOST__Auth__Jwt__SigningKey", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("0.0.0.0", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_PassInstallerOptionsInAnAclFile_When_ReadingInstallPostgres()
+    {
+        var script = Script("install-postgres.ps1");
+
+        Assert.Contains("--optionfile", script, StringComparison.Ordinal);
+        Assert.Contains("SetAccessRuleProtection($true, $false)", script, StringComparison.Ordinal);
+        Assert.Contains("finally", script, StringComparison.Ordinal);
+        Assert.Contains("-Recurse -Force", script, StringComparison.Ordinal);
+        // The only place a password may be handed to the installer is the option file, as name=value.
+        Assert.DoesNotContain("'--superpassword'", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_TrimTrailingBackslashOfBackupFolder_When_ReadingInstallPostgres()
+    {
+        var script = Script("install-postgres.ps1");
+
+        Assert.Contains("$BackupFolder.TrimEnd([char]92)", script, StringComparison.Ordinal);
+        Assert.Contains("-f $backupScript, $backupDir, $PgBin", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_RefuseWhileTheApiRuns_When_ReadingApplyMigrations()
+    {
+        var script = Script("apply-migrations.ps1");
+
+        Assert.Contains("Get-Process", script, StringComparison.Ordinal);
+        Assert.Contains("grants.sql", script, StringComparison.Ordinal);
+        Assert.Contains("migrations.sql", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_StartPostgresBeforeTheApi_When_ReadingStartAll()
+    {
+        var script = Script("start-all.ps1");
+        var postgres = script.IndexOf("Start-Postgres -Name", StringComparison.Ordinal);
+        var startApi = script.IndexOf("Start-Api -", StringComparison.Ordinal);
+
+        Assert.True(postgres > 0, "start-all.ps1 must call Start-Postgres");
+        Assert.True(postgres < script.IndexOf("if (-not (Start-Api -Exe", StringComparison.Ordinal), "PostgreSQL must be up before the API starts (bootstrap admin runs once at start)");
+        Assert.True(startApi > 0);
+    }
+
+    [Fact]
+    public void Should_GiveTheAppRoleNoDeleteExceptUserRoles_When_ReadingGrants()
+    {
+        var grants = File.ReadAllText(Path.Combine(RepoRoot.Find(), "deploy", "grants.sql"));
+        var statements = grants.Split(new[] { (char)10, (char)13 }, StringSplitOptions.RemoveEmptyEntries)
+            .Where(l => !l.TrimStart().StartsWith("--", StringComparison.Ordinal));
+        var text = string.Join(' ', statements);
+
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(text, "DELETE", System.Text.RegularExpressions.RegexOptions.IgnoreCase));
+        Assert.Contains("GRANT DELETE ON user_roles TO qbautopost_app;", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("password", text, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string Script(string file) => File.ReadAllText(Path.Combine(DeployDir, file));

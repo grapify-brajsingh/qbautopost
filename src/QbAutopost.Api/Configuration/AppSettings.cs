@@ -13,6 +13,9 @@ public sealed class AppSettings
     public HermesSettings Hermes { get; set; } = new();
     public OcrSettings Ocr { get; set; } = new();
     public PathsSettings Paths { get; set; } = new();
+    public DatabaseSettings Database { get; set; } = new();
+    public SavedRequestSettings SavedRequests { get; set; } = new();
+    public AuthSettings Auth { get; set; } = new();
 
     /// <summary>Makes every configured file path absolute, relative ones against <paramref name="root"/>.</summary>
     public void ResolvePaths(string root)

@@ -71,4 +71,50 @@ public sealed class SyncPostRouteTests
     [Fact]
     public void Should_DrawOnThePostingBudget_When_TheRouteIsTheSynchronousPost() =>
         Assert.Equal(RateLimitBucket.Post, RateLimitPolicy.BucketFor("POST", Versioned));
+
+    /// <summary>
+    /// R32: every route that moves money, in the case routing ignores. Each variant must need what the lower-case route
+    /// needs, keep its idempotency and posting-bucket treatment, and be audited.
+    /// </summary>
+    public static TheoryData<string, string> MoneyRoutes => new()
+    {
+        { "/api/v1/QuickBooks/Transactions/Validate-And-Post", ApiScopes.QbPost },
+        { "/API/V1/QUICKBOOKS/TRANSACTIONS/VALIDATE-AND-POST", ApiScopes.QbPost },
+        { "/QuickBooks/Transactions/Validate-and-Post/", ApiScopes.QbPost },
+        { "/api/v1/QuickBooks/Transactions", ApiScopes.QbPost },
+        { "/QUICKBOOKS/TRANSACTIONS", ApiScopes.QbPost },
+        { "/api/v1/Batches/api-x-1/Undo", ApiScopes.QbPost },
+        { "/api/v1/Jobs/2026-08/Post", ApiScopes.JobsWrite },
+        { "/api/v1/Saved-Requests/12/Post", ApiScopes.RequestsPost },
+        { "/API/V1/SAVED-REQUESTS/12/POST", ApiScopes.RequestsPost },
+    };
+
+    [Theory]
+    [MemberData(nameof(MoneyRoutes))]
+    public void Should_NeedTheSameScopeAsTheLowerCaseRoute_When_AMoneyRouteIsSentInAnotherCase(string path, string scope)
+    {
+        Assert.Equal(scope, ApiRoutes.ScopeFor("POST", path));
+        Assert.Equal(ApiRoutes.ScopeFor("POST", path.ToLowerInvariant()), ApiRoutes.ScopeFor("POST", path));
+    }
+
+    [Theory]
+    [MemberData(nameof(MoneyRoutes))]
+    public void Should_BeTreatedAsTheLowerCaseRoute_When_AMoneyRouteIsSentInAnotherCase(string path, string scope)
+    {
+        _ = scope;
+        Assert.Equal(ApiRoutes.IsIdempotent("POST", path.ToLowerInvariant()), ApiRoutes.IsIdempotent("POST", path));
+        Assert.True(ApiRoutes.IsMutating("POST", path));
+        Assert.Equal(RateLimitPolicy.BucketFor("POST", path.ToLowerInvariant()), RateLimitPolicy.BucketFor("POST", path));
+    }
+
+    /// <summary>R32: the routes that need no credential, or a narrower one, are matched in any case too (none opens wider).</summary>
+    [Theory]
+    [InlineData("GET", "/Health/Ready")]
+    [InlineData("GET", "/api/v1/HEALTH")]
+    [InlineData("GET", "/api/v1/Health/Database")]
+    [InlineData("POST", "/QB/Sync-Lists")]
+    [InlineData("GET", "/api/v1/QuickBooks/Lists")]
+    [InlineData("POST", "/api/v1/Auth/Login")]
+    public void Should_MatchInAnyCase_When_TheRouteIsNamedExactly(string method, string path) =>
+        Assert.Equal(ApiRoutes.ScopeFor(method, path.ToLowerInvariant()), ApiRoutes.ScopeFor(method, path));
 }

@@ -1,9 +1,10 @@
 using QbAutopost.Api.Configuration;
+using QbAutopost.Api.Database;
 
 namespace QbAutopost.Api.Health;
 
 /// <summary>One readiness check (FR-A-2). <paramref name="Severity"/> decides whether a failure blocks readiness.</summary>
-public sealed record ReadinessCheck(string Name, bool Ok, string Severity, string Message);
+public sealed record ReadinessCheck(string Name, bool Ok, string Severity, string Message, string? Reason = null);
 
 /// <summary><c>GET /api/v1/health/ready</c> body: <paramref name="Ok"/> is false iff an <c>error</c> check failed.</summary>
 public sealed record ReadinessView(bool Ok, IReadOnlyList<ReadinessCheck> Checks);
@@ -20,7 +21,7 @@ public static class Readiness
     /// <summary>A failure worth reporting that still leaves the host ready.</summary>
     public const string Warning = "warning";
 
-    public static ReadinessView Evaluate(AppSettings settings, bool workerStarted)
+    public static ReadinessView Evaluate(AppSettings settings, bool workerStarted, DatabaseGate? database = null)
     {
         var checks = new List<ReadinessCheck>
         {
@@ -30,6 +31,11 @@ public static class Readiness
             LogFolder(settings),
             Worker(workerStarted),
         };
+        if (database is not null)
+        {
+            checks.Add(Database(database));
+        }
+
         return new ReadinessView(checks.All(c => c.Ok || c.Severity != Error), checks);
     }
 
@@ -62,6 +68,15 @@ public static class Readiness
             return new ReadinessCheck("logFolder", false, Error, $"{s.Paths.Logs}: {ex.Message}");
         }
     }
+
+    /// <summary>
+    /// Saved-requests spec 10.7: readiness is per feature. A database outage is reported but is only a warning, so a
+    /// load balancer does not take the whole service out for a dashboard outage (Q-83). Never the connection string.
+    /// </summary>
+    private static ReadinessCheck Database(DatabaseGate gate) =>
+        gate.IsReady
+            ? new ReadinessCheck("database", true, Warning, "ready")
+            : new ReadinessCheck("database", false, Warning, gate.Reason ?? "unreachable", gate.Reason);
 
     private static ReadinessCheck Worker(bool started) =>
         started

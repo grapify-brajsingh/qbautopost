@@ -162,7 +162,7 @@ public sealed class AuditTrailApiTests : IDisposable
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var line = Assert.Single(AuditLines());
         Assert.Equal(Assert.Single(response.Headers.GetValues(RequestId.Header)), line.GetProperty("requestId").GetString());
-        Assert.Equal(ApiKeyMiddleware.LegacyClientId, line.GetProperty("clientId").GetString());
+        Assert.Equal(CallerMiddleware.LegacyClientId, line.GetProperty("clientId").GetString());
         Assert.Equal("POST", line.GetProperty("method").GetString());
         Assert.Equal(PostRoute, line.GetProperty("path").GetString());
         Assert.Equal("ok", line.GetProperty("outcome").GetString());
@@ -285,7 +285,7 @@ public sealed class AuditTrailApiTests : IDisposable
         var id = Assert.Single(response.Headers.GetValues(RequestId.Header));
         var requestLine = Assert.Single(LogLines(), l => l.Contains("HTTP GET /api/v1/jobs responded 200", StringComparison.Ordinal));
         Assert.Contains(id, requestLine, StringComparison.Ordinal);
-        Assert.Contains(ApiKeyMiddleware.LegacyClientId, requestLine, StringComparison.Ordinal);
+        Assert.Contains(CallerMiddleware.LegacyClientId, requestLine, StringComparison.Ordinal);
     }
 
     [Fact]

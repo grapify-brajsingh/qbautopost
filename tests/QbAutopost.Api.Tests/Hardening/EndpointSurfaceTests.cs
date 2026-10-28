@@ -1,5 +1,6 @@
 using System.Reflection;
 using QbAutopost.Api.Endpoints;
+using QbAutopost.Core.Security;
 
 namespace QbAutopost.Api.Tests.Hardening;
 
@@ -42,6 +43,76 @@ public sealed class EndpointSurfaceTests
 
         Assert.Empty(unread);
     }
+
+    /// <summary>
+    /// T-1009 (saved-requests spec 6, 11.2, 11.3, 11.4): every new route, with the scope the spec gives it.
+    /// <c>null</c> means "no credential" (login and refresh).
+    /// </summary>
+    public static TheoryData<string, string, string?> NewRoutes() => new()
+    {
+        { "POST", "/saved-requests", ApiScopes.RequestsSubmit },
+        { "GET", "/saved-requests", ApiScopes.RequestsRead },
+        { "GET", "/saved-requests/stats", ApiScopes.RequestsRead },
+        { "GET", "/saved-requests/12", ApiScopes.RequestsRead },
+        { "GET", "/saved-requests/SR-000012", ApiScopes.RequestsRead },
+        { "GET", "/saved-requests/12/original", ApiScopes.RequestsRead },
+        { "GET", "/saved-requests/12/versions", ApiScopes.RequestsRead },
+        { "GET", "/saved-requests/12/versions/3", ApiScopes.RequestsRead },
+        { "GET", "/saved-requests/12/attempts", ApiScopes.RequestsRead },
+        { "GET", "/saved-requests/12/attempts/7", ApiScopes.RequestsRead },
+        { "GET", "/saved-requests/12/events", ApiScopes.RequestsRead },
+        { "PUT", "/saved-requests/12", ApiScopes.RequestsEdit },
+        { "POST", "/saved-requests/12/validate", ApiScopes.RequestsEdit },
+        { "POST", "/saved-requests/12/discard", ApiScopes.RequestsEdit },
+        { "POST", "/saved-requests/12/post", ApiScopes.RequestsPost },
+        { "POST", "/saved-requests/12/restore", ApiScopes.RequestsAdmin },
+        { "POST", "/saved-requests/12/resolve", ApiScopes.RequestsAdmin },
+        { "POST", "/auth/login", null },
+        { "POST", "/auth/refresh", null },
+        { "POST", "/auth/logout", ApiScopes.SignedIn },
+        { "GET", "/auth/me", ApiScopes.SignedIn },
+        { "POST", "/auth/change-password", ApiScopes.SignedIn },
+        { "GET", "/users", ApiScopes.UsersManage },
+        { "POST", "/users", ApiScopes.UsersManage },
+        { "GET", "/users/u1", ApiScopes.UsersManage },
+        { "PATCH", "/users/u1", ApiScopes.UsersManage },
+        { "POST", "/users/u1/reset-password", ApiScopes.UsersManage },
+        { "POST", "/users/u1/unlock", ApiScopes.UsersManage },
+        { "GET", "/users/u1/audit", ApiScopes.UsersManage },
+        { "GET", "/quickbooks/lists", ApiScopes.ListsRead },
+        { "POST", "/quickbooks/lists/sync", ApiScopes.QbRead },
+        { "GET", "/health/database", ApiScopes.AnyOf(ApiScopes.RequestsRead, ApiScopes.HealthRead) },
+    };
+
+    /// <summary>
+    /// The validate-and-post "security trap", repeated for every new route: a route that falls through lands on
+    /// <c>admin</c> (or, under <c>/quickbooks/</c>, on <c>qb:read</c>), and either answer would pass every other test.
+    /// So each is pinned on both surfaces, and none may be <c>admin</c>.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(NewRoutes))]
+    public void Should_MapEveryNewRouteExplicitly(string method, string path, string? expected)
+    {
+        Assert.Equal(expected, ApiRoutes.ScopeFor(method, path));
+        Assert.Equal(expected, ApiRoutes.ScopeFor(method, ApiRoutes.V1Prefix + path));
+        Assert.NotEqual(ApiScopes.Admin, ApiRoutes.ScopeFor(method, path));
+    }
+
+    [Theory]
+    [InlineData("DELETE", "/saved-requests/12")]
+    [InlineData("POST", "/saved-requests/12/approve")]
+    [InlineData("PUT", "/saved-requests/stats")]
+    [InlineData("GET", "/auth/login")]
+    [InlineData("DELETE", "/auth/me")]
+    [InlineData("POST", "/auth/anything")]
+    public void Should_CloseTheRoute_When_ANewPrefixHasAnUnplannedRoute(string method, string path) =>
+        Assert.Equal(ApiScopes.Admin, ApiRoutes.ScopeFor(method, path));
+
+    [Theory]
+    [InlineData("/saved-requestsx")]
+    [InlineData("/usersx")]
+    public void Should_NotBorrowANewScope_When_APathOnlyStartsLikeANewRoute(string path) =>
+        Assert.Equal(ApiScopes.Admin, ApiRoutes.ScopeFor("GET", path));
 
     private static Type RequestType(string name) =>
         typeof(QuickBooksEndpoints).GetNestedType(name, BindingFlags.Public)

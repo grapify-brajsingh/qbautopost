@@ -47,7 +47,7 @@ Transactions Type > Deposit
 - No Bills / customer Invoices in QuickBooks (invoices are evidence for categorisation only — *assumed*, see Q1).
 - No multi-company job. One folder = one company file.
 - No UI. The API and the files in `output\` are the interface.
-- No database. State is JSON files and the job folders.
+- No database, except the PostgreSQL store for saved requests, their history and dashboard users (ADR-0009, `docs/saved-requests-postgres.md`). All other state is JSON files and the job folders.
 
 ## 3. Definitions
 

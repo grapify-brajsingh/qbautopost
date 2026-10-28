@@ -104,6 +104,27 @@ public sealed class ClientScopeApiTests : IDisposable
         Assert.Empty(_factory.Gateway.Writes);
     }
 
+    /// <summary>
+    /// R32: routing ignores case, so the scope check must too. A read-only key sending the post routes in another case
+    /// used to resolve to <c>qb:read</c> (the <c>/quickbooks/</c> fall-through) and get past authorisation.
+    /// </summary>
+    [Theory]
+    [InlineData("/api/v1/QuickBooks/Transactions/Validate-And-Post")]
+    [InlineData("/api/v1/QUICKBOOKS/TRANSACTIONS/VALIDATE-AND-POST")]
+    [InlineData("/QuickBooks/Transactions/Validate-And-Post")]
+    [InlineData("/api/v1/QuickBooks/Transactions")]
+    public async Task Should_Answer403_When_AReadOnlyKeyPostsThroughAMixedCasePath(string path)
+    {
+        var key = GiveClientAKey(ApiScopes.QbRead);
+        using var client = WithKey(_factory, key);
+
+        using var response = await client.PostAsJsonAsync(path, Request(), ApiFactory.Json);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Contains(ApiScopes.QbPost, (await response.ReadProblemAsync()).GetProperty("detail").GetString());
+        Assert.Empty(_factory.Gateway.Writes);
+    }
+
     [Fact]
     public async Task Should_Answer200_When_TheSameClientOnlyValidates()
     {

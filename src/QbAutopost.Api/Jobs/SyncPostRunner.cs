@@ -46,9 +46,14 @@ public sealed record SyncPost(
 /// </summary>
 public sealed class SyncPostRunner(JobQueue queue, DirectPostRunner runner, ILogger<SyncPostRunner> log)
 {
-    public async Task<SyncPost> RunAsync(SyncPostRequest request, CancellationToken ct)
+    /// <param name="onSending">
+    /// T-1014 (ruling R3): called as the first step of the work on the worker, before the batch is begun. A caller that
+    /// sees an exception can then tell "nothing was started" (never called) from "QuickBooks may have it" (called).
+    /// A busy ending never calls it.
+    /// </param>
+    public async Task<SyncPost> RunAsync(SyncPostRequest request, CancellationToken ct, Action? onSending = null)
     {
-        if (Unsupported(request) is { Count: > 0 } unsupported)
+        if (UnsupportedFields(request) is { Count: > 0 } unsupported)
         {
             log.LogWarning(
                 "Sync post refused for reference {Reference}: {Errors}", request.Reference, string.Join("; ", unsupported));
@@ -82,7 +87,13 @@ public sealed class SyncPostRunner(JobQueue queue, DirectPostRunner runner, ILog
         // leave QuickBooks in a state nobody recorded. The ledger row is written either way, and §8 is how the
         // caller finds out what happened.
         var (ran, result) = await queue.TryRunExclusiveAsync(
-            label, workerCt => PostAsync(direct, plan, workerCt), ct);
+            label,
+            workerCt =>
+            {
+                onSending?.Invoke();
+                return PostAsync(direct, plan, workerCt);
+            },
+            ct);
 
         if (!ran)
         {
@@ -120,8 +131,9 @@ public sealed class SyncPostRunner(JobQueue queue, DirectPostRunner runner, ILog
     /// The two fields this route does not have (§2.3, §4). They are refused rather than ignored: a caller who sends
     /// <c>dryRun</c> believes nothing will be posted, and answering them "posted" would be the most expensive kind
     /// of silence. This follows T-915, which refused <c>allowModelAccounts</c> for the same reason.
+    /// T-1012: public so a saved request's validation snapshot records the same two refusals in the same words.
     /// </summary>
-    private static IReadOnlyList<string> Unsupported(SyncPostRequest request)
+    public static IReadOnlyList<string> UnsupportedFields(SyncPostRequest request)
     {
         var errors = new List<string>();
         if (request.DryRun is not null)

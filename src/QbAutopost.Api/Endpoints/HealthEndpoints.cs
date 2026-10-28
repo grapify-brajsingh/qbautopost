@@ -1,3 +1,4 @@
+using QbAutopost.Api.Database;
 using QbAutopost.Api.Health;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Pipeline;
@@ -15,7 +16,35 @@ public static class HealthEndpoints
         health.MapGet("/sdk", GetSdk);
         health.MapGet("/hermes", GetHermes);
         health.MapGet("/quickbooks", GetQuickBooks);
+        health.MapGet("/database", GetDatabase);
         return app;
+    }
+
+    /// <summary>
+    /// Saved-requests spec 5.5. Looks at the database again once the last check is older than
+    /// <see cref="DatabaseGate.StaleAfter"/> (M10 review: the shared, throttled refresh R13 gave the filter, so a
+    /// monitor polling this costs one check per 10 s, not one per poll) and reports reachability, schema state and
+    /// latency. The body is built from the gate's state and migration names only, so the connection string cannot
+    /// reach it.
+    /// </summary>
+    private static async Task<IResult> GetDatabase(DatabaseGate gate, CancellationToken ct)
+    {
+        if (gate.IsStale)
+        {
+            await gate.RefreshSharedAsync(ct);
+        }
+
+        var view = new DatabaseHealthView(
+            gate.IsReady,
+            gate.State.ToString(),
+            gate.Reason,
+            gate.State is DatabaseState.Ready or DatabaseState.SchemaOutOfDate,
+            gate.IsReady && gate.Pending.Count == 0,
+            gate.Pending,
+            gate.LatencyMs);
+        return view.Ok
+            ? Results.Ok(view)
+            : Results.Json(view, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
     /// <summary>
@@ -43,9 +72,18 @@ public static class HealthEndpoints
         return Results.Json(info, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
-    /// <summary>FR-A-2. 503 when an <c>error</c> check failed; the body lists every check either way.</summary>
-    private static IResult GetReady(AppHealth health)
+    /// <summary>
+    /// FR-A-2. 503 when an <c>error</c> check failed; the body lists every check either way. M10 review: a gate that
+    /// is not Ready is looked at again first, throttled and shared as the filter does (R13), so an outage that has
+    /// ended stops being reported here without anyone calling <c>/health/database</c>.
+    /// </summary>
+    private static async Task<IResult> GetReady(AppHealth health, DatabaseGate gate, CancellationToken ct)
     {
+        if (gate.NeedsLookAgain)
+        {
+            await gate.RefreshSharedAsync(ct);
+        }
+
         var view = health.Ready();
         return view.Ok
             ? Results.Ok(view)

@@ -65,11 +65,35 @@ public static class ApiRoutes
         // T-924: the synchronous post is here for two reasons at once. §3 honours Idempotency-Key on it — the only
         // mechanism that returns the *original* txnIds after a lost response (§8) — and RateLimitPolicy reads this
         // same predicate, so naming it here also puts it in the posting bucket rather than the cheaper default one.
+        //
+        // T-1012: POST /saved-requests is deliberately absent. Its Idempotency-Key is honoured by the store, per source
+        // and in the same transaction as the save (saved-requests spec 10.1): same key and body answer 200 with the
+        // existing record, a different body 409 idempotency-key-reused. This middleware's file-backed replay would
+        // answer from a second, separate record of the same fact, and the two could disagree.
         return Is(value, "/quickbooks/transactions")
                || Is(value, SyncPostRoute)
                || Is(value, "/jobs")
                || (value.EndsWith("/post", Ordinal) && value.Contains("/jobs/", Ordinal))
                || (value.EndsWith("/undo", Ordinal) && value.Contains("/batches/", Ordinal));
+    }
+
+    /// <summary>
+    /// M10 review: <c>POST /saved-requests/{id}/post</c>, which sends a saved request through validate-and-post's engine.
+    /// It moves money, so <c>RateLimitPolicy</c> puts it in the posting bucket, but it is deliberately not
+    /// <see cref="IsIdempotent"/>: the store's claim is what stops a second send (saved-requests spec 10.2), and the
+    /// replay middleware answering from a file would be a second record of the same fact.
+    /// </summary>
+    public static bool IsSavedRequestPost(string method, PathString path)
+    {
+        if (!HttpMethods.IsPost(method) || !path.HasValue)
+        {
+            return false;
+        }
+
+        var segments = Flat(path.Value!).Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length == 3
+               && segments[0].Equals("saved-requests", Ordinal)
+               && segments[2].Equals("post", Ordinal);
     }
 
     /// <summary>
@@ -98,7 +122,9 @@ public static class ApiRoutes
     }
 
     /// <summary>
-    /// T-910 (FR-A-13): the scope a route needs, or null when it needs no key at all (liveness and readiness).
+    /// T-910 (FR-A-13): the scope a route needs, or null when it needs no credential at all (liveness, readiness, and
+    /// since T-1009 <c>/auth/login</c> and <c>/auth/refresh</c>). A value may name alternatives
+    /// (<see cref="ApiScopes.AnyOf"/>), and <see cref="ApiScopes.SignedIn"/> asks for any signed-in person.
     /// <para>
     /// Scopes name what a caller may <i>do</i>, so the mapping is by effect, not by URL shape: anything that sends a
     /// write to QuickBooks needs <c>qb:post</c>, anything that only reads needs <c>qb:read</c>. A route nobody has
@@ -132,14 +158,47 @@ public static class ApiRoutes
         var get = HttpMethods.IsGet(method);
 
         // Liveness and readiness answer without a key (spec §6); everything else under /health needs one.
-        if (p is "/health" or "/health/ready")
+        // R32: every exact match below ignores case, as routing does. A case-sensitive `is`/`==` here once let a
+        // read-only key post: /QuickBooks/Transactions/Validate-And-Post missed its branch and fell through to qb:read.
+        if (p.Equals("/health", Ordinal) || p.Equals("/health/ready", Ordinal))
         {
             return null;
+        }
+
+        // Named so the database route is a decision, not a side effect of the prefix below. Saved-requests spec 11.3:
+        // either scope, so the dashboard (requests:read) can show a status light and monitoring (health:read) still can.
+        if (p.Equals("/health/database", Ordinal))
+        {
+            return ApiScopes.AnyOf(ApiScopes.RequestsRead, ApiScopes.HealthRead);
         }
 
         if (p.StartsWith("/health", Ordinal))
         {
             return ApiScopes.HealthRead;
+        }
+
+        // T-1009 (saved-requests spec 6, 11.2, 11.3, 11.4): mapped explicitly, before the /quickbooks/ fall-through
+        // below can open anything, and each falls back to admin rather than to a neighbour's scope.
+        if (IsUnder(p, "/saved-requests"))
+        {
+            return SavedRequestScope(method, p);
+        }
+
+        if (IsUnder(p, "/users"))
+        {
+            return ApiScopes.UsersManage;
+        }
+
+        if (IsUnder(p, "/auth"))
+        {
+            return AuthScope(method, p);
+        }
+
+        // Spec 11.1: the edit dropdowns read the cached lists, and that is all lists:read opens. Syncing the lists,
+        // which opens a QuickBooks session, stays qb:read below.
+        if (get && p.Equals("/quickbooks/lists", Ordinal))
+        {
+            return ApiScopes.ListsRead;
         }
 
         if (p.StartsWith("/rules/", Ordinal))
@@ -158,7 +217,7 @@ public static class ApiRoutes
             return p.EndsWith("/undo", Ordinal) ? ApiScopes.QbPost : ApiScopes.QbRead;
         }
 
-        if (p is "/quickbooks/transactions" or SyncPostRoute)
+        if (p.Equals("/quickbooks/transactions", Ordinal) || p.Equals(SyncPostRoute, Ordinal))
         {
             // The two routes that send transactions to QuickBooks; the /validate sibling is caught below.
             //
@@ -172,15 +231,78 @@ public static class ApiRoutes
             return get ? ApiScopes.QbRead : ApiScopes.QbPost;
         }
 
-        return p.StartsWith("/quickbooks/", Ordinal) || p == "/qb/sync-lists"
+        return p.StartsWith("/quickbooks/", Ordinal) || p.Equals("/qb/sync-lists", Ordinal)
             ? ApiScopes.QbRead
             : ApiScopes.Admin;
     }
+
+    /// <summary>
+    /// Spec 11.2: the routes a user whose <c>mustChangePassword</c> is set may still call; every other route answers
+    /// <c>403 password-change-required</c>.
+    /// </summary>
+    public static bool AllowsPendingPasswordChange(PathString path)
+    {
+        if (!path.HasValue)
+        {
+            return false;
+        }
+
+        var p = Flat(path.Value!).TrimEnd('/');
+        return p.Equals(AuthMe, Ordinal) || p.Equals(AuthChangePassword, Ordinal) || p.Equals(AuthLogout, Ordinal);
+    }
+
+    private const string AuthMe = "/auth/me";
+    private const string AuthChangePassword = "/auth/change-password";
+    private const string AuthLogout = "/auth/logout";
+
+    /// <summary>Spec 6 and 11.3: every GET reads; each change is named; anything else is admin, as everywhere.</summary>
+    private static string SavedRequestScope(string method, string p)
+    {
+        var segments = p.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (HttpMethods.IsGet(method))
+        {
+            return ApiScopes.RequestsRead;
+        }
+
+        return (segments.Length, method.ToUpperInvariant()) switch
+        {
+            (1, "POST") => ApiScopes.RequestsSubmit,
+            (2, "PUT") when !segments[1].Equals("stats", Ordinal) => ApiScopes.RequestsEdit,
+            (3, "POST") => segments[2].ToLowerInvariant() switch
+            {
+                "validate" or "discard" => ApiScopes.RequestsEdit,
+                "post" => ApiScopes.RequestsPost,
+                "restore" or "resolve" => ApiScopes.RequestsAdmin,
+                _ => ApiScopes.Admin,
+            },
+            _ => ApiScopes.Admin,
+        };
+    }
+
+    /// <summary>Spec 11.2: login and refresh need no credential; me, logout and change-password need a signed-in person.</summary>
+    private static string? AuthScope(string method, string p)
+    {
+        var post = HttpMethods.IsPost(method);
+        if (post && (p.Equals("/auth/login", Ordinal) || p.Equals("/auth/refresh", Ordinal)))
+        {
+            return null;
+        }
+
+        return (HttpMethods.IsGet(method) && p.Equals(AuthMe, Ordinal))
+               || (post && (p.Equals(AuthLogout, Ordinal) || p.Equals(AuthChangePassword, Ordinal)))
+            ? ApiScopes.SignedIn
+            : ApiScopes.Admin;
+    }
+
+    /// <summary>The route itself or anything below it, and not a longer sibling such as <c>/usersx</c>.</summary>
+    private static bool IsUnder(string path, string route) =>
+        path.Equals(route, Ordinal) || path.StartsWith(route + "/", Ordinal);
 
     /// <summary>The path without the version prefix, so one mapping serves both surfaces while T-901's flat routes live.</summary>
     private static string Flat(string path) =>
         path.StartsWith(V1Prefix, Ordinal) ? path[V1Prefix.Length..] : path;
 
+    /// <summary>R32: every comparison in this class. Routing matches paths without regard to case, so these must too.</summary>
     private const StringComparison Ordinal = StringComparison.OrdinalIgnoreCase;
 
     /// <summary>The POSTs that answer a question without changing anything (see <see cref="IsMutating"/>).</summary>

@@ -7,10 +7,16 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging.Abstractions;
+using QbAutopost.Api.Auth;
+using QbAutopost.Api.Database;
 using QbAutopost.Api.Endpoints;
 using QbAutopost.Api.QuickBooks;
+using QbAutopost.Api.SavedRequests;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Jobs;
+using QbAutopost.Core.SavedRequests;
+using QbAutopost.Data;
 
 namespace QbAutopost.Api.Tests.TestSupport;
 
@@ -22,6 +28,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 {
     public const string ApiKey = "test-key";
     public const string Company = "Tropicana Properties LLC";
+
+    /// <summary>T-1009: signs the test access tokens (<see cref="FakeUsers"/>); 32+ bytes, as HS256 here requires.</summary>
+    public const string SigningKey = "test-signing-key-0123456789abcdef-0123456789";
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
@@ -36,6 +45,78 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
     /// <summary>Rule 1: the host must never reach the real COM probe, not even on a developer's Windows box.</summary>
     public FakeQbSdkProbe SdkProbe { get; } = new();
+
+    /// <summary>
+    /// Rule 1: no PostgreSQL either. The host gets this in-memory store, and a gate that starts <c>Ready</c>; a test
+    /// moves the gate with <c>Gate.Set(...)</c>, or changes what an explicit refresh finds with <see cref="Schema"/>.
+    /// </summary>
+    public FakeSavedRequestStore Store { get; }
+
+    /// <summary>
+    /// The fake gate; with <see cref="WithPostgres"/>, the host's real gate (resolving it starts the host).
+    /// </summary>
+    public DatabaseGate Gate => _postgres is null ? _fakeGate : Services.GetRequiredService<DatabaseGate>();
+
+    /// <summary>T-1009: dashboard users for Bearer requests, in place of UserManager (rule 1: no PostgreSQL).</summary>
+    public FakeUsers Users { get; } = new();
+
+    /// <summary>What the gate's schema check reports when something refreshes it.</summary>
+    public SchemaStatus Schema { get; set; } = new(true, true, [], null);
+
+    /// <summary>M10 review: how many times the fake gate's schema check ran.</summary>
+    public int SchemaChecks => Volatile.Read(ref _schemaChecks);
+
+    /// <summary>M10 review: moves the fake gate's clock, so a test can make its last check older than its throttle.</summary>
+    public TimeSpan GateClockOffset { get; set; }
+
+    private readonly DatabaseGate _fakeGate;
+
+    private int _schemaChecks;
+
+    /// <summary>R14: a PostgreSQL connection string, or null for the usual in-memory host.</summary>
+    private readonly string? _postgres;
+
+    public ApiFactory()
+        : this(null)
+    {
+    }
+
+    private ApiFactory(string? postgres, FakeSavedRequestStore? store = null)
+    {
+        _postgres = postgres;
+        Store = store ?? new FakeSavedRequestStore();
+
+        // Not forced: the host's first start-up check makes it Ready, and runs recovery on Store first, as production does.
+        _fakeGate = new DatabaseGate(
+            _ =>
+            {
+                Interlocked.Increment(ref _schemaChecks);
+                return Task.FromResult(Schema);
+            },
+            true,
+            NullLogger<DatabaseGate>.Instance,
+            ct => Store.RecoverInFlightAsync(DateTime.UtcNow, ct),
+            () => DateTime.UtcNow + GateClockOffset);
+    }
+
+    /// <summary>
+    /// T-1014: a fresh host (its own folder, gate and process state) over an existing <paramref name="store"/>, as a
+    /// restarted service finds the database: its start-up check runs in-flight recovery on that store first.
+    /// </summary>
+    public static ApiFactory Restarted(FakeSavedRequestStore store) => new(null, store);
+
+    /// <summary>
+    /// R14 (T-1010): the real host against a real PostgreSQL (Testcontainers), with the production wiring of
+    /// <c>Program</c>: <c>AddQbAutopostData</c>, the EF store, the real <see cref="DatabaseGate"/> and its schema check,
+    /// <c>InFlightRecovery</c>, Identity over the pooled context, and the real <see cref="UserGate"/>. Only QuickBooks
+    /// and Hermes stay fake. The database must already be migrated: the app never migrates (spec 5.5).
+    /// <see cref="Store"/> and <see cref="Users"/> are not used by such a host.
+    /// </summary>
+    public static ApiFactory WithPostgres(string connectionString)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+        return new ApiFactory(connectionString);
+    }
 
     public string LedgerFile => Dir.Combine("data", "ledger.json");
 
@@ -59,9 +140,16 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
+        if (_postgres is not null)
+        {
+            // UseSetting, not the collection below: Program reads it while it registers services.
+            builder.UseSetting("Database:ConnectionString", _postgres);
+        }
+
         builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Api:ApiKey"] = ApiKey,
+            ["Auth:Jwt:SigningKey"] = SigningKey,
             ["DryRunDefault"] = "true",
             ["Company:Name"] = Company,
             ["Company:RulesFile"] = Fixtures.SampleRules,
@@ -96,6 +184,20 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             // Without this the host would pick the real COM probe on a Windows dev box (CLAUDE.md rule 1).
             services.RemoveAll<IQbSdkProbe>();
             services.AddSingleton<IQbSdkProbe>(SdkProbe);
+            if (_postgres is not null)
+            {
+                // R14: the real store, gate and user gate, exactly as Program registered them.
+                return;
+            }
+
+            services.RemoveAll<ISavedRequestStore>();
+            services.AddSingleton<ISavedRequestStore>(Store);
+            services.RemoveAll<DatabaseGate>();
+            services.AddSingleton(_fakeGate);
+            services.RemoveAll<IUserGate>();
+            services.AddSingleton<IUserGate>(Users);
+            services.RemoveAll<IUserDirectory>();
+            services.AddSingleton<IUserDirectory>(Users);
         });
     }
 

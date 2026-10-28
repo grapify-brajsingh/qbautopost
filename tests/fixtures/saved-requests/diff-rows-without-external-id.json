@@ -1,0 +1,14 @@
+{
+  "before": {
+    "transactions": [
+      { "externalId": "x1", "amount": 1.00, "payee": "One" },
+      { "amount": 2.00, "payee": "Two" }
+    ]
+  },
+  "after": {
+    "transactions": [
+      { "amount": 2.00, "payee": "Two" },
+      { "externalId": "x1", "amount": 1.00, "payee": "One" }
+    ]
+  }
+}

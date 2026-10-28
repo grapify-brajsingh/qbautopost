@@ -37,9 +37,6 @@ public static class QuickBooksEndpoints
         return app;
     }
 
-    /// <summary>How long §6.4 asks a refused caller to wait.</summary>
-    private const int BusyRetryAfterSeconds = 5;
-
     /// <summary>
     /// T-924 (ADR-0008, <c>docs/validate-and-post-transaction-data.md</c>): validate the whole payload, and either
     /// report every finding and post nothing, or post all of it and return the <c>TxnID</c>s — one request, one
@@ -47,8 +44,8 @@ public static class QuickBooksEndpoints
     /// <para>
     /// Five endings and no others (§5): 400 the request could not be read · 409 the QuickBooks session is in use,
     /// nothing enqueued · 422 at least one row would be held, nothing sent · 503 the backup is stale or QuickBooks
-    /// is unreachable, nothing sent · 200 all of it posted. Every decision belongs to <see cref="SyncPostRunner"/>;
-    /// this method only chooses the status code.
+    /// is unreachable, nothing sent · 200 all of it posted. Every decision belongs to <see cref="SyncPostRunner"/>,
+    /// and the status code is <see cref="SyncPostResponses"/>'s.
     /// </para>
     /// <para>
     /// The scope is <c>qb:post</c>, and <see cref="ApiRoutes.ScopeFor"/> names this path explicitly. That is not
@@ -71,46 +68,8 @@ public static class QuickBooksEndpoints
         }
 
         var post = await runner.RunAsync(request, ct);
-        switch (post.Outcome)
-        {
-            case SyncPostOutcome.Refused:
-                return Results.Problem(
-                    statusCode: StatusCodes.Status400BadRequest,
-                    title: "The request could not be read",
-                    detail: string.Join("; ", post.Errors),
-                    extensions: new Dictionary<string, object?> { ["errors"] = post.Errors });
-
-            case SyncPostOutcome.Held:
-                // §6.2: every finding, because §5.1 refuses the batch on one of them — a caller fixing them one
-                // round trip at a time is the failure this format exists to avoid.
-                return Results.Problem(
-                    statusCode: StatusCodes.Status422UnprocessableEntity,
-                    title: "The transactions were not posted",
-                    detail: post.Findings!.Detail,
-                    extensions: new Dictionary<string, object?>
-                    {
-                        ["counts"] = post.Findings.Counts,
-                        ["validation"] = post.Findings.Validation,
-                        ["unknownNames"] = post.Findings.UnknownNames,
-                    });
-
-            case SyncPostOutcome.Busy:
-                // §6.4: the header as well as the field, so a client that retries automatically reads the same
-                // number a person would.
-                http.Response.Headers.RetryAfter = BusyRetryAfterSeconds.ToString();
-                return Results.Problem(
-                    statusCode: StatusCodes.Status409Conflict,
-                    title: "QuickBooks is busy with another operation",
-                    detail: "A folder job or another post is using the QuickBooks session. Nothing was sent. "
-                            + $"Retry in {BusyRetryAfterSeconds} seconds.",
-                    extensions: new Dictionary<string, object?> { ["retryAfterSeconds"] = BusyRetryAfterSeconds });
-
-            default:
-                return post.Unavailable
-                    // §6.5: the backup guard, or QuickBooks unreachable. Nothing was sent, so a retry is safe.
-                    ? Results.Json(post.Result, statusCode: StatusCodes.Status503ServiceUnavailable)
-                    : Results.Ok(post.Result);
-        }
+        // T-1014: the status code and body are chosen in one place, shared with POST /saved-requests/{id}/post.
+        return SyncPostResponses.ToResult(post, http, extra: null);
     }
 
     /// <summary>
@@ -236,7 +195,7 @@ public static class QuickBooksEndpoints
         // T-910: the qbXML body carries every amount and name in the batch, so it needs the qb:debug scope (FR-A-6).
         var response = ValidationResponse.From(
             plan,
-            includeQbXml == true && ApiKeyMiddleware.HasScope(http, ApiScopes.QbDebug),
+            includeQbXml == true && CallerMiddleware.HasScope(http, ApiScopes.QbDebug),
             asked: includeQbXml == true);
         log.LogInformation(
             "Validated {Submitted} row(s) for reference {Reference}: {WouldPost} would post, {Held} held, {Duplicates} duplicate(s)",

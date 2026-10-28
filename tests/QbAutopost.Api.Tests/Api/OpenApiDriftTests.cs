@@ -166,7 +166,7 @@ public sealed class OpenApiDriftTests : IDisposable
     /// <summary>
     /// The one thing a drift test cannot learn from the route table: which header the key travels in. FR-A-18 asks
     /// the document to declare <c>Authorization: Bearer</c>, and api-v1 §2.2 calls it the preferred form — but
-    /// <c>ApiKeyMiddleware</c> reads <see cref="ApiSettings.KeyHeader"/> and nothing else (Q-67). A document that
+    /// an API key travels only in <see cref="ApiSettings.KeyHeader"/> (Q-67); since T-1009 a Bearer token is a dashboard user's JWT, not a key. A document that
     /// asked every reader for a header the app ignores would be worse than no document, so what the page *offers* is
     /// the scheme that works, and the bearer scheme is declared beside it with its status written down.
     /// </summary>
@@ -369,7 +369,7 @@ public sealed class OpenApiDriftTests : IDisposable
 
     /// <summary>
     /// The header the middleware actually reads. api-v1 §2.2 calls <c>Authorization: Bearer</c> the preferred form,
-    /// but <c>ApiKeyMiddleware</c> reads <c>X-Api-Key</c> and nothing else — see Q-67, and
+    /// but an API key travels only in <c>X-Api-Key</c> (a Bearer token is a dashboard JWT since T-1009) — see Q-67, and
     /// <see cref="Should_DeclareTheSchemeThatActuallyWorks_When_TheDocumentIsRead"/>, which is why the document does
     /// not send a reader down a road this build refuses.
     /// </summary>
@@ -422,6 +422,6 @@ internal static class OpenApi
     /// <summary>Declared because FR-A-18 asks for it; not what this build accepts (Q-67).</summary>
     public const string BearerScheme = "bearerAuth";
 
-    /// <summary>The scheme the document offers, because it is the one <c>ApiKeyMiddleware</c> reads.</summary>
+    /// <summary>The scheme the document offers, because it is the one <c>CallerMiddleware</c> reads.</summary>
     public const string ApiKeyScheme = "apiKeyAuth";
 }

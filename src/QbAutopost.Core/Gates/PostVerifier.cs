@@ -1,3 +1,4 @@
+using System.Globalization;
 using QbAutopost.Core.Models;
 using QbAutopost.Core.Pipeline;
 using QbAutopost.Core.Text;
@@ -12,6 +13,40 @@ public sealed record PostVerification(IReadOnlyList<PostedLine> Posted, IReadOnl
 /// </summary>
 public static class PostVerifier
 {
+    /// <summary>The note on a <c>quickbooks-rejected</c> row whose add answered status 0 without a TxnID.</summary>
+    public const string NoTxnIdNote = "status 0 but no TxnID returned";
+
+    /// <summary>
+    /// The note on a <c>quickbooks-rejected</c> row whose add answered a non-zero status: <c>"&lt;code&gt;: &lt;message&gt;"</c>.
+    /// When QuickBooks returned a TxnID anyway (a warning, not an error), the note leads with it instead, so
+    /// <see cref="IsCleanRejection"/> can never read that row as "nothing was created".
+    /// </summary>
+    public static string RejectionNote(int statusCode, string? message, string? txnId = null) => txnId is null
+        ? $"{statusCode.ToString(CultureInfo.InvariantCulture)}: {message}"
+        : $"QuickBooks TxnID {txnId} returned with {statusCode.ToString(CultureInfo.InvariantCulture)}: {message}; check QuickBooks";
+
+    /// <summary>
+    /// R31: true only for a note <see cref="RejectionNote"/> wrote for an add QuickBooks refused outright: a positive
+    /// status code (QuickBooks' own error codes are positive; <see cref="QbXml.QbXmlParser.MissingStatusCode"/> is
+    /// not) and no TxnID. Every other note, the status-0 one included, is false.
+    /// </summary>
+    public static bool IsCleanRejection(string? note)
+    {
+        if (note is null)
+        {
+            return false;
+        }
+
+        var colon = note.IndexOf(": ", StringComparison.Ordinal);
+        return colon > 0
+            && int.TryParse(
+                note.AsSpan(0, colon),
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var code)
+            && code > 0;
+    }
+
     public static PostVerification Verify(IReadOnlyList<MappedTxn> sent, IReadOnlyList<PostResult> results)
     {
         var byRequest = results
@@ -38,11 +73,11 @@ public static class PostVerifier
             var result = matches[0];
             if (result.StatusCode != 0)
             {
-                rejected.Add(Hold(txn, HoldReasons.QuickBooksRejected, $"{result.StatusCode}: {result.StatusMessage}"));
+                rejected.Add(Hold(txn, HoldReasons.QuickBooksRejected, RejectionNote(result.StatusCode, result.StatusMessage, result.TxnId)));
             }
             else if (result.TxnId is null)
             {
-                rejected.Add(Hold(txn, HoldReasons.QuickBooksRejected, "status 0 but no TxnID returned"));
+                rejected.Add(Hold(txn, HoldReasons.QuickBooksRejected, NoTxnIdNote));
             }
             else if (result.Amount is { } echoed && echoed != txn.Line.Amount)
             {

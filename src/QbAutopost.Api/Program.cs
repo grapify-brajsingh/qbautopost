@@ -1,13 +1,18 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Microsoft.AspNetCore.Identity;
+using QbAutopost.Api.Auth;
 using QbAutopost.Api.Configuration;
+using QbAutopost.Api.Database;
 using QbAutopost.Api.Endpoints;
 using QbAutopost.Api.Health;
 using QbAutopost.Api.Jobs;
 using QbAutopost.Api.Logging;
 using QbAutopost.Api.Ocr;
 using QbAutopost.Api.QuickBooks;
+using QbAutopost.Api.SavedRequests;
 using QbAutopost.Api.Security;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Api;
@@ -17,8 +22,11 @@ using QbAutopost.Core.Hermes;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Mapping;
 using QbAutopost.Core.Pipeline;
+using QbAutopost.Core.SavedRequests;
 using QbAutopost.Core.Security;
 using QbAutopost.Core.Store;
+using QbAutopost.Data;
+using QbAutopost.Data.Entities;
 using QbAutopost.QuickBooks;
 
 // T-901 (api-v1 §12): read appsettings.json from the exe's folder, not the working directory (server defect 1).
@@ -199,17 +207,19 @@ builder.Services.AddSingleton(sp =>
     };
 });
 // T-907 (§6.1, §12): the bounds a direct request is read against. Core stays free of the settings types.
+// T-1012: one instance, so the saved-request row fingerprints (R6) read rows exactly as the planner does.
 builder.Services.AddSingleton(sp =>
 {
     var s = sp.GetRequiredService<IOptions<AppSettings>>().Value;
-    return new DirectPlanner(new DirectLimits
+    return new DirectLimits
     {
         MaxRows = s.Api.MaxTransactionsPerRequest,
         MaxLineAmount = s.QuickBooks.MaxLineAmount,
         MaxAgeDays = s.QuickBooks.AllowedDateWindow.MaxAgeDays,
         MaxFutureDays = s.QuickBooks.AllowedDateWindow.MaxFutureDays,
-    });
+    };
 });
+builder.Services.AddSingleton(sp => new DirectPlanner(sp.GetRequiredService<DirectLimits>()));
 builder.Services.AddSingleton(sp =>
     new ApiBatchStore(sp.GetRequiredService<IOptions<AppSettings>>().Value.Paths.ApiBatches));
 // T-909 (FR-A-12): beside the batches, because a key's whole purpose is to name the batch it produced.
@@ -222,6 +232,12 @@ builder.Services.AddSingleton<DirectPostRunner>();
 // T-924 (ADR-0008): the synchronous validate-and-post. It owns no posting logic of its own — it is the all-or-nothing
 // gate in front of DirectPostRunner, plus the worker lock taken only if it is free.
 builder.Services.AddSingleton<SyncPostRunner>();
+// T-1012 (saved-requests spec 6.1, 6.4, 5.3): reading, validating and storing a saved request, and naming its actors.
+builder.Services.AddSingleton<SavedRequestValidator>();
+builder.Services.AddSingleton<SavedRequestIntake>();
+builder.Services.AddSingleton<ActorDirectory>();
+// T-1014 (saved-requests spec 7.2, 10.2-10.6): post by id through SyncPostRunner, recording every ending.
+builder.Services.AddSingleton<SavedRequestPoster>();
 // T-914 (FR-A-7): the same StatementReader the job uses, so a validate and the job it predicts cannot disagree.
 builder.Services.AddSingleton<FolderValidator>();
 builder.Services.AddSingleton<JobPipeline>();
@@ -237,6 +253,82 @@ builder.Services.AddSingleton<IJobProcessor, JobRunner>();
 builder.Services.AddSingleton<JobAdmission>();
 builder.Services.AddSingleton<StartupRecovery>();
 builder.Services.AddHostedService<JobWorker>();
+
+// Saved-requests spec 4.2, 5.5, 10.6, 10.7. Without a connection string the feature is off (DisabledSavedRequestStore,
+// gate NotConfigured) and nothing else changes. Registered after JobWorker; hosted services start in order, and
+// InFlightRecovery finishes before Kestrel binds, so the saved-request routes never see a request still `posting`.
+var database = builder.Configuration.GetSection("Database").Get<DatabaseSettings>() ?? new DatabaseSettings();
+var auth = builder.Configuration.GetSection("Auth").Get<AuthSettings>() ?? new AuthSettings();
+if (database.Configured)
+{
+    builder.Services.AddQbAutopostData(database.ConnectionString, database.CommandTimeoutSeconds);
+
+    // T-1009 (spec 11.2, 11.3): Identity's stores need a scoped context; the pool still hands it out and takes it back.
+    builder.Services.AddScoped(sp => sp.GetRequiredService<IDbContextFactory<QbAutopostDbContext>>().CreateDbContext());
+    builder.Services
+        .AddIdentityCore<AppUser>(o =>
+        {
+            // Spec 11.2, builder's call: length is what matters, so every composition rule is off.
+            o.Password.RequiredLength = auth.Password.MinLength;
+            o.Password.RequireDigit = false;
+            o.Password.RequireLowercase = false;
+            o.Password.RequireUppercase = false;
+            o.Password.RequireNonAlphanumeric = false;
+            o.Lockout.AllowedForNewUsers = true;
+            o.Lockout.MaxFailedAccessAttempts = auth.Lockout.MaxFailedAttempts;
+            o.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(auth.Lockout.LockoutMinutes);
+            o.User.RequireUniqueEmail = true;
+        })
+        .AddRoles<IdentityRole>()
+        .AddEntityFrameworkStores<QbAutopostDbContext>();
+
+    // T-1010 (spec 11.2): refresh tokens and the user audit go through the pooled context directly.
+    builder.Services.AddSingleton<RefreshTokenService>();
+    builder.Services.AddSingleton<UserAuditWriter>();
+    // Fix 1a: the failed-password count, incremented atomically in PostgreSQL.
+    builder.Services.AddSingleton<LockoutCounter>();
+    // T-1012 (spec 5.3): user names beside the ids in saved-request history, one query per response.
+    builder.Services.AddSingleton<IUserDirectory, DbUserDirectory>();
+}
+else
+{
+    builder.Services.AddSingleton<ISavedRequestStore, DisabledSavedRequestStore>();
+}
+
+// T-1009 (spec 10.11): CallerMiddleware resolves this only once the database gate is Ready, so without a database
+// (no Identity registered) a Bearer request answers 503 before anything asks for UserManager.
+builder.Services.AddMemoryCache();
+builder.Services.AddScoped<IUserGate, UserGate>();
+builder.Services.AddSingleton<TokenService>();
+
+builder.Services.AddSingleton(sp =>
+{
+    var factory = sp.GetService<IDbContextFactory<QbAutopostDbContext>>();
+    return new DatabaseGate(
+        factory is null
+            ? null
+            : async ct =>
+            {
+                await using var db = await factory.CreateDbContextAsync(ct);
+                return await SchemaState.CheckAsync(db, ct);
+            },
+        sp.GetRequiredService<IOptions<AppSettings>>().Value.Database.RequireCurrentSchema,
+        sp.GetRequiredService<ILogger<DatabaseGate>>(),
+        // Spec 10.6: the gate is not Ready until this has succeeded once, so no route can claim a request first.
+        async ct =>
+        {
+            var moved = await sp.GetRequiredService<ISavedRequestStore>()
+                .RecoverInFlightAsync(sp.GetRequiredService<IClock>().UtcNow, ct);
+            sp.GetRequiredService<ILogger<DatabaseGate>>()
+                .LogInformation("Saved-request recovery: {Count} interrupted post(s) marked unknown", moved);
+        });
+});
+builder.Services.AddHostedService<InFlightRecovery>();
+if (database.Configured)
+{
+    // T-1011 (spec 11.4): after InFlightRecovery, so the gate has been looked at; creates the first admin once.
+    builder.Services.AddHostedService<BootstrapAdmin>();
+}
 
 var app = builder.Build();
 
@@ -275,6 +367,9 @@ try
     {
         app.Logger.LogWarning("{TransportWarning}", warning);
     }
+
+    // Saved-requests spec 4.2: names the key, never the value, of a secret read from a settings file.
+    SecretWarnings.Warn(app.Configuration, app.Logger);
 
     app.Services.GetRequiredService<PromptLibrary>();
     app.Logger.LogInformation("Hermes prompts loaded from {PromptFolder}", Path.Combine(AppContext.BaseDirectory, PromptLibrary.DefaultFolder));
@@ -318,7 +413,7 @@ try
     // T-912 (FR-A-16): in front of the key check on purpose — a 403 is a refusal by an identified caller, and an
     // audit that sat behind the check would never see it (handoff trap 17). It records once the answer is known.
     app.UseMiddleware<AuditMiddleware>();
-    app.UseMiddleware<ApiKeyMiddleware>();
+    app.UseMiddleware<CallerMiddleware>();
     // T-911 (FR-A-15): behind the key check, so a partition can be the caller rather than whatever address they
     // happen to be calling from today.
     app.UseRateLimiter();
@@ -329,6 +424,12 @@ try
     // is true (api-v1 §9), so the POC package and the deploy scripts keep working until T-914 moves them.
     var v1 = app.MapGroup(ApiRoutes.V1Prefix);
     MapAll(v1);
+    // T-1010 (spec 11.2): sign-in exists on the versioned surface only; the refresh cookie's path names it.
+    v1.MapAuthEndpoints();
+    // T-1011 (spec 11.4): user management, admins only (users:manage); versioned surface only.
+    v1.MapUserEndpoints();
+    // T-1012 (spec 6): saved requests, behind the database gate; versioned surface only.
+    v1.MapSavedRequestEndpoints();
     // T-913 (FR-A-18): the document and the Scalar page, on the versioned surface only and only when somebody asked
     // for them. Disabled means not mapped, so a route that could describe every way to move money simply is not there.
     if (settings.Api.Reference.Enabled)

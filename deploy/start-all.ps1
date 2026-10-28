@@ -8,7 +8,13 @@
     1. Docker up: WSL 2 + Docker Engine (-DockerMode Wsl, Windows Server) or Docker Desktop (-DockerMode Desktop).
     2. docker compose up -d in deploy/hermes (the file publishes 127.0.0.1:8642 only).
     3. Wait until Hermes accepts connections on 127.0.0.1:8642.
-    4. Start the API (unless it already runs), then wait for GET /api/v1/health/ready to answer 200.
+    4. Start or verify the PostgreSQL service and wait for its port (saved requests, T-1016). The API must start AFTER it:
+       the bootstrap admin runs once at start and is skipped, with a warning, when the database is not Ready. A database
+       that stays down is a warning, not a failure: the validate-and-post routes do not need it. If the admin was not
+       created because the database was down, restart the app once.
+    5. Start the API (unless it already runs), then wait for GET /api/v1/health/ready to answer 200.
+    6. Read the same key-free answer's `database` check and warn when the schema is not current (run
+       deploy\apply-migrations.ps1) or the database is not reachable.
   This script holds no secret of any kind, so it can only call routes that need no key: since T-910 those are
   /api/v1/health and /api/v1/health/ready only. /api/v1/health/hermes needs the health:read scope, so Hermes is
   proved here by its own port (step 3) rather than through the API. Use
@@ -34,6 +40,10 @@ param(
     [string] $AppExe = 'C:\qb-autopost\app\QbAutopost.Api.exe',
     [string] $ApiBaseUrl = 'http://127.0.0.1:5080',
     [int] $HermesPort = 8642,
+    [string] $PostgresService = 'postgresql-x64-16',
+    [int] $PostgresPort = 5432,
+    [int] $PostgresWaitSeconds = 60,
+    [switch] $SkipPostgres,
     [string] $DockerDesktopExe = (Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'),
     [int] $DockerWaitSeconds = 180,
     [int] $HermesWaitSeconds = 300,
@@ -162,6 +172,59 @@ function Wait-HermesPort {
     return $false
 }
 
+function Start-Postgres {
+    # Saved requests live in PostgreSQL on this server (spec 5.4). The service is normally automatic and already running;
+    # this starts it if it is stopped and waits for the port. Never fatal: without it only the saved-requests routes are 503.
+    param([string] $Name, [int] $Port, [int] $TimeoutSeconds)
+    $service = Get-Service -Name $Name -ErrorAction SilentlyContinue
+    if (-not $service) {
+        Write-Step "PostgreSQL service '$Name' not found (deploy\install-postgres.ps1). Saved requests and dashboard sign-in stay unavailable." 'WRN'
+        return $false
+    }
+    if ($service.Status -ne 'Running') {
+        Write-Step "Starting the PostgreSQL service '$Name'."
+        try { Start-Service -Name $Name }
+        catch { Write-Step "Could not start '$Name': $($_.Exception.Message). Start it from an administrator session." 'WRN' }
+    }
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-TcpPort -Port $Port) {
+            Write-Step "PostgreSQL accepts connections on 127.0.0.1:$Port."
+            return $true
+        }
+        Start-Sleep -Seconds 3
+    }
+    Write-Step "PostgreSQL did not open 127.0.0.1:$Port within $TimeoutSeconds s; the API starts without the database feature." 'WRN'
+    return $false
+}
+
+function Test-DatabaseCheck {
+    # The key-free readiness body carries a `database` check with a reason (schema-out-of-date, unreachable, ...).
+    param([string] $BaseUrl)
+    $url = $BaseUrl.TrimEnd('/') + '/api/v1/health/ready'
+    try {
+        $body = (Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 30).Content | ConvertFrom-Json
+        $check = @($body.checks | Where-Object { $_.name -eq 'database' })
+        if ($check.Count -eq 0) {
+            Write-Step 'The API reports no database check: Database:ConnectionString is not set.' 'WRN'
+        }
+        elseif (-not $check[0].ok) {
+            if ($check[0].reason -eq 'schema-out-of-date') {
+                Write-Step 'The database schema is NOT current: stop the API, run deploy\apply-migrations.ps1, then start it again. Saved-request routes answer 503 until then.' 'WRN'
+            }
+            else {
+                Write-Step "The database is not ready ($($check[0].reason)). If it was down at start, restart the app once so the bootstrap admin is created." 'WRN'
+            }
+        }
+        else {
+            Write-Step 'Database ready and schema current.'
+        }
+    }
+    catch {
+        Write-Step "Could not read the database check: $($_.Exception.Message)" 'WRN'
+    }
+}
+
 function Get-ApiProcess {
     param([string] $Exe)
     $name = [System.IO.Path]::GetFileNameWithoutExtension($Exe)
@@ -225,7 +288,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $ComposeDir '.env'))) {
 }
 
 if (-not $PSCmdlet.ShouldProcess("Docker ($DockerMode)", 'Start and wait')) {
-    Write-Step "Dry run: would start Docker ($DockerMode), run docker compose up -d in '$ComposeDir', wait for 127.0.0.1:$HermesPort, start '$AppExe' and wait for $ApiBaseUrl/api/v1/health/ready."
+    Write-Step "Dry run: would start Docker ($DockerMode), run docker compose up -d in '$ComposeDir', wait for 127.0.0.1:$HermesPort, start or verify the PostgreSQL service '$PostgresService' (127.0.0.1:$PostgresPort), start '$AppExe', wait for $ApiBaseUrl/api/v1/health/ready and read its database check."
     if (-not (Test-Path -LiteralPath $AppExe)) {
         Write-Step "Dry run: '$AppExe' does not exist yet." 'WRN'
     }
@@ -236,8 +299,17 @@ if (-not (Start-Docker -TimeoutSeconds $DockerWaitSeconds)) { exit 1 }
 if (-not (Start-Hermes -Directory $ComposeDir)) { exit 1 }
 $hermesUp = Wait-HermesPort -Port $HermesPort -TimeoutSeconds $HermesWaitSeconds
 
+# PostgreSQL before the app: the bootstrap admin runs once at start and skips if the database is not Ready.
+if ($SkipPostgres) {
+    Write-Step 'PostgreSQL step skipped (-SkipPostgres).' 'WRN'
+}
+else {
+    [void] (Start-Postgres -Name $PostgresService -Port $PostgresPort -TimeoutSeconds $PostgresWaitSeconds)
+}
+
 if (-not (Start-Api -Exe $AppExe)) { exit 1 }
 $ready = Wait-ApiReady -BaseUrl $ApiBaseUrl -TimeoutSeconds $ApiWaitSeconds
+if ($ready) { Test-DatabaseCheck -BaseUrl $ApiBaseUrl }
 
 if ($hermesUp -and $ready) {
     Write-Step 'All up.'

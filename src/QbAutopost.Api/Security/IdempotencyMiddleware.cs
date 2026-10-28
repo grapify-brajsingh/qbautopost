@@ -10,7 +10,7 @@ namespace QbAutopost.Api.Security;
 /// FR-A-12: <c>Idempotency-Key</c> on the mutating routes. A caller whose connection dropped can send the same
 /// request again and get their first answer back, instead of posting the money twice.
 /// <para>
-/// It sits behind <see cref="ApiKeyMiddleware"/> — an unauthenticated request must not be able to claim a key, or to
+/// It sits behind <see cref="CallerMiddleware"/> — an unauthenticated request must not be able to claim a key, or to
 /// learn from a 409 which keys another caller has used.
 /// </para>
 /// <para>

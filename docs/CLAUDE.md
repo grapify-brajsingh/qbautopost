@@ -39,6 +39,6 @@ Test fixtures live in `tests/fixtures/`; the sample job is `samples/jobs/2026-08
 - Tests: xUnit, `Should_<behaviour>_When_<condition>` names, one behaviour per test, fixtures over inline blobs.
 
 ## Don't
-- Don't add NuGet packages beyond: PdfPig, ClosedXML, Serilog.AspNetCore, Serilog.Sinks.File, Tesseract (optional), Microsoft.AspNetCore.Mvc.Testing, Scalar.AspNetCore (approved 2026-09-23 for T-913, Q-46). Ask via the tracker first — and in an unattended run "ask" means **stop the task and record the question**, never add it anyway.
-- Don't introduce a database, a message broker, or background timers beyond the single `JobWorker`.
+- Don't add NuGet packages beyond: PdfPig, ClosedXML, Serilog.AspNetCore, Serilog.Sinks.File, Tesseract (optional), Microsoft.AspNetCore.Mvc.Testing, Scalar.AspNetCore (approved 2026-09-23 for T-913, Q-46), Npgsql.EntityFrameworkCore.PostgreSQL 8.0.11, Microsoft.EntityFrameworkCore.Design 8.0.33 (`PrivateAssets=all`), Microsoft.AspNetCore.Identity.EntityFrameworkCore 8.0.33, Microsoft.AspNetCore.Authentication.JwtBearer 8.0.33, Testcontainers.PostgreSql 4.16.0 (approved 2026-10-27 for M10, Q-80). Ask via the tracker first — and in an unattended run "ask" means **stop the task and record the question**, never add it anyway.
+- Don't introduce a database **other than the PostgreSQL store of ADR-0009**, a message broker, or background timers beyond the single `JobWorker`.
 - Don't call Hermes for CSV/XLSX statements; they are parsed by code.

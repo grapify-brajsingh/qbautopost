@@ -1,7 +1,7 @@
 # ADR-0002: JSON files and job folders as the only state store
 
 **Date**: 2026-09-15 (backfilled on 2026-09-16 from spec.md §2 and §13)
-**Status**: accepted
+**Status**: superseded in part by ADR-0009 (2026-10-27)
 **Deciders**: Braj (owner), Claude Code
 
 ## Context

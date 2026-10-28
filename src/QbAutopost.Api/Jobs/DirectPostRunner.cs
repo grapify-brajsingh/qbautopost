@@ -20,7 +20,7 @@ namespace QbAutopost.Api.Jobs;
 /// what was asked for rather than a silent gap.
 /// </para>
 /// </summary>
-public sealed class DirectPostRunner(
+public class DirectPostRunner(
     PipelineOptions options,
     DirectPlanner planner,
     ApiBatchStore batches,
@@ -29,7 +29,7 @@ public sealed class DirectPostRunner(
     ILogger<DirectPostRunner> log)
 {
     /// <summary>FR-A-6/FR-A-8 share this: the post is the plan plus the SDK call.</summary>
-    public DirectPlan Plan(DirectRequest request) => planner.Plan(
+    public virtual DirectPlan Plan(DirectRequest request) => planner.Plan(
         request,
         Rules.Load(options.RulesFile),
         new QbListsStore(options.QbListsFile).Load(),

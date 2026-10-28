@@ -1,0 +1,10 @@
+{
+  "reference": "n8n-unknown-kind-2026-08",
+  "controlTotal": 400.00,
+  "transactions": [
+    { "externalId": "row-1", "kind": "Check", "date": "2026-08-05", "amount": 100.00, "account": "Chase Checking 4521", "payee": "HOME DEPOT #6412", "memo": "HOME DEPOT #6412 PURCHASE", "last4": "4521" },
+    { "externalId": "row-2", "kind": "Check", "date": "2026-08-06", "amount": 100.00, "account": "Chase Checking 4521", "payee": "HOME DEPOT #6412", "memo": "HOME DEPOT #6412 PURCHASE", "last4": "4521" },
+    { "externalId": "row-3", "kind": "Check", "date": "2026-08-07", "amount": 100.00, "account": "Chase Checking 4521", "payee": "HOME DEPOT #6412", "memo": "HOME DEPOT #6412 PURCHASE", "last4": "4521" },
+    { "externalId": "row-4", "kind": "Cheque", "date": "2026-08-08", "amount": 100.00, "account": "Chase Checking 4521", "payee": "HOME DEPOT #6412", "memo": "HOME DEPOT #6412 PURCHASE", "last4": "4521" }
+  ]
+}

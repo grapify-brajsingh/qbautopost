@@ -173,7 +173,13 @@ It prints the key **once** and stores only the hash; it cannot be recovered, onl
 | `jobs:read` | `GET /api/v1/jobs`, `GET /api/v1/jobs/{id}`, `POST /api/v1/jobs/validate` |
 | `jobs:write` | `POST /api/v1/jobs` and `POST /api/v1/jobs/{id}/post` — also money |
 | `rules:write` | `POST /api/v1/rules/alias`, `POST /api/v1/rules/account` |
+| `requests:submit` | `POST /api/v1/saved-requests` only: save a payload for review. This is all the n8n workflow needs (§10.6) |
+| `requests:read` | `GET /api/v1/saved-requests...`: list and read saved requests, their versions, attempts and events |
+| `lists:read` | Read the QuickBooks lists the dashboard offers (`qb:read` also satisfies it) |
 | `admin` | Anything not mapped above. A new route is closed until someone decides otherwise |
+
+Editing, validating, posting and discarding a saved request, and managing users, are **people-only** scopes (a signed-in
+dashboard user, by role): no API key can hold them, `admin` included.
 
 A key that is not recognised is `401`; a recognised key without the scope is `403`, and the answer names the scope.
 Revoking a caller (`enabled: false`, or delete the entry) takes effect on their **next request** — the file is
@@ -484,3 +490,132 @@ Back it up with the ledger (§9). This is the record that answers "who posted th
 
 Back up `C:\qb-autopost\` (ledger, rules, lists, job index) together with the QuickBooks backup. Restoring an older
 `ledger.json` makes already-posted lines look new: always run a dry run and rely on the live duplicate check after a restore.
+The saved requests are **not** in that folder: they are in PostgreSQL and are backed up by §10.5.
+
+## 10. PostgreSQL for saved requests (T-1016)
+
+Saved requests, their history and the dashboard users live in PostgreSQL 16 **on this server**, bound to `127.0.0.1`
+only (spec `docs/saved-requests-postgres.md` §5.4). Everything else (ledger, rules, lists, job status, idempotency, audit)
+stays in files, so `POST /api/v1/quickbooks/transactions/validate-and-post` keeps working when the database is down.
+The step-by-step with expected output is `docs/testing/T-1016.server-checklist.md`. Every script takes `-WhatIf`.
+
+### 10.1 Roles and what they may do
+
+| Role | Used by | Rights |
+|---|---|---|
+| `postgres` | you, at install only | Superuser. Its password is the one you pass to the installer script and is **not stored**: keep it in your password manager |
+| `qbautopost_owner` | `apply-migrations.ps1`, `backup-postgres.ps1` | Owns the database; runs migrations; dumps |
+| `qbautopost_app` | the API | `SELECT`, `INSERT`, `UPDATE` on the mutable tables; **only** `SELECT`, `INSERT` on `saved_request_versions`, `saved_request_events` and `user_audit`; `SELECT` on the migration history; `DELETE` on `user_roles` only (changing a user's role replaces the row); no DDL, no `TRUNCATE` |
+
+The rights are `deploy\grants.sql`, re-applied after every migration. The two connection strings are **machine**
+environment variables written at install, never to a file: `QBAUTOPOST__Database__ConnectionString` (app role, read by
+the API) and `QBAUTOPOST_MIGRATION_CONNECTION` (owner role). `QBAUTOPOST__Auth__Jwt__SigningKey` is generated there too if
+it is absent (at least 32 bytes; if you rotate it, every signed-in user must sign in again). Processes started **before**
+the variables were set do not see them: restart the API and open a new PowerShell window.
+
+### 10.2 Install
+
+From an elevated PowerShell on the server, in the repository's `deploy` folder. Download the PostgreSQL 16 Windows x64
+installer from the vendor page and copy its SHA-256 from that page; the script refuses a file that does not match.
+
+```powershell
+.\deploy\install-postgres.ps1 -InstallerPath D:\setup\postgresql-16.x-windows-x64.exe -InstallerSha256 <sha256 from the vendor page> `
+    -SuperuserPassword (Read-Host -AsSecureString 'postgres superuser password') -BackupFolder D:\qb-backups -WhatIf
+# read the plan, then run it again without -WhatIf
+```
+
+It installs the service `postgresql-x64-16`, sets `listen_addresses = '127.0.0.1'`, creates the database and both roles,
+writes the machine variables, runs `apply-migrations.ps1` and registers the daily backup task (§10.5). It can be run
+again: roles, database and variables are kept; `-RotatePasswords` issues new role passwords (restart the API after).
+Use `-SkipInstall` if PostgreSQL 16 is already there.
+The vendor installer is never given a password on its command line (any local user could read it in the process list):
+the script writes its options to an option file (`--optionfile`) in a fresh folder under `%TEMP%` that only the account
+running the script can read, holding a throwaway superuser password that is replaced before the script ends, and deletes
+that folder as soon as the installer exits, even on failure.
+
+### 10.3 Migrate (every release that has a new migration)
+
+The app never migrates by itself. With the API **stopped** (the script refuses while it runs):
+
+```powershell
+.\deploy\apply-migrations.ps1
+```
+
+It runs `deploy\migrations.sql` (idempotent: migrations already applied are skipped) as the owner, re-applies
+`grants.sql`, and checks every migration in the script is recorded. A start of the API against an older schema still
+works: the database feature answers `503` `schema-out-of-date` and `GET /api/v1/health/ready` shows
+`database: { ok: false, reason: "schema-out-of-date" }` (`start-all.ps1` prints a warning), until you run it.
+Developers regenerate the script with
+`dotnet tool run dotnet-ef migrations script --idempotent -p src/QbAutopost.Data -s src/QbAutopost.Data -o deploy/migrations.sql`
+(a test fails if the checked-in file is stale); strip the byte order mark and use LF line ends, as `deploy\migrations.sql` does.
+
+### 10.4 Start order and the bootstrap admin
+
+`start-all.ps1` starts or verifies the PostgreSQL service and waits for `127.0.0.1:5432` **before** it starts the API.
+That order matters: the bootstrap admin is created **once, at start**, and only when the database is Ready; if it is not,
+the app logs a warning and skips it. **If the admin was not created because the database was down, restart the app once.**
+
+To create the first dashboard admin, set these for the auto-logon account (a temporary password of 12 characters or more),
+start the API, sign in, and change the password when asked (`mustChangePassword`):
+
+```powershell
+[Environment]::SetEnvironmentVariable('QBAUTOPOST__Auth__BootstrapAdmin__Email', '<admin email>', 'User')
+[Environment]::SetEnvironmentVariable('QBAUTOPOST__Auth__BootstrapAdmin__Password', '<temporary password>', 'User')
+```
+
+It does nothing once any user exists (it warns and ignores the variables). Afterwards **delete the password variable**:
+`[Environment]::SetEnvironmentVariable('QBAUTOPOST__Auth__BootstrapAdmin__Password', $null, 'User')`.
+
+### 10.5 Back up and restore
+
+`install-postgres.ps1` registers the Task Scheduler task `QbAutopostPostgresBackup` (daily 02:00, as `SYSTEM`, no password
+stored; not an app timer). It runs `deploy\backup-postgres.ps1`: `pg_dump -Fc` to
+`<QuickBooks:BackupFolder>\postgres\qbautopost-yyyyMMdd.dump`, checked with `pg_restore --list` before it is renamed into
+place, the newest 30 kept. A backup folder on a network share needs another account: re-register the task by hand.
+`scripts\qb-server-check.ps1 -Step postgres` checks the service is running, the database answers
+`GET /api/v1/health/database`, and the newest dump is younger than 36 hours.
+
+Restore (the API stopped; this **replaces** the database content with the dump's):
+
+```powershell
+. .\deploy\pg-common.ps1
+$owner = ConvertFrom-NpgsqlConnection $env:QBAUTOPOST_MIGRATION_CONNECTION
+Invoke-Pg -Exe 'C:\Program Files\PostgreSQL\16\bin\pg_restore.exe' -Connection $owner `
+    -Arguments @('--clean', '--if-exists', '--no-owner', '-d', $owner.Database, 'D:\qb-backups\postgres\qbautopost-20261028.dump')
+.\deploy\apply-migrations.ps1      # newer migrations, and the grants again
+.\deploy\start-all.ps1
+```
+
+A restore can bring back a request as `pending` that was posted to QuickBooks after the dump. Posting it again is stopped
+by the live duplicate check (G4) and the duplicate flag on the request; an admin resolves any request left `posting`
+or `unknown` from the dashboard. Test a restore into a spare database before you need one.
+
+### 10.6 Switch n8n to saved requests (tracker Q-81)
+
+The old workflow calls `POST /api/v1/quickbooks/transactions/validate-and-post` with a key that holds `qb:post`. The new
+one only **saves**; a person reviews and posts from the dashboard. Do it in this order, so the workflow is never without a route:
+
+1. **Issue an n8n key with `requests:submit`** (add `requests:read` only if the workflow should read records back):
+   `.\scripts\new-api-client.ps1 -Id n8n-requests -Name 'n8n mailbox' -Scopes requests:submit -ClientsFile C:\qb-autopost\clients.json`.
+   Copy the key once into n8n's credential store.
+2. **Change the n8n HTTP Request node**: URL from `/api/v1/quickbooks/transactions/validate-and-post` to
+   `/api/v1/saved-requests`, the new key in `X-Api-Key`, and add the header `Idempotency-Key` (for example the email's
+   Message-ID), so a retried delivery replays the same record instead of saving a second one. Send one test mail: the
+   answer is `201` with a `Location` header, and a replay of the same mail is `200`.
+3. **Withdraw the old key's `qb:post`** once step 2 is verified: edit the old client in `clients.json` and remove `qb:post`
+   (and `jobs:write`) from its `scopes`, or set `"enabled": false`. It takes effect on the next request. A stale workflow
+   then gets `403` naming the scope, and nothing is posted by it.
+
+The shared `Api:ApiKey` still carries every scope while `Api:AllowLegacyKey` is true (§3.4): turn that off once every
+caller has its own key.
+
+### 10.7 Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| Saved-request routes `503` `database-unavailable` / `not-configured` | The service is stopped, or `QBAUTOPOST__Database__ConnectionString` is not visible to the API (start the API from a new session). `GET /api/v1/health/database` (scope `health:read`) says which |
+| `503` `schema-out-of-date` | Stop the API, run `apply-migrations.ps1`, start it (§10.3) |
+| No admin can sign in after a first start | The database was down at start: restart the app once (§10.4) |
+| `apply-migrations.ps1` says the API is running | Stop the API first; it never migrates under a live app |
+| `permission denied for table ...` in the log | `grants.sql` was not re-applied after a migration: run `apply-migrations.ps1` again |
+| Dump too old in the server check | Run the task (`Start-ScheduledTask -TaskName QbAutopostPostgresBackup`) and read `C:\qb-autopost\logs\backup-postgres-*.log` |

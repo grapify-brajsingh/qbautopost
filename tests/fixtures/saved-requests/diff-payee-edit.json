@@ -1,0 +1,22 @@
+{
+  "before": {
+    "reference": "2026-08 Tropicana",
+    "controlTotal": 400.50,
+    "transactions": [
+      { "externalId": "a1", "kind": "Check", "date": "2026-08-01", "amount": 100.00, "account": "Checking", "payee": "ACME" },
+      { "externalId": "a2", "kind": "Check", "date": "2026-08-02", "amount": 100.25, "account": "Checking", "payee": "Bolt" },
+      { "externalId": "a3", "kind": "Check", "date": "2026-08-03", "amount": 100.25, "account": "Checking", "payee": "Cove" },
+      { "externalId": "a4", "kind": "Check", "date": "2026-08-04", "amount": 100.00, "account": "Checking", "payee": "ABC PLUMBING" }
+    ]
+  },
+  "after": {
+    "transactions": [
+      { "externalId": "a1", "kind": "Check", "date": "2026-08-01", "amount": 100, "account": "Checking", "payee": "ACME" },
+      { "externalId": "a2", "kind": "Check", "date": "2026-08-02", "amount": 100.25, "account": "Checking", "payee": "Bolt" },
+      { "externalId": "a3", "kind": "Check", "date": "2026-08-03", "amount": 100.25, "account": "Checking", "payee": "Cove" },
+      { "externalId": "a4", "kind": "Check", "date": "2026-08-04", "amount": 100.0, "account": "Checking", "payee": "ABC Plumbing LLC" }
+    ],
+    "controlTotal": 400.5,
+    "reference": "2026-08 Tropicana"
+  }
+}

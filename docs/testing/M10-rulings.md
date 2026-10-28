@@ -1,0 +1,128 @@
+# M10 — controller rulings and deferred findings
+
+Decisions taken during the subagent-driven build of milestone M10 (ticket #2), copied from the build ledger. Each ruling says what was decided, why, and what it costs if wrong. The `minor (deferred)` lines are review findings judged not to block merge.
+
+## Rulings
+
+- Ruling R1: TryClaimAsync gains `bool acknowledgeDuplicate` (after `actor`); when true the store sets duplicate_acknowledged_by/utc = actor/now in the claim transaction — spec §9 requires storing who confirmed, and a separate write would not be atomic with the claim — cost if wrong: one extra parameter to remove.
+- Ruling R2: Identity registration (AddIdentityCore<AppUser>, roles, EF stores, password+lockout options) and AuthSettings move into T-1009; T-1010 only adds TokenService/RefreshTokenService/auth routes. When the database gate is not Ready, a Bearer request answers 503 before UserManager is resolved — T-1009's UserGate cannot exist without Identity — cost if wrong: files land one task earlier.
+- Ruling R3: SyncPostRunner.RunAsync gains an optional `Action? onSending = null` invoked as the first statement inside the exclusive work delegate (before Begin); SavedRequestPoster uses it to tell ErrorBeforeSend from ErrorAfterSend — the plan's wrapper is impossible without touching the runner; existing SyncPost tests must stay green — cost if wrong: one optional parameter.
+- Ruling R4: T-1007's reflection test is renamed `Should_ExposeNoVersionMutation_When_InspectingStoreContract` — the name must say what it asserts — cost if wrong: none.
+- Ruling R5: T-1003 keeps the raw token for a money value that Money.Format would round (more than 2 significant decimals) — rounding would let two different amounts hash equal and hide a real edit — cost if wrong: such payloads compare by raw token
+- Ruling R6: row fingerprints are persisted, not recomputed — NewSavedRequest and NewVersion gain `IReadOnlySet<string> RowFingerprints` (computed by intake via DuplicateDetector.RowFingerprints), the store keeps the latest version's set and returns it in DuplicateDigest; T-1006 adds column `row_fingerprints text[]` to saved_requests — recomputing over every candidate on each save re-parses 90 days of payloads and depends on the date the recompute runs — cost if wrong: one column. Removes SPEC-GAP T-1005 (close its tracker row as answered by this ruling).
+- Ruling R7: `Page<T>` is named `PagedResult<T>` (CS0542 forbids a member named like its type) — cost if wrong: none.
+- Ruling R8: refresh_tokens.token_sha256 gets a unique index in T-1010's migration (lookup key); post_attempts/refresh_tokens keep no row_version (each row is completed/revoked once via conditional update) — cost if wrong: one migration
+- Ruling R9: users keep Identity's concurrency_stamp as their concurrency token (T-1011 ETag) instead of row_version — Identity already manages it — cost if wrong: one column
+- Ruling R10: T-1010 makes user_audit.user_id nullable (a failed login for an unknown email is audited with null user and the email in detail) — spec §11.2 requires every failure recorded — cost if wrong: one migration
+- Ruling R11: T-1007 adds a 2-minute timeout to PostgresFixture container start (timeout → skip) — a hung daemon must not hang CI discovery — cost if wrong: none
+- Ruling R12: EF TryClaimAsync without expectedRowVersion retries (≤3) when the conditional update missed but the re-read shows pending again — a caller that sent no version must not get Stale; a re-claim after a finished non-posting attempt is a fresh press, and posted/unknown states still refuse — cost if wrong: a no-If-Match caller could start a second attempt after a busy one
+- Ruling R13: RequireDatabase filter, when gate is not Ready and the last check is older than 10 s, awaits gate.RefreshAsync before deciding (request-driven, throttled, no timer) — otherwise n8n's retries get 503 forever after an outage ends — cost if wrong: ≤1 schema check per 10 s during an outage
+- Ruling R14: the real Program wiring (AddQbAutopostData + schema check + recovery) gets a live-host test in T-1010 via ApiFactory.WithPostgres — T-1008's factory replaces store and gate — cost if wrong: wiring bug found later
+- Ruling R15: accept T-1009's 'signed-in' pseudo-scope (no API key satisfies it) and 'a|b' alternative-scope syntax; login/refresh brake + per-email limit is owned by T-1010 — matches spec §11.2/§11.3 — cost if wrong: scope-string refactor
+- Ruling R16: expired-but-validly-signed access tokens do not feed the FailedAuth brake — dashboard tokens expire every 15 min and would lock out the office address — cost if wrong: an attacker replaying an old real token is not braked (they cannot mint new ones)
+- Ruling R17: access tokens carry typ "at+jwt" and validation requires it — stops any future JWT on the same key being accepted as an access token — cost if wrong: none
+- Ruling R18: Caller.ForClient strips people-only and signed-in scopes from key scopes — defence in depth for code reading caller.Scopes directly — cost if wrong: none
+- Ruling R19: every T-1011 path that changes a user's security stamp (role change, disable, password reset) must also RevokeAllAsync refresh tokens — refresh tokens are not bound to the stamp — carry into T-1011 dispatch — cost if wrong: a demoted/disabled user could mint new tokens until refresh expiry
+- Ruling R20: logout revokes the token in the presented cookie regardless of the bearer's identity, and nothing else — possessing the cookie already grants its use, so revoking it cannot harm its owner — cost if wrong: one-line revert
+- Ruling R21: UserView drops the always-0 RowVersion field; the ETag (ConcurrencyStamp) is the only concurrency token for users — a field that is always 0 misleads the dashboard — cost if wrong: re-add a field
+- Ruling R22: bootstrap admin runs once at start and skips with a warning when the DB is not Ready (no retry); T-1016 runbook/start-all must start PostgreSQL before the app and say a restart creates the admin — cost if wrong: an operator restarts once
+- Ruling R23: accept T-1012 shape calls — views take ActorNames/readErrors (batched names), {items:[...]} newest-first for versions/attempts/events, unknown query names ignored but unknown values 400, Idempotency-Key ≤128 chars, IOException/JsonException from Plan → snapshot unavailable — spec silent; each posts less or is cosmetic — cost if wrong: dashboard brief tweak
+- Ruling R24: SavedRequestValidator treats ANY non-cancellation exception from Plan as snapshot `unavailable` (fixed reason text, exception type logged, no server path returned) so a save never 500s and loses the payload — spec anti-goal "silent loss" — carried into T-1013 dispatch — cost if wrong: a planner bug shows as unavailable instead of 500
+- Ruling R25: accept DirectPostRunner unsealed + virtual Plan as the test seam for R24; If-Match optional on discard/restore (honoured when sent) — spec silent; posts less either way — cost if wrong: a seam to remove
+- Ruling R26: a Completed failed ending whose held rows carry quickbooks-busy (the write was sent and timed out — DirectPostRunner "may or may not have been applied") locks as unknown, like quickbooks-no-response — first anti-goal (no double post) — cost if wrong: more admin resolves
+- Ruling R27: post-by-id adds `savedRequestStatus` (not `status`, which already carries the RFC 7807 number / post status) — keeps §7.2 "body reads unchanged" — dashboard brief must use savedRequestStatus — cost if wrong: one constant
+- Ruling R28: recording back-off is 3 tries with waits 0.5 s and 1 s (the brief's third wait would follow the last try) — cost if wrong: none
+- Ruling R29: resolve's optional If-Match is checked at the endpoint (store ResolveAsync has no row version); the status rule stays atomic in the store — admin-only, low-contention path — cost if wrong: add a parameter to the store
+- Ruling R30: GRANT DELETE ON user_roles to the app role is allowed — spec §5.4 forbids DELETE only on the append-only tables (the plan's 'no DELETE anywhere' was stricter than the spec); role replacement needs it — Q-92 answered by this ruling — cost if wrong: switch ReplaceRoleAsync to UPDATE
+- Ruling R31: invert the failed-ending rule — a Completed failed ending returns to pending ONLY when every held row's reason is in an explicit "proven nothing sent" set (pre-send gates, and QuickBooks statusCode ≠ 0 rejections); anything else locks as unknown — first anti-goal — cost if wrong: more admin resolves
+- Ruling R32: fix the pre-existing ScopeFor case-sensitivity in this branch (ApiRoutes is already heavily modified here and the hole lets a qb:read key post money) — cost if wrong: none
+- Ruling R33: PostgresException (server-side error with SqlState, not a connection failure) is not a database outage; unstorable payloads are stored with the offending data neutralised? NO — a clear 400 `payload-not-storable` naming the reason, logged with SqlState, so n8n's error branch fires; control_total out of numeric(18,2) range is stored as NULL in the denormalised column and flagged needs-attention — never lose silently — cost if wrong: n8n gets 400 for \u0000 payloads instead of storage
+
+## Deferred and parked findings
+
+- Task 1: review 1 — Important: Decisions rows detached; ⚠️ confirmed gap: ADR-0010 says host refuses to start without signing key (spec/plan: 503 auth-not-configured, API keys keep working). Fix round 1 dispatched (resume).
+- Task 1: minor (deferred): spec-api-v1 §1 amended sentence not wrapped at 120 cols
+- Task 1: minor (deferred): ADR-0002 body has no pointer to ADR-0009
+- Task 1: minor (deferred): Q-80 conservative-choice cell wording stale ("T-1002 stops if refused")
+- Task 1: minor (deferred): ADR-0010:56 cites "spec §3" for 503 auth-not-configured; the exact contract lives in plan T-1009
+- Task 2: minor (deferred): add non-terminal JobStatus test case for the Completed fallback arm
+- Task 2: minor (deferred): SavedRequestStatus comments say "serialised as kebab-case" before any converter exists (T-1012 must add kebab-case enum serialisation)
+- Task 2: minor (deferred): AttemptOutcomes undefined PostEndingKind silently maps to Unknown; consider throw/test
+- Task 3: minor (deferred): Canonicalize throws NRE on a top-level JSON null (intake rejects non-objects first, so unreachable today); add guard + test
+- Task 3: minor (deferred): no test for 184.300 == 184.30 (code handles it)
+- Task 3: minor (deferred): reordering externalId-keyed rows changes the hash but yields an empty change list (new version with no visible diff)
+- Task 3: minor (deferred): change list cannot distinguish JSON null from absent in Old/New
+- Task 3: minor (deferred): TDD RED evidence not captured
+- Task 4: minor (deferred): reader reports only the first STJ error; add comment
+- Task 4: minor (deferred): reader test reads samples via AppContext.BaseDirectory (relies on csproj copy rule)
+- Task 4: minor (deferred): unreadable-kind.json is a 1517-line copy of a real statement (real-looking memos/last4) — shrink to 4 rows
+- Task 4: minor (deferred): empty-reference theory assertion near-vacuous for null/"" cases
+- Task 4: minor (deferred): PRE-EXISTING — DirectRequestReader dereferences a null row (validate-and-post / DirectPlanner with {"transactions":[null]} likely 500); final review to triage
+- Task 5: ⚠️ append-only "a test asserts that" (spec §5.2) — assigned to T-1007 (R4 test), confirmed not a T-1005 gap
+- Task 5: minor (deferred): several contract tests assert multiple behaviours / Unknown theory also covers Partial
+- Task 5: minor (deferred): controlTotal null sort order unpinned (LINQ nulls-first vs PG nulls-last) — T-1007 must pin
+- Task 5: minor (deferred): q search with literal % or _ needs escaping in EF store; add contract case
+- Task 5: minor (deferred): contract lacks concurrent same-key CreateAsync (T-1007 extra covers), date/source filters, no-event-on-Stale assertions
+- Task 5: minor (deferred): CompleteAttemptAsync accepts impossible NextStatus (Posting/Discarded)
+- Task 5: minor (deferred): fake View returns stored ValidationSnapshot instance (doc claims deep copy)
+- Task 5: minor (deferred): tracker T-1005 row says 34 tests (now 35); session-log line 36 contradicts itself about validation bumping row_version
+- Task 6: ⚠️ CI skip path unexercised — controller to check first windows-latest CI run after push
+- Task 6: minor (deferred): SchemaState OperationCanceledException filter should be `when (!ct.IsCancellationRequested)`
+- Task 6: minor (deferred): no metadata tests pinning §5.2 types/indexes; FromText unknown-text path untested
+- Task 6: minor (deferred): duplicate_of_id / replaced_by_id have no FK
+- Task 6: minor (deferred): tests use Npgsql transitively
+- Task 7: minor (deferred): AlreadyPosting may carry AttemptId null if winner completes between the two re-reads
+- Task 7: minor (deferred): R12 implemented as 3 total tries (2 retries); retry path untested — accepted as the ruling's meaning
+- Task 7: minor (deferred): reflection test lives in IAsyncLifetime class so still migrates a DB when Docker is up
+- Task 7: minor (deferred): EfSavedRequestStore.cs is 700 lines — split search/jsonpath and mapping helpers later
+- Task 7: minor (deferred): list summaries deserialize full validation snapshot; jsonb_path_exists search unindexed
+- Task 7: minor (deferred): PageSize has no upper cap in store — T-1012 must cap at MaxListPageSize
+- Task 8: ⚠️ hosted-service ordering (recovery before Kestrel) — resolved by fix design (gate not Ready until recovered); live-host proof in T-1010 (R14)
+- Task 8: minor (deferred): startup refresh blocks host start for Npgsql connect timeout when DB down; consider short startup timeout
+- Task 8: minor (deferred): probe-route test does not assert problem type database-unavailable
+- Task 8: minor (deferred): SecretWarnings detects only "Password=" (not Pwd= / "Password =")
+- Task 8: minor (deferred): Should_NeverIncludeConnectionString near-vacuous
+- Task 8: minor (deferred): schemaCurrent derived from IsReady; store status.Current instead
+- Task 8: minor (deferred): OperationCanceledException from recovery leaves gate state unchanged (safe)
+- Task 9: ⚠️ GET /quickbooks/lists opens no QB session (viewers) — controller to verify
+- Task 9: minor (deferred): revoked-but-signed token forces a fresh DB read every request; consider short negative cache
+- Task 9: minor (deferred → T-1011 dispatch): role changes must rotate the security stamp so they apply at once
+- Task 9: minor (deferred): OpenApiDriftTests BearerScheme comment stale; csproj T-920 Content reflow churn
+- Task 9: minor (deferred): "Authorization: Bearer" with empty token not treated as a Bearer attempt (doc claims otherwise)
+- Task 9: ⚠️ resolved — GET /quickbooks/lists only loads qb-lists.json (QuickBooksEndpoints.cs:402), no QB session
+- Task 10: ⚠️ Docker-stopped skip run not performed — controller to verify once before finish (CI windows leg or manual)
+- Task 10: minor (deferred): residual timing diff (extra UPDATE on real-account wrong password)
+- Task 10: minor (deferred): AuthBrake email keys unbounded in memory; prune stale windows
+- Task 10: minor (deferred): refresh does not check lockout; refresh family slides forever (no absolute cap)
+- Task 10: minor (deferred): AuthEndpoints.cs ~400 lines; split helpers
+- Task 10: minor (deferred): LockoutCounter reads lock state by separate SELECT (duplicate locked-out audit row under race); use RETURNING
+- Task 10: minor (deferred): Reserve increments both keys even when one is blocked; Release may decrement a rolled-over window
+- Task 10: minor (deferred): correct-password login after concurrent lock can succeed on retry (no lockout re-check)
+- Task 10: minor (deferred): PersistAsync retry/409 branches untested; Capped may split surrogate pair
+- Task 10: minor (deferred): ChangePasswordAsync concurrency failure labelled invalid-password; brake 429 writes one audit row per request (flood volume)
+- Task 11: minor (deferred): two sources for min password length (settings vs IdentityOptions); misleading `!` before null check; audit test display names confusing; UserEndpoints.cs 646 lines
+- Task 11: minor (deferred): refresh revocation/audit after commit (crash gap leaves refresh tokens alive) — accepted, refresh rejects disabled users
+- Task 11: minor (deferred): RevokeAllAsync after commit uses request token — pass CancellationToken.None so revocation always runs
+- Task 11: minor (deferred): static Generations dictionary never pruned (bounded by users); unlock/reset don't re-check caller under lock
+- Task 12: ⚠️ (b) savedRequestId log context → T-1015 (planned); (c) needsAttention derivation covered by store contract
+- Task 12: minor (deferred): invalid-UTF-8 400 and chunked 413 untested; unbindable save test doesn't assert stored readErrors
+- Task 12: minor (deferred): openapi save body refs SyncPostRequest though any object is accepted
+- Task 12: minor (deferred): body parsed twice; replay computes validation before discovering replay; ClientNames rereads clients.json per response; service-locator IUserDirectory
+- Task 12: minor (deferred): saved-request fixtures rely on wall clock + MaxAgeDays 3000
+- Task 13: ⚠️ keys refused on edit routes — covered by CallerMatrixTests (PUT/post/resolve rows × n8n/legacy keys) and PeopleOnly; restore shares requests:admin
+- Task 13: minor (deferred): R24 log assertion missing; R24 only tested on save path
+- Task 13: minor (deferred): no API-key refusal test in Edit/Lifecycle tests; edit 413 untested; note length uncapped
+- Task 13: minor (deferred): discard validates body before id; 500 limit counts UTF-16 units
+- Task 13: minor (deferred): Revalidate test uses Task.Delay(30) on real clock (flake risk)
+- Task 13: minor (deferred): SaveApiTests.cs line-ending churn (full-file rewrite); using order
+- Task 14: minor (deferred): JobQueue-held busy 409 not an equivalence scenario; fixtures duplicate identical blobs
+- Task 14: FLAKE observed once: ReadApiTests.Should_ReturnDetailWithETagAndAllowedActions_When_EditorGets (T-1012) failed in one full run, passed 7 times since — final review to investigate
+- Task 14: minor (deferred): EndingOf evaluated outside guard; unreadable-refusal fallback answers post-outcome-unknown
+- Task 14: minor (deferred, final review): attempt error for completed posts = post.Result?.Error (engine text, same as validate-and-post returns)
+- Task 15: minor (deferred): literal "postId" vs PostIdField constant; ledger read catch narrow (relies on ApiBatchStore.Load); postId pushed only after RunAsync; middleware closing lines lack savedRequestId; no If-Match happy-path resolve test; LedgerBatch.status no enum
+- Task 16: ⚠️ /health/ready exposes checks[].name=='database' (T-1008 readiness) and env var binding — final review to confirm
+- Task 16: minor (deferred): PostgresTheoryAttribute lives in MigrationScriptTests.cs; ~22 DBs per theory run; machine env vars readable by local accounts (note in runbook); start-all strict-mode missing `reason` message
+- Task 16: minor (deferred): -BackupFolder "C:\" trims to "C:" (drive-relative) — guard drive roots
+- Task 16: minor (deferred): option-file prefix/datadir unquoted; untested against real EDB installer (checklist B1)
+- Final review: parked — refresh-token concurrent-tab rotation triggers family revoke (logs user out) — Ruling: real but rare; needs a grace-window design; deferred to dashboard work — cost: occasional forced re-login
+- Final: parked — lone-surrogate payload → 500 not stored; U+0000 in notes → 500; Bearer-lookup PG error message logged by generic handler; openapi lacks 400 payload-not-storable / 500 database-error; SqlState class 42 no longer triggers schema refresh; UserEndpoints commit uses caller token — Ruling: real, minor, none posts or loses silently; follow-up ticket
