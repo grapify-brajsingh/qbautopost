@@ -1,3 +1,4 @@
+using QbAutopost.Core.Abstractions;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
@@ -86,14 +87,17 @@ public static class AuditEventEndpoints
     // ---- the CSV ----------------------------------------------------------------------------------------------------
 
     private static async Task<IResult> CsvAsync(
-        HttpContext http, ISavedRequestAuditStore audit, ISavedRequestStore requests, ActorDirectory actors, CancellationToken ct)
+        HttpContext http, ISavedRequestAuditStore audit, ISavedRequestStore requests, ActorDirectory actors, IClock clock, CancellationToken ct)
     {
         if (!TryParse(http, paged: false, out var query, out var error))
         {
             return BadRequest(error!);
         }
 
-        var count = await audit.AuditEventCountAsync(query!, ct);
+        // Bound the export to its start time so rows written meanwhile cannot be duplicated or push it past the cap.
+        query = query! with { To = query.To ?? clock.UtcNow };
+
+        var count = await audit.AuditEventCountAsync(query, ct);
         if (count > AuditCsv.MaxRows)
         {
             return Results.Problem(
@@ -111,7 +115,7 @@ public static class AuditEventEndpoints
         var infos = new Dictionary<long, AuditRequestView?>();
         await AuditCsv.WriteAsync(
             http.Response.Body,
-            ChunksAsync(audit, requests, actors, query!, names, infos, ct),
+            ChunksAsync(audit, requests, actors, query, names, infos, ct),
             ct,
             e =>
             {
@@ -131,12 +135,18 @@ public static class AuditEventEndpoints
         Dictionary<string, string> names, Dictionary<long, AuditRequestView?> infos,
         [EnumeratorCancellation] CancellationToken ct)
     {
+        var written = 0;
         for (var page = 1; ; page++)
         {
             var chunk = await audit.AuditEventsAsync(query with { Page = page, PageSize = CsvChunk }, ct);
             var resolved = await actors.ResolveAsync(chunk.Items.Select(e => (string?)e.ActorId), ct);
             foreach (var e in chunk.Items)
             {
+                if (written++ >= AuditCsv.MaxRows)
+                {
+                    yield break;
+                }
+
                 names[e.ActorId] = resolved.Of(e.ActorId).Name;
                 if (e.RequestId is { } id && !infos.ContainsKey(id))
                 {

@@ -49,7 +49,8 @@ public sealed class ListV2PerformanceTests(PostgresFixture postgres, ITestOutput
         }
     }
 
-    [PostgresFact]
+    // Skipped unless QBAUTOPOST_PERF=1 (a timing test does not belong in the default run).
+    [PerfFact]
     public async Task Should_ListPageUnder200ms_When_1000Requests()
     {
         var store = _services!.GetRequiredService<ISavedRequestStore>();

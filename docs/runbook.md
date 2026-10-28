@@ -695,6 +695,12 @@ checklist does (Q-96), and the setting stays unchanged until then. A post cut by
 Same order as section 10.6 (key with `requests:submit`, verify, then withdraw `qb:post`). The differences:
 
 - URL: `POST /api/v2/saved-requests`.
-- The body adds `email`: `{ "subject": ..., "receivedUtc": ..., "from": ..., "messageId": ... }` and `pushId`, a new
-  UUID for every push.
+- The body adds `email`: `{ "subject": ..., "receivedUtc": ..., "from": ..., "messageId": ... }` and `pushId`, which must be
+  **stable per email across retries**: derive it deterministically from the Message-ID (for example a UUID v5 of the
+  Message-ID) or store it on the first run. A fresh `pushId` with the same `Idempotency-Key` makes the body differ and
+  answers `409 idempotency-key-reused`.
 - Keep the `Idempotency-Key` header equal to the email's Message-ID.
+- A batch evidence `request.json` does not show `post: false` rows (the engine's set is internal); `result.json` lists
+  them under `skipped` with reason `not-to-post`.
+- Testing note: the 1000-request list performance test (`ListV2PerformanceTests`, trait `Perf`) is skipped unless
+  `QBAUTOPOST_PERF=1` is set.

@@ -57,7 +57,7 @@ public static class PayloadCanonicalizer
         }
     }
 
-    // V2 (spec §7): top-level email and pushId are not part of the request; a row's post is dropped only when it is
+    // V2 (spec section 7): top-level email and pushId are not part of the request; a row's post is dropped only when it is
     // literally true (a direct child of a transactions row, never a nested post elsewhere).
     private static bool IsDroppedByV2(string path, JsonProperty p) =>
         (path == "$" && p.Name is "email" or "pushId")

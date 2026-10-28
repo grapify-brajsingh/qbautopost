@@ -174,6 +174,21 @@ public sealed class V2AuditEventsTests : IDisposable
         Assert.Equal(expected, AuditCsv.Escape(value));
 
     [Fact]
+    public async Task Should_BoundCsvToStartTime_When_RowsArriveDuringExport()
+    {
+        SeedUserEvent("user-1", "login");
+        SeedUserEvent("user-1", "login-failed", minutesAgo: -60); // stamped after the export starts
+
+        using var admin = _host.User(DashboardRoles.Admin);
+        using var response = await admin.GetAsync(Csv);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var text = await response.Content.ReadAsStringAsync();
+        Assert.Contains(",user-signed-in,", text);
+        Assert.DoesNotContain(",user-sign-in-failed,", text);
+    }
+
+    [Fact]
     public async Task Should_WriteBomAndHeader_When_CsvRequested()
     {
         var id = await SaveAsync("with-email.json");

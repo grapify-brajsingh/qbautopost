@@ -571,7 +571,7 @@ docs/  runbook.md, tracker.md, testing/T-1117.server-checklist.md
   - `Should_ReturnEmail_When_SavedWithEmail`
   - `Should_SaveWithoutFlag_When_EmailMalformed`
   - `Should_ReturnPushId_When_Valid`
-  - `Should_Replay_When_PushIdAndBodyRepeat` (200, `Idempotent-Replayed: true`)
+  - `Should_Replay_When_PushIdAndBodyRepeat` (200, `Idempotency-Replayed: true`)
   - `Should_Answer409PushIdReused_When_BodyDiffers` (problem `type` `push-id-reused`, with `savedRequestId` and
     `publicRef`)
   - `Should_FlagButStayPostable_When_PushIdMalformed`
