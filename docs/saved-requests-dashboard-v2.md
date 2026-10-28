@@ -517,6 +517,7 @@ and a test asserts it.
 | R-1.5 | Received filter | It uses `coalesce(received, created)`, like the sort. | Consistency |
 | R-2 | `GET /api/v1/nope` → JSON 404 | Unchanged v1 behaviour: `401` without credentials, `403` for a non-admin, and a JSON `404` only for an admin. Never HTML. The same applies under `/api/v2`. | O-1 |
 | R-2 | Every non-`/api/` GET is the dashboard | Except the legacy flat prefixes (`/health`, `/jobs`, `/batches`, `/quickbooks`, `/qb`, `/rules`), which stay API. | O-1 |
+| R-10.2 | `to` is inclusive | `to` is **exclusive** for instants (date-only `To` stays inclusive of the whole day) | No double count at period boundaries; see `docs/dashboard-api-m12.md` §3.2 and §11 (M12) |
 
 ## 15. OpenAPI
 
