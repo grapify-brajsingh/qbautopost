@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using QbAutopost.Api.Database;
@@ -165,7 +166,8 @@ public sealed class DatabaseGateTests
         Assert.Equal(1, checks);
     }
 
-    private static async Task<(HttpClient Client, IHost Host, int[] Hits)> ProbeAsync(DatabaseGate gate, Func<Task>? inside = null)
+    private static async Task<(HttpClient Client, IHost Host, int[] Hits)> ProbeAsync(
+        DatabaseGate gate, Func<Task>? inside = null, ListLogger<DatabaseGate>? log = null)
     {
         var hits = new int[1];
         var host = await new HostBuilder().ConfigureWebHost(web => web
@@ -175,6 +177,10 @@ public sealed class DatabaseGateTests
                 s.AddRouting();
                 s.AddProblemDetails();
                 s.AddSingleton(gate);
+                if (log is not null)
+                {
+                    s.AddSingleton<ILogger<DatabaseGate>>(log);
+                }
             })
             .Configure(app =>
             {
@@ -286,5 +292,68 @@ public sealed class DatabaseGateTests
         await client.GetAsync("/probe");
 
         Assert.Equal(0, checks);
+    }
+
+    /// <summary>A PostgreSQL error with the given SqlState; its message text stands for data the server echoed back.</summary>
+    private static PostgresException Postgres(string sqlState) =>
+        new("value 1e16 from SECRET-PAYLOAD overflows", "ERROR", "ERROR", sqlState);
+
+    /// <summary>R33: only connection, timeout and transient failures are outages; a refused statement is not.</summary>
+    [Theory]
+    [InlineData("22003", false)] // numeric_value_out_of_range
+    [InlineData("22P05", false)] // untranslatable_character (U+0000 in jsonb)
+    [InlineData("23505", false)] // unique_violation
+    [InlineData("57P01", true)]  // admin_shutdown
+    [InlineData("08006", true)]  // connection_failure
+    [InlineData("40001", true)]  // serialization_failure
+    public void Should_CountOnlyTransientPostgresErrors_When_DecidingIfTheDatabaseFailed(string sqlState, bool outage) =>
+        Assert.Equal(outage, DatabaseGate.IsDatabaseFailure(new InvalidOperationException("wrapped", Postgres(sqlState))));
+
+    [Fact]
+    public void Should_CountAConnectionFailure_When_TheNpgsqlExceptionIsNotFromTheServer() =>
+        Assert.True(DatabaseGate.IsDatabaseFailure(new NpgsqlException("connection refused")));
+
+    /// <summary>R33: a statement the database refuses is answered 500, the gate stays ready, and only the SqlState is logged.</summary>
+    [Fact]
+    public async Task Should_NotRecheckAndAnswer500_When_AStoreCallThrowsANonTransientPostgresException()
+    {
+        var checks = 0;
+        var gate = new DatabaseGate(
+            _ =>
+            {
+                checks++;
+                return Task.FromResult(Down);
+            },
+            true,
+            NullLogger<DatabaseGate>.Instance);
+        gate.Set(DatabaseState.Ready);
+        var log = new ListLogger<DatabaseGate>();
+        var (client, host, _) = await ProbeAsync(
+            gate, () => throw new InvalidOperationException("save failed", Postgres("22003")), log);
+        using var hostLifetime = host;
+
+        using var response = await client.GetAsync("/probe");
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal("database-error", (await response.ReadProblemAsync()).GetProperty("type").GetString());
+        Assert.Equal(0, checks);
+        Assert.Equal(DatabaseState.Ready, gate.State);
+        Assert.Contains("22003", log.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("SECRET-PAYLOAD", log.Text, StringComparison.Ordinal);
+        Assert.All(log.Entries, e => Assert.Null(e.Exception));
+    }
+
+    [Fact]
+    public async Task Should_RecheckAndAnswer503_When_AStoreCallThrowsATransientPostgresException()
+    {
+        var gate = GateFor(Down);
+        gate.Set(DatabaseState.Ready);
+        var (client, host, _) = await ProbeAsync(gate, () => throw Postgres("57P01"));
+        using var hostLifetime = host;
+
+        using var response = await client.GetAsync("/probe");
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal(DatabaseState.Unreachable, gate.State);
     }
 }

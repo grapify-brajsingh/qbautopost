@@ -60,7 +60,8 @@ public sealed class RefreshTokenService(IDbContextFactory<QbAutopostDbContext> c
 
         if (current.RevokedUtc is not null)
         {
-            await RevokeFamilyAsync(db, current.FamilyId, now, ct);
+            // M10 review: reuse is detected; revoking the family must not depend on the presenter staying connected.
+            await RevokeFamilyAsync(db, current.FamilyId, now, CancellationToken.None);
             return new RefreshResult(RefreshOutcome.ReuseDetected, current.UserId, null);
         }
 
@@ -75,8 +76,8 @@ public sealed class RefreshTokenService(IDbContextFactory<QbAutopostDbContext> c
             .ExecuteUpdateAsync(set => set.SetProperty(t => t.RevokedUtc, now), ct);
         if (claimed == 0)
         {
-            await transaction.RollbackAsync(ct);
-            await RevokeFamilyAsync(db, current.FamilyId, now, ct);
+            await transaction.RollbackAsync(CancellationToken.None);
+            await RevokeFamilyAsync(db, current.FamilyId, now, CancellationToken.None);
             return new RefreshResult(RefreshOutcome.ReuseDetected, current.UserId, null);
         }
 

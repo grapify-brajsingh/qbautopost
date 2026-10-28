@@ -1,7 +1,9 @@
+using System.Data.Common;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using QbAutopost.Core.SavedRequests;
 
@@ -116,6 +118,66 @@ public sealed class EfSavedRequestStoreTests(PostgresFixture postgres)
         Assert.Equal(9, results.Count(x => x.Result.Kind == CreateKind.Replayed));
         Assert.Equal(10, results.Count(x => x.Result.Kind == CreateKind.KeyReused));
         Assert.Single(await store.VersionsAsync(created.Result.Record.Id, default));
+    }
+
+    /// <summary>
+    /// M10 review: the record a claim returns is read inside the claim's transaction. If that read fails the claim
+    /// rolls back, so the request is pending with no attempt, never stuck <c>posting</c> with nothing sent.
+    /// </summary>
+    [PostgresFact]
+    public async Task Should_LeaveTheRequestPending_When_TheReadAfterTheClaimFails()
+    {
+        var created = (await CreateStore().CreateAsync(NewRequest(), default)).Record;
+        var failRead = new FailReadAfterClaimInterceptor();
+        await using var services = new ServiceCollection()
+            .AddPooledDbContextFactory<QbAutopostDbContext>(o => o.UseNpgsql(_connectionString!).AddInterceptors(failRead))
+            .BuildServiceProvider();
+        var store = new EfSavedRequestStore(services.GetRequiredService<IDbContextFactory<QbAutopostDbContext>>());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.TryClaimAsync(created.Id, created.RowVersion, "user:7", false, T0.AddMinutes(1), default));
+
+        Assert.True(failRead.Failed);
+        Assert.Equal(SavedRequestStatus.Pending, (await CreateStore().GetAsync(created.Id, default))!.Status);
+        Assert.Empty(await CreateStore().AttemptsAsync(created.Id, default));
+        var retry = await CreateStore().TryClaimAsync(created.Id, created.RowVersion, "user:7", false, T0.AddMinutes(2), default);
+        Assert.Equal(ClaimKind.Claimed, retry.Kind);
+    }
+
+    /// <summary>Fails the first read of <c>saved_requests</c> after the claim has written its post-started event.</summary>
+    private sealed class FailReadAfterClaimInterceptor : DbCommandInterceptor
+    {
+        private bool _armed;
+
+        public bool Failed { get; private set; }
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            Arm(command);
+            return base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            if (_armed && !Failed && command.CommandText.Contains("FROM saved_requests", StringComparison.Ordinal))
+            {
+                Failed = true;
+                throw new InvalidOperationException("simulated: the read after the claim failed");
+            }
+
+            Arm(command);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        private void Arm(DbCommand command)
+        {
+            if (command.CommandText.Contains("INSERT INTO saved_request_events", StringComparison.Ordinal))
+            {
+                _armed = true;
+            }
+        }
     }
 
     [Fact]

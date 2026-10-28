@@ -63,7 +63,15 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     /// <summary>What the gate's schema check reports when something refreshes it.</summary>
     public SchemaStatus Schema { get; set; } = new(true, true, [], null);
 
+    /// <summary>M10 review: how many times the fake gate's schema check ran.</summary>
+    public int SchemaChecks => Volatile.Read(ref _schemaChecks);
+
+    /// <summary>M10 review: moves the fake gate's clock, so a test can make its last check older than its throttle.</summary>
+    public TimeSpan GateClockOffset { get; set; }
+
     private readonly DatabaseGate _fakeGate;
+
+    private int _schemaChecks;
 
     /// <summary>R14: a PostgreSQL connection string, or null for the usual in-memory host.</summary>
     private readonly string? _postgres;
@@ -80,10 +88,15 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
         // Not forced: the host's first start-up check makes it Ready, and runs recovery on Store first, as production does.
         _fakeGate = new DatabaseGate(
-            _ => Task.FromResult(Schema),
+            _ =>
+            {
+                Interlocked.Increment(ref _schemaChecks);
+                return Task.FromResult(Schema);
+            },
             true,
             NullLogger<DatabaseGate>.Instance,
-            ct => Store.RecoverInFlightAsync(DateTime.UtcNow, ct));
+            ct => Store.RecoverInFlightAsync(DateTime.UtcNow, ct),
+            () => DateTime.UtcNow + GateClockOffset);
     }
 
     /// <summary>

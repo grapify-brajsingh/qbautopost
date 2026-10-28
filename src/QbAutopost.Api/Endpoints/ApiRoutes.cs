@@ -78,6 +78,25 @@ public static class ApiRoutes
     }
 
     /// <summary>
+    /// M10 review: <c>POST /saved-requests/{id}/post</c>, which sends a saved request through validate-and-post's engine.
+    /// It moves money, so <c>RateLimitPolicy</c> puts it in the posting bucket, but it is deliberately not
+    /// <see cref="IsIdempotent"/>: the store's claim is what stops a second send (saved-requests spec 10.2), and the
+    /// replay middleware answering from a file would be a second record of the same fact.
+    /// </summary>
+    public static bool IsSavedRequestPost(string method, PathString path)
+    {
+        if (!HttpMethods.IsPost(method) || !path.HasValue)
+        {
+            return false;
+        }
+
+        var segments = Flat(path.Value!).Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length == 3
+               && segments[0].Equals("saved-requests", Ordinal)
+               && segments[2].Equals("post", Ordinal);
+    }
+
+    /// <summary>
     /// T-912 (FR-A-16): the routes whose answer changes something, and which therefore leave an audit line.
     /// <para>
     /// A safe method never does. Three POSTs do not either, and they are named rather than inferred: a validate, a
@@ -139,14 +158,16 @@ public static class ApiRoutes
         var get = HttpMethods.IsGet(method);
 
         // Liveness and readiness answer without a key (spec §6); everything else under /health needs one.
-        if (p is "/health" or "/health/ready")
+        // R32: every exact match below ignores case, as routing does. A case-sensitive `is`/`==` here once let a
+        // read-only key post: /QuickBooks/Transactions/Validate-And-Post missed its branch and fell through to qb:read.
+        if (p.Equals("/health", Ordinal) || p.Equals("/health/ready", Ordinal))
         {
             return null;
         }
 
         // Named so the database route is a decision, not a side effect of the prefix below. Saved-requests spec 11.3:
         // either scope, so the dashboard (requests:read) can show a status light and monitoring (health:read) still can.
-        if (p == "/health/database")
+        if (p.Equals("/health/database", Ordinal))
         {
             return ApiScopes.AnyOf(ApiScopes.RequestsRead, ApiScopes.HealthRead);
         }
@@ -196,7 +217,7 @@ public static class ApiRoutes
             return p.EndsWith("/undo", Ordinal) ? ApiScopes.QbPost : ApiScopes.QbRead;
         }
 
-        if (p is "/quickbooks/transactions" or SyncPostRoute)
+        if (p.Equals("/quickbooks/transactions", Ordinal) || p.Equals(SyncPostRoute, Ordinal))
         {
             // The two routes that send transactions to QuickBooks; the /validate sibling is caught below.
             //
@@ -210,7 +231,7 @@ public static class ApiRoutes
             return get ? ApiScopes.QbRead : ApiScopes.QbPost;
         }
 
-        return p.StartsWith("/quickbooks/", Ordinal) || p == "/qb/sync-lists"
+        return p.StartsWith("/quickbooks/", Ordinal) || p.Equals("/qb/sync-lists", Ordinal)
             ? ApiScopes.QbRead
             : ApiScopes.Admin;
     }
@@ -281,6 +302,7 @@ public static class ApiRoutes
     private static string Flat(string path) =>
         path.StartsWith(V1Prefix, Ordinal) ? path[V1Prefix.Length..] : path;
 
+    /// <summary>R32: every comparison in this class. Routing matches paths without regard to case, so these must too.</summary>
     private const StringComparison Ordinal = StringComparison.OrdinalIgnoreCase;
 
     /// <summary>The POSTs that answer a question without changing anything (see <see cref="IsMutating"/>).</summary>

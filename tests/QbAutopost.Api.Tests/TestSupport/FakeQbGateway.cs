@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Xml.Linq;
 using QbAutopost.Api.QuickBooks;
 using QbAutopost.Core.Abstractions;
@@ -24,6 +25,12 @@ public sealed class FakeQbGateway : IQbGateway
     public int? RejectLine { get; set; }
 
     public Exception? Throw { get; set; }
+
+    /// <summary>
+    /// R31: 1-based position of an add QuickBooks creates (status 0, a TxnID) but answers with an amount one dollar
+    /// off, so G5 holds it as <c>amount-mismatch</c> while the transaction exists in the company.
+    /// </summary>
+    public int? MisstateAmountLine { get; set; }
 
     public bool Hang { get; set; }
 
@@ -88,7 +95,23 @@ public sealed class FakeQbGateway : IQbGateway
             await Task.Delay(Timeout.Infinite, ct);
         }
 
-        return Company.Process(qbxml, readOnly ? null : Reject);
+        var answer = Company.Process(qbxml, readOnly ? null : Reject);
+        return readOnly || MisstateAmountLine is not { } misstated ? answer : Misstate(answer, misstated);
+    }
+
+    private static string Misstate(string answer, int position)
+    {
+        var doc = XDocument.Parse(answer);
+        var rs = doc.Root!.Element("QBXMLMsgsRs")!.Elements().ElementAtOrDefault(position - 1);
+        var amount = rs?.Elements().FirstOrDefault(e => e.Name.LocalName.EndsWith("Ret", StringComparison.Ordinal)) is { } ret
+            ? ret.Element("Amount") ?? ret.Element("DepositTotal")
+            : null;
+        if (amount is not null)
+        {
+            amount.Value = (decimal.Parse(amount.Value, CultureInfo.InvariantCulture) + 1m).ToString("0.00", CultureInfo.InvariantCulture);
+        }
+
+        return doc.Declaration + doc.ToString();
     }
 
     /// <summary>How often the company file was asked for — FR-A-3 requires the SDK probe never to ask.</summary>

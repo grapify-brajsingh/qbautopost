@@ -56,6 +56,51 @@ public sealed class SavedRequestIntake(
     }
 
     /// <summary>
+    /// R33: why PostgreSQL could not store <paramref name="payload"/> as <c>jsonb</c>, or null when it can. jsonb refuses
+    /// U+0000 in any string, a property name included, and the refusal used to look like an outage (503 for ever, the
+    /// payload lost). It is found here, before any store call, so the fake and the EF store refuse the same payloads.
+    /// The answer names the JSON path, never the text around it.
+    /// </summary>
+    public static string? NotStorableReason(JsonElement payload) => FindNul(payload, "$");
+
+    private static string? FindNul(JsonElement element, string path)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.String when element.GetString()!.Contains('\0', StringComparison.Ordinal):
+                return $"{path} contains U+0000, which the database cannot store";
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    if (property.Name.Contains('\0', StringComparison.Ordinal))
+                    {
+                        return $"a property name in {path} contains U+0000, which the database cannot store";
+                    }
+
+                    if (FindNul(property.Value, $"{path}.{property.Name}") is { } found)
+                    {
+                        return found;
+                    }
+                }
+
+                return null;
+            case JsonValueKind.Array:
+                var index = 0;
+                foreach (var item in element.EnumerateArray())
+                {
+                    if (FindNul(item, $"{path}[{index++}]") is { } found)
+                    {
+                        return found;
+                    }
+                }
+
+                return null;
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
     /// Spec 6.1 step 3 onwards, for a body <see cref="TryParseObject"/> accepted. The source and the author are the
     /// caller (spec 5.3); a <c>createdBy</c> in the body is just another unknown field, kept and ignored.
     /// </summary>
@@ -65,6 +110,8 @@ public sealed class SavedRequestIntake(
         {
             throw new ArgumentException("The body is not a JSON object; the route answers 400 before this.", nameof(rawBody));
         }
+
+        GuardStorable(payload);
 
         var now = clock.UtcNow;
         var read = SavedPayloadReader.Read(payload);
@@ -124,6 +171,15 @@ public sealed class SavedRequestIntake(
         var duplicate = await DetectAsync(current.CanonicalSha256, read, fingerprints, id, now, ct);
 
         return await store.SetValidationAsync(id, snapshot, duplicate, caller.Actor, now, ct);
+    }
+
+    /// <summary>The routes answer <c>400 payload-not-storable</c> before this; reaching the store with such a payload is a bug.</summary>
+    private static void GuardStorable(JsonElement payload)
+    {
+        if (NotStorableReason(payload) is { } reason)
+        {
+            throw new ArgumentException($"The payload is not storable ({reason}); the route answers 400 before this.", nameof(payload));
+        }
     }
 
     /// <summary>Spec 5.2: <c>api-client:&lt;clientId&gt;</c> for a key, <c>user:&lt;userId&gt;</c> for a person.</summary>

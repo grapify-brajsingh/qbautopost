@@ -5,7 +5,9 @@ namespace QbAutopost.Api.Database;
 /// <summary>
 /// Spec 10.7: every saved-request route answers <c>503 database-unavailable</c> with <c>Retry-After: 30</c> while the
 /// gate is not ready, before any store call. A store call that fails with a database error makes the gate look again
-/// (no timer: the failure is the trigger) and answers the same 503.
+/// (no timer: the failure is the trigger) and answers the same 503. A statement the server refuses (R33: a
+/// <see cref="Npgsql.PostgresException"/> that is not transient) is not an outage: <c>500 database-error</c>, the gate
+/// untouched, and only the SqlState logged.
 /// </summary>
 public static class DatabaseGateFilter
 {
@@ -37,6 +39,20 @@ public static class DatabaseGateFilter
             {
                 await gate.RefreshAsync(context.HttpContext.RequestAborted);
                 return Unavailable(context.HttpContext, gate);
+            }
+            catch (Exception ex) when (DatabaseGate.SqlStateOf(ex) is { } sqlState)
+            {
+                // R33: the server refused this statement; the database is fine, so the gate is left alone. The SqlState
+                // and the type only: the exception and its text can echo the payload that was refused.
+                var http = context.HttpContext;
+                http.RequestServices.GetService<ILogger<DatabaseGate>>()?.LogError(
+                    "Request {Method} {Path}: the database refused the statement with SqlState {SqlState} ({ExceptionType})",
+                    http.Request.Method, http.Request.Path.Value, sqlState, ex.GetType().Name);
+                return Results.Problem(
+                    statusCode: StatusCodes.Status500InternalServerError,
+                    title: "The database refused the change",
+                    type: "database-error",
+                    detail: $"The database refused this request (SqlState {sqlState}). The error is in the server log.");
             }
         });
         return group;

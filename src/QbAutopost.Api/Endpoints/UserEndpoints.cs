@@ -228,7 +228,7 @@ public static class UserEndpoints
 
         var user = result.User!;
         await services.GetRequiredService<UserAuditWriter>()
-            .WriteAsync(user.Id, caller.Id, UserAuditWriter.Created, new { role }, ct);
+            .WriteAsync(user.Id, caller.Id, UserAuditWriter.Created, new { role }, CancellationToken.None);
         loggers.CreateLogger(typeof(UserEndpoints)).LogInformation("User {UserId} created user {NewUserId} with role {Role}", caller.Id, user.Id, role);
 
         NoStore(http);
@@ -368,21 +368,25 @@ public static class UserEndpoints
             await transaction.CommitAsync(ct);
         }
 
+        // Committed: from here on the caller's connection bounds nothing. An aborted request must not leave the
+        // target's sessions alive or the change unaudited.
         var sensitive = roleChanged || body.Disabled == true;
         if (sensitive)
         {
-            await EndSessionsAsync(services, user.Id, ct);
+            await EndSessionsAsync(services, user.Id);
         }
 
         var audit = services.GetRequiredService<UserAuditWriter>();
         if (roleChanged)
         {
-            await audit.WriteAsync(user.Id, caller.Id, UserAuditWriter.RoleChanged, new { from = previousRole, to = newRole }, ct);
+            await audit.WriteAsync(
+                user.Id, caller.Id, UserAuditWriter.RoleChanged, new { from = previousRole, to = newRole }, CancellationToken.None);
         }
 
         if (disabledChanged)
         {
-            await audit.WriteAsync(user.Id, caller.Id, body.Disabled == true ? UserAuditWriter.Disabled : UserAuditWriter.Enabled, new { }, ct);
+            await audit.WriteAsync(
+                user.Id, caller.Id, body.Disabled == true ? UserAuditWriter.Disabled : UserAuditWriter.Enabled, new { }, CancellationToken.None);
         }
 
         loggers.CreateLogger(typeof(UserEndpoints)).LogInformation(
@@ -421,8 +425,9 @@ public static class UserEndpoints
                 StatusCodes.Status409Conflict, "Password not reset", "The user changed while it was being updated. Nothing was changed; try again.", "concurrent-update");
         }
 
-        await EndSessionsAsync(services, user.Id, ct);
-        await services.GetRequiredService<UserAuditWriter>().WriteAsync(user.Id, caller.Id, UserAuditWriter.PasswordReset, new { }, ct);
+        await EndSessionsAsync(services, user.Id);
+        await services.GetRequiredService<UserAuditWriter>()
+            .WriteAsync(user.Id, caller.Id, UserAuditWriter.PasswordReset, new { }, CancellationToken.None);
         loggers.CreateLogger(typeof(UserEndpoints)).LogInformation("User {UserId} reset the password of user {TargetUserId}", caller.Id, user.Id);
 
         NoStore(http);
@@ -453,7 +458,8 @@ public static class UserEndpoints
                 StatusCodes.Status409Conflict, "Not unlocked", "The user changed while it was being updated. Try again.", "concurrent-update");
         }
 
-        await services.GetRequiredService<UserAuditWriter>().WriteAsync(user.Id, caller.Id, UserAuditWriter.Unlocked, new { }, ct);
+        await services.GetRequiredService<UserAuditWriter>()
+            .WriteAsync(user.Id, caller.Id, UserAuditWriter.Unlocked, new { }, CancellationToken.None);
         loggers.CreateLogger(typeof(UserEndpoints)).LogInformation("User {UserId} unlocked user {TargetUserId}", caller.Id, user.Id);
         var db = services.GetRequiredService<QbAutopostDbContext>();
         var role = RoleOf(await RolesOfAsync(db, [user.Id], ct), user.Id);
@@ -536,11 +542,14 @@ public static class UserEndpoints
         }
     }
 
-    /// <summary>R19: the stamp is rotated, the cached lookup dropped and every refresh token revoked.</summary>
-    private static async Task EndSessionsAsync(IServiceProvider services, string userId, CancellationToken ct)
+    /// <summary>
+    /// R19: the stamp is rotated, the cached lookup dropped and every refresh token revoked. It runs after the change
+    /// committed, so it takes no caller token (M10 review): an aborted request must not skip the revocation.
+    /// </summary>
+    private static async Task EndSessionsAsync(IServiceProvider services, string userId)
     {
         UserGate.Forget(services.GetRequiredService<IMemoryCache>(), userId);
-        await services.GetRequiredService<RefreshTokenService>().RevokeAllAsync(userId, ct);
+        await services.GetRequiredService<RefreshTokenService>().RevokeAllAsync(userId, CancellationToken.None);
     }
 
     private static async Task<List<string>> RoleNamesAsync(QbAutopostDbContext db, string userId, CancellationToken ct) =>

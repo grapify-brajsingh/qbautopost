@@ -443,14 +443,20 @@ same time.
 | `503` backup stale / QB unreachable / rules missing | `unavailable` | 503 | `pending` |
 | `200` with `status: posted` | `posted` | 200 | `posted` |
 | `200` with `status: partial` | `partial` | 200 | `partial` |
-| `200` with `status: failed` (nothing landed) and **no** row held for `quickbooks-no-response` | `failed` | 200 | `pending` |
-| `200` with any row held for `quickbooks-no-response` (the qbXML was sent and QuickBooks did not answer; `DirectPostRunner` records it as "may or may not have been applied") | `unknown` | 200 | `unknown` |
+| `200` with `status: failed` and **every** held row proving nothing was created: a pre-send gate reason (`unknown-account`, `unknown-payee`, `conflicting-last4`, `duplicate-line`, `no-account-rule`, `no-holding-account`, `no-deposit-income-account`, `refnumber-too-long`, `possible-duplicate`, `duplicate-check-failed`, `backup-too-old`, `quickbooks-unavailable`) or `quickbooks-rejected` with a non-zero QuickBooks status code and no TxnID | `failed` | 200 | `pending` |
+| `200` with `status: failed` and any other held row: `quickbooks-no-response` (the qbXML was sent and QuickBooks did not answer; `DirectPostRunner` records it as "may or may not have been applied"), `quickbooks-busy`, `amount-mismatch` (a TxnID exists with another amount), `quickbooks-rejected` with status 0 but no TxnID, a missing status code, or a TxnID returned beside a warning, any reason not listed in the row above, or no held row at all | `unknown` | 200 | `unknown` |
 | exception **before** the SDK lock was taken | `error` | 500 | `pending` |
 | exception **after** the lock was taken, or the result could not be recorded | `unknown` | – | `unknown` |
 
 *Builder's call, recorded:* the `quickbooks-no-response` row exists because `status: failed` alone cannot tell
 "nothing landed" from "nothing confirmed". Returning such a request to `pending` would make a possible double post
 one click away, which is the first anti-goal. It goes to `unknown`, and an admin resolves it (§10.6).
+
+*Amended by controller ruling R31 (Q-93, M10 review):* the rule is an allow-list, not a deny-list. A failed post
+returns to `pending` only when every held row's reason is on the list of reasons that prove nothing was sent
+(`NothingSentReasons` in Core). G4's live check matches on amount, so re-posting a row QuickBooks holds under another
+amount, or one it accepted without returning a TxnID, is a double post. A reason added later locks as `unknown` until
+someone adds it to the list on purpose.
 
 The post-by-id route binds the stored `jsonb` to `SyncPostRequest` **itself**, before calling the engine. An
 unbindable version is answered with `400` problem details naming each JSON path, and is recorded as `refused`. That

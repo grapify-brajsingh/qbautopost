@@ -63,6 +63,22 @@ public sealed class EditApiTests : IDisposable
         Assert.Equal("edited", events.GetProperty("items")[0].GetProperty("kind").GetString());
     }
 
+    /// <summary>R33: an edit jsonb cannot hold is refused up front and the request keeps its version.</summary>
+    [Fact]
+    public async Task Should_Return400PayloadNotStorable_When_TheEditContainsUPlus0000()
+    {
+        var id = await _host.SaveFixtureAsync("n8n-good.json");
+        using var editor = _host.User(DashboardRoles.Editor);
+
+        using var response = await SavedRequestTestHost.PutAsync(
+            editor, id, SavedRequestTestHost.Fixture("n8n-nul-in-key.json"), "\"1\"");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await SavedRequestTestHost.BodyOf(response);
+        Assert.Equal("payload-not-storable", problem.GetProperty("type").GetString());
+        Assert.Equal(1, (await StoredAsync(id)).CurrentVersion);
+    }
+
     [Fact]
     public async Task Should_Return428_When_IfMatchMissing()
     {

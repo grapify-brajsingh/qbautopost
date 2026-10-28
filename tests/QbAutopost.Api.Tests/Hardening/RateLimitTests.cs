@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using QbAutopost.Api.Configuration;
+using QbAutopost.Api.Endpoints;
 using QbAutopost.Api.Security;
 using QbAutopost.Api.Tests.TestSupport;
 using QbAutopost.Core.Security;
@@ -29,6 +30,14 @@ public sealed class RateLimitTests
     [InlineData("POST", "/api/v1/batches/abc/undo", RateLimitBucket.Post)]
     // Queueing a job needs jobs:write, not qb:post, but it ends in money moving, so it draws on the smaller budget.
     [InlineData("POST", "/api/v1/jobs", RateLimitBucket.Post)]
+    // M10 review: posting a saved request moves money exactly as validate-and-post does, so it shares that budget.
+    [InlineData("POST", "/api/v1/quickbooks/transactions/validate-and-post", RateLimitBucket.Post)]
+    [InlineData("POST", "/api/v1/saved-requests/12/post", RateLimitBucket.Post)]
+    [InlineData("POST", "/api/v1/Saved-Requests/12/Post/", RateLimitBucket.Post)]
+    [InlineData("POST", "/saved-requests/12/post", RateLimitBucket.Post)]
+    [InlineData("POST", "/api/v1/saved-requests", RateLimitBucket.Default)]
+    [InlineData("POST", "/api/v1/saved-requests/12/validate", RateLimitBucket.Default)]
+    [InlineData("GET", "/api/v1/saved-requests/12/post", RateLimitBucket.Default)]
     [InlineData("POST", "/api/v1/quickbooks/transactions/validate", RateLimitBucket.Default)]
     [InlineData("GET", "/api/v1/jobs", RateLimitBucket.Default)]
     [InlineData("GET", "/api/v1/health", RateLimitBucket.Health)]
@@ -37,6 +46,14 @@ public sealed class RateLimitTests
     [InlineData("GET", "/health", RateLimitBucket.Health)]
     public void Should_ChooseTheBucket_ByWhatTheRequestCosts(string method, string path, RateLimitBucket expected) =>
         Assert.Equal(expected, RateLimitPolicy.BucketFor(method, path));
+
+    /// <summary>The saved post's bucket is named, not borrowed: its Idempotency-Key belongs to the claim, never to the replay middleware.</summary>
+    [Fact]
+    public void Should_KeepTheSavedPostOutOfIdempotencyReplay_When_ItDrawsOnThePostingBudget()
+    {
+        Assert.False(ApiRoutes.IsIdempotent("POST", "/api/v1/saved-requests/12/post"));
+        Assert.Equal(RateLimitBucket.Post, RateLimitPolicy.BucketFor("POST", "/api/v1/saved-requests/12/post"));
+    }
 
     [Fact]
     public void Should_UseTheSpecDefaults_When_NoClientOverridesThem()

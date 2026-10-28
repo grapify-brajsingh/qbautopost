@@ -48,7 +48,7 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
             var payload = request.Payload.Clone();
             var record = new SavedRequest(
                 id, SavedRequestStatus.Pending, request.Source,
-                request.Read.Request?.Reference, request.Read.Request?.ControlTotal, request.Read.Request?.Transactions.Count ?? 0,
+                request.Read.Request?.Reference, SavedRequestColumns.ControlTotalOf(request.Read), request.Read.Request?.Transactions.Count ?? 0,
                 1, request.OriginalBody, Sha256(request.OriginalBody), request.CanonicalSha256, request.IdempotencyKey,
                 NeedsAttention(request.Read, request.Snapshot),
                 request.Duplicate.Of, request.Duplicate.Reasons.ToList(), null, null,
@@ -201,7 +201,7 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
             {
                 CurrentVersion = number,
                 Reference = version.Read.Request?.Reference,
-                ControlTotal = version.Read.Request?.ControlTotal,
+                ControlTotal = SavedRequestColumns.ControlTotalOf(version.Read),
                 TransactionCount = version.Read.Request?.Transactions.Count ?? 0,
                 CanonicalSha256 = version.CanonicalSha256,
                 NeedsAttention = NeedsAttention(version.Read, version.Snapshot),
@@ -352,6 +352,12 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
     /// <summary>T-1014: the next this-many <see cref="CompleteAttemptAsync"/> calls fail as a database timeout and write nothing.</summary>
     public int FailCompletes { get; set; }
 
+    /// <summary>
+    /// M10 review: the next this-many <see cref="CompleteAttemptAsync"/> calls write the completion and then fail as a
+    /// timeout, as when the commit landed but its acknowledgement was lost on the way back.
+    /// </summary>
+    public int LoseCompleteAcknowledgements { get; set; }
+
     /// <summary>T-1014: how many times <see cref="CompleteAttemptAsync"/> was called, failed calls included.</summary>
     public int CompleteCalls { get; private set; }
 
@@ -403,6 +409,12 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
                     ["postId"] = completion.PostId,
                 },
                 completion.FinishedUtc, attempt.StartedBy);
+            if (LoseCompleteAcknowledgements > 0)
+            {
+                LoseCompleteAcknowledgements--;
+                throw new TimeoutException("simulated: the commit landed but its acknowledgement was lost");
+            }
+
             return Task.CompletedTask;
         }
     }

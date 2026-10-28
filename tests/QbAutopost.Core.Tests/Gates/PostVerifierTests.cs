@@ -1,5 +1,6 @@
 using QbAutopost.Core.Gates;
 using QbAutopost.Core.Models;
+using QbAutopost.Core.QbXml;
 using QbAutopost.Core.Tests.TestSupport;
 
 namespace QbAutopost.Core.Tests.Gates;
@@ -85,5 +86,41 @@ public sealed class PostVerifierTests
 
         Assert.Empty(result.Posted);
         Assert.Equal(HoldReasons.QuickBooksNoResponse, Assert.Single(result.Rejected).Reason);
+    }
+
+    /// <summary>R31: the rejection notes G5 writes are the ones a saved request reads to decide "nothing was created".</summary>
+    [Fact]
+    public void Should_WriteACleanRejectionNote_When_StatusIsNotZeroAndNoTxnId()
+    {
+        var result = PostVerifier.Verify([Txn], [Ok() with { StatusCode = 3140, StatusMessage = "invalid reference", TxnId = null }]);
+
+        Assert.True(PostVerifier.IsCleanRejection(Assert.Single(result.Rejected).Note));
+    }
+
+    [Fact]
+    public void Should_NotWriteACleanRejectionNote_When_StatusIsZeroWithoutTxnId()
+    {
+        var result = PostVerifier.Verify([Txn], [Ok() with { TxnId = null }]);
+
+        Assert.False(PostVerifier.IsCleanRejection(Assert.Single(result.Rejected).Note));
+    }
+
+    [Fact]
+    public void Should_NotWriteACleanRejectionNote_When_TheStatusCodeIsMissing()
+    {
+        var result = PostVerifier.Verify([Txn], [Ok() with { StatusCode = QbXmlParser.MissingStatusCode, TxnId = null }]);
+
+        Assert.False(PostVerifier.IsCleanRejection(Assert.Single(result.Rejected).Note));
+    }
+
+    [Fact]
+    public void Should_NameTheTxnIdAndNotWriteACleanRejectionNote_When_StatusIsNotZeroButATxnIdCameBack()
+    {
+        var result = PostVerifier.Verify([Txn], [Ok() with { StatusCode = 3260, StatusMessage = "warning" }]);
+
+        var held = Assert.Single(result.Rejected);
+        Assert.Equal(HoldReasons.QuickBooksRejected, held.Reason);
+        Assert.Contains("1A-1", held.Note, StringComparison.Ordinal);
+        Assert.False(PostVerifier.IsCleanRejection(held.Note));
     }
 }

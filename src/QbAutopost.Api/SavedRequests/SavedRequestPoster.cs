@@ -169,7 +169,7 @@ public sealed class SavedRequestPoster(
         _ => new PostEnding(
             PostEndingKind.Completed,
             post.Result?.Status,
-            post.Result?.Held.Select(h => h.Reason).OfType<string>().ToList() ?? []),
+            post.Result?.Held.Select(h => new PostHeldRow(h.Reason, h.Note)).ToList() ?? []),
     };
 
     /// <summary>
@@ -320,6 +320,12 @@ public sealed class SavedRequestPoster(
     /// Spec 10.6: records the ending, trying three times. If every try fails the request stays <c>posting</c>, which no
     /// route can post or edit, and the result goes to an evidence file so the person resolving it later can see what
     /// QuickBooks answered. Returns the request's status as it now stands.
+    /// <para>
+    /// A failed try may still have committed (the acknowledgement lost on the way back), so after each failure the
+    /// attempt is read before anything else. Already completed with this outcome is success: the request's real status
+    /// is answered and no evidence is written. Completed with another outcome means someone else recorded it (start-up
+    /// recovery), so this result was not recorded: the evidence file is written and the real status answered.
+    /// </para>
     /// </summary>
     private async Task<SavedRequestStatus> RecordAsync(
         long savedRequestId, long attemptId, AttemptVerdict verdict, AttemptCompletion completion, JsonNode? rawResult = null)
@@ -334,15 +340,36 @@ public sealed class SavedRequestPoster(
                     savedRequestId, attemptId, verdict.Outcome, verdict.NextStatus, completion.PostId);
                 return verdict.NextStatus;
             }
-            catch (Exception ex) when (attempt < CompleteBackoff.Length)
-            {
-                log.LogWarning(
-                    "Saved request {SavedRequestId}: recording attempt {AttemptId} failed ({Error}); trying again",
-                    savedRequestId, attemptId, ex.GetType().Name);
-                await Task.Delay(CompleteBackoff[attempt]);
-            }
             catch (Exception ex)
             {
+                if (await RecordedAsync(savedRequestId, attemptId) is { } recorded)
+                {
+                    if (recorded.Outcome == completion.Outcome && recorded.PostId == completion.PostId)
+                    {
+                        log.LogInformation(
+                            "Saved request {SavedRequestId}: attempt {AttemptId} was already recorded as {Outcome} ({Error} "
+                            + "lost the acknowledgement), request now {Status}, post {PostId}",
+                            savedRequestId, attemptId, recorded.Outcome, ex.GetType().Name, recorded.Status, completion.PostId);
+                        return recorded.Status;
+                    }
+
+                    var other = WriteEvidence(savedRequestId, attemptId, completion, rawResult);
+                    log.LogError(
+                        "Saved request {SavedRequestId}: attempt {AttemptId} was recorded as {Recorded} by something else, "
+                        + "not as {Outcome}; evidence {EvidenceFile}, request now {Status}",
+                        savedRequestId, attemptId, recorded.Outcome, completion.Outcome, other ?? "not written", recorded.Status);
+                    return recorded.Status;
+                }
+
+                if (attempt < CompleteBackoff.Length)
+                {
+                    log.LogWarning(
+                        "Saved request {SavedRequestId}: recording attempt {AttemptId} failed ({Error}); trying again",
+                        savedRequestId, attemptId, ex.GetType().Name);
+                    await Task.Delay(CompleteBackoff[attempt]);
+                    continue;
+                }
+
                 var file = WriteEvidence(savedRequestId, attemptId, completion, rawResult);
                 log.LogError(
                     ex,
@@ -351,6 +378,33 @@ public sealed class SavedRequestPoster(
                     savedRequestId, attemptId, completion.PostId, file ?? "not written");
                 return SavedRequestStatus.Posting;
             }
+        }
+    }
+
+    /// <summary>
+    /// The attempt's recorded ending and the request's status, or null when the attempt is still in progress or could
+    /// not be read (then the caller keeps trying, as before).
+    /// </summary>
+    private async Task<(AttemptOutcome Outcome, string? PostId, SavedRequestStatus Status)?> RecordedAsync(
+        long savedRequestId, long attemptId)
+    {
+        try
+        {
+            var attempt = await store.AttemptAsync(savedRequestId, attemptId, CancellationToken.None);
+            if (attempt is null || attempt.Outcome == AttemptOutcome.InProgress)
+            {
+                return null;
+            }
+
+            var request = await store.GetAsync(savedRequestId, CancellationToken.None);
+            return request is null ? null : (attempt.Outcome, attempt.PostId, request.Status);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(
+                "Saved request {SavedRequestId}: attempt {AttemptId} could not be read back ({Error})",
+                savedRequestId, attemptId, ex.GetType().Name);
+            return null;
         }
     }
 

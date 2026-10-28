@@ -5,6 +5,8 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
+using QbAutopost.Api.Database;
 using QbAutopost.Api.Tests.SavedRequests;
 using QbAutopost.Api.Tests.TestSupport;
 using QbAutopost.Core.Security;
@@ -86,6 +88,101 @@ public sealed class SavedRequestApiTests(PostgresFixture postgres) : IClassFixtu
 
         Assert.Equal(HttpStatusCode.OK, original.StatusCode);
         Assert.Equal(bytes, await original.Content.ReadAsByteArrayAsync());
+    }
+
+    /// <summary>R33 on the real jsonb column: U+0000 is refused up front with 400, never a 503 that loses the payload.</summary>
+    [PostgresTheory]
+    [InlineData("n8n-nul-in-memo.json")]
+    [InlineData("n8n-nul-in-key.json")]
+    public async Task Should_Answer400PayloadNotStorableAndStayReady_When_ThePayloadContainsUPlus0000(string fixture)
+    {
+        await AddUserAsync("asha@example.com", DashboardRoles.Editor, "Asha K");
+        using var client = await SignedInAsync("asha@example.com");
+
+        using var saved = await client.PostAsync(Route, SavedRequestTestHost.Json(SavedRequestTestHost.Fixture(fixture)));
+
+        Assert.Equal(HttpStatusCode.BadRequest, saved.StatusCode);
+        Assert.Equal("payload-not-storable", (await saved.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("type").GetString());
+        Assert.True(Factory.Services.GetRequiredService<DatabaseGate>().IsReady);
+        using var good = await client.PostAsync(Route, SavedRequestTestHost.Json(SavedRequestTestHost.Fixture("n8n-good.json")));
+        Assert.Equal(HttpStatusCode.Created, good.StatusCode);
+    }
+
+    [PostgresFact]
+    public async Task Should_Answer400PayloadNotStorable_When_AnEditContainsUPlus0000()
+    {
+        await AddUserAsync("asha@example.com", DashboardRoles.Editor, "Asha K");
+        using var client = await SignedInAsync("asha@example.com");
+        using var saved = await client.PostAsync(Route, SavedRequestTestHost.Json(SavedRequestTestHost.Fixture("n8n-good.json")));
+        var id = (await saved.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetInt64();
+
+        using var edited = await SavedRequestTestHost.PutAsync(
+            client, id, SavedRequestTestHost.Fixture("n8n-nul-in-memo.json"), "\"1\"");
+
+        Assert.Equal(HttpStatusCode.BadRequest, edited.StatusCode);
+        Assert.Equal("payload-not-storable", (await edited.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("type").GetString());
+        using var detail = await client.GetAsync($"{Route}/{id}");
+        Assert.Equal(1, (await detail.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("currentVersion").GetInt32());
+        Assert.True(Factory.Services.GetRequiredService<DatabaseGate>().IsReady);
+    }
+
+    /// <summary>R33 on the real numeric(18,2) column: the save succeeds, the column is NULL, the payload keeps the number.</summary>
+    [PostgresFact]
+    public async Task Should_SaveWithNullControlTotal_When_ControlTotalOverflowsNumeric18And2()
+    {
+        await AddUserAsync("asha@example.com", DashboardRoles.Editor, "Asha K");
+        using var client = await SignedInAsync("asha@example.com");
+
+        using var saved = await client.PostAsync(
+            Route, SavedRequestTestHost.Json(SavedRequestTestHost.Fixture("n8n-control-total-overflow.json")));
+
+        Assert.Equal(HttpStatusCode.Created, saved.StatusCode);
+        var body = await saved.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(body.GetProperty("needsAttention").GetBoolean());
+        using var list = await client.GetAsync(Route);
+        var item = Assert.Single((await list.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("items").EnumerateArray());
+        Assert.Equal(JsonValueKind.Null, item.GetProperty("controlTotal").ValueKind);
+        using var detail = await client.GetAsync($"{Route}/{body.GetProperty("id").GetInt64()}");
+        Assert.Equal(
+            10000000000000000m,
+            (await detail.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("payload").GetProperty("controlTotal").GetDecimal());
+    }
+
+    /// <summary>R33: a real error PostgreSQL raises for one statement is not an outage.</summary>
+    [PostgresFact]
+    public async Task Should_NotCountAsADatabaseFailure_When_PostgresRefusesOneStatement()
+    {
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand("SELECT 1/0", connection);
+
+        var refused = await Assert.ThrowsAsync<PostgresException>(() => command.ExecuteScalarAsync());
+
+        Assert.False(refused.IsTransient);
+        Assert.False(DatabaseGate.IsDatabaseFailure(new InvalidOperationException("wrapped", refused)));
+        Assert.Equal("22012", DatabaseGate.SqlStateOf(refused));
+    }
+
+    /// <summary>
+    /// R33 through the real filter: text columns cannot hold U+0000 either, so an edit note carrying one is refused by
+    /// PostgreSQL. That is a 500 for this request, and the gate stays Ready for everyone else.
+    /// </summary>
+    [PostgresFact]
+    public async Task Should_Answer500AndKeepTheGateReady_When_PostgresRefusesAStatement()
+    {
+        await AddUserAsync("asha@example.com", DashboardRoles.Editor, "Asha K");
+        using var client = await SignedInAsync("asha@example.com");
+        using var saved = await client.PostAsync(Route, SavedRequestTestHost.Json(SavedRequestTestHost.Fixture("n8n-good.json")));
+        var id = (await saved.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetInt64();
+        var payload = SavedRequestTestHost.Fixture("n8n-good.json").Replace("n8n-good-2026-08", "n8n-good-edited", StringComparison.Ordinal);
+
+        using var edited = await SavedRequestTestHost.PutAsync(client, id, payload, "\"1\"", "note with \u0000 in it");
+
+        Assert.Equal(HttpStatusCode.InternalServerError, edited.StatusCode);
+        Assert.Equal("database-error", (await edited.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("type").GetString());
+        Assert.True(Factory.Services.GetRequiredService<DatabaseGate>().IsReady);
+        using var detail = await client.GetAsync($"{Route}/{id}");
+        Assert.Equal(HttpStatusCode.OK, detail.StatusCode);
     }
 
     private async Task<HttpClient> SignedInAsync(string email)

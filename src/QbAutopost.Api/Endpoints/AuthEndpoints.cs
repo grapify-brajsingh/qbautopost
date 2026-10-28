@@ -40,6 +40,10 @@ public sealed record SignedOutResponse(bool SignedOut);
 /// per address and per email with the failed-auth brake, on top of Identity's per-user lockout. Every failed sign-in
 /// is a <c>user_audit</c> row. Nothing here logs an email, a password, a token or the cookie (spec 12).
 /// </para>
+/// <para>
+/// M10 review: every security write that follows a decision (a revocation, a lockout count, an audit row) runs under
+/// <see cref="CancellationToken.None"/>, so a caller who aborts the request cannot skip it.
+/// </para>
 /// </summary>
 public static class AuthEndpoints
 {
@@ -101,7 +105,7 @@ public static class AuthEndpoints
         // parallel burst cannot all pass the brake first. A sign-in that succeeds gives its reservation back.
         if (Reserve(brake, address, emailKey) is { } blocked)
         {
-            await audit.WriteAsync(null, UserAuditWriter.Anonymous, UserAuditWriter.LoginFailed, new { email = Capped(email), address = ip, reason = "rate-limited" }, ct);
+            await audit.WriteAsync(null, UserAuditWriter.Anonymous, UserAuditWriter.LoginFailed, new { email = Capped(email), address = ip, reason = "rate-limited" }, CancellationToken.None);
             log.LogWarning("Sign-in refused: too many failed sign-ins from this address or for this account");
             return TooMany(http, blocked);
         }
@@ -114,14 +118,14 @@ public static class AuthEndpoints
             // The same PBKDF2 work a real account costs, so the answer's timing does not say the email is unknown.
             users.PasswordHasher.VerifyHashedPassword(new AppUser(), TimingHash(users), password);
             // R10: no subject; the attempted email is kept in detail so that every failure is recorded (spec 11.2).
-            await audit.WriteAsync(null, UserAuditWriter.Anonymous, UserAuditWriter.LoginFailed, new { email = Capped(email), address = ip, reason = "unknown-email" }, ct);
+            await audit.WriteAsync(null, UserAuditWriter.Anonymous, UserAuditWriter.LoginFailed, new { email = Capped(email), address = ip, reason = "unknown-email" }, CancellationToken.None);
             log.LogWarning("Sign-in refused: no account holds the email given");
             return InvalidCredentials();
         }
 
         if (await users.IsLockedOutAsync(user))
         {
-            await audit.WriteAsync(user.Id, UserAuditWriter.Anonymous, UserAuditWriter.LoginFailed, new { address = ip, reason = "locked-out" }, ct);
+            await audit.WriteAsync(user.Id, UserAuditWriter.Anonymous, UserAuditWriter.LoginFailed, new { address = ip, reason = "locked-out" }, CancellationToken.None);
             log.LogWarning("Sign-in refused for user {UserId}: the account is locked out", user.Id);
             return LockedOut(http, user.LockoutEnd, clock);
         }
@@ -130,14 +134,14 @@ public static class AuthEndpoints
         if (!await users.CheckPasswordAsync(user, password))
         {
             // Fix 1a: counted atomically, so parallel wrong passwords each count.
-            if (await lockout.RecordFailureAsync(user.Id, ct) is { } lockedUntil)
+            if (await lockout.RecordFailureAsync(user.Id, CancellationToken.None) is { } lockedUntil)
             {
-                await audit.WriteAsync(user.Id, UserAuditWriter.Anonymous, UserAuditWriter.LockedOut, new { address = ip, reason = "failed-attempts" }, ct);
+                await audit.WriteAsync(user.Id, UserAuditWriter.Anonymous, UserAuditWriter.LockedOut, new { address = ip, reason = "failed-attempts" }, CancellationToken.None);
                 log.LogWarning("User {UserId} locked out after repeated wrong passwords", user.Id);
                 return LockedOut(http, lockedUntil, clock);
             }
 
-            await audit.WriteAsync(user.Id, UserAuditWriter.Anonymous, UserAuditWriter.LoginFailed, new { address = ip, reason = "wrong-password" }, ct);
+            await audit.WriteAsync(user.Id, UserAuditWriter.Anonymous, UserAuditWriter.LoginFailed, new { address = ip, reason = "wrong-password" }, CancellationToken.None);
             log.LogWarning("Sign-in refused for user {UserId}: wrong password", user.Id);
             return InvalidCredentials();
         }
@@ -146,7 +150,7 @@ public static class AuthEndpoints
         {
             // Spec 11.2: the same answer as wrong credentials, and counted the same (its reservation is kept), so it
             // says nothing more.
-            await audit.WriteAsync(user.Id, UserAuditWriter.Anonymous, UserAuditWriter.LoginFailed, new { address = ip, reason = "disabled" }, ct);
+            await audit.WriteAsync(user.Id, UserAuditWriter.Anonymous, UserAuditWriter.LoginFailed, new { address = ip, reason = "disabled" }, CancellationToken.None);
             log.LogWarning("Sign-in refused for user {UserId}: the account is disabled", user.Id);
             return InvalidCredentials();
         }
@@ -173,7 +177,7 @@ public static class AuthEndpoints
         var refreshTokens = http.RequestServices.GetRequiredService<RefreshTokenService>();
         var refresh = await refreshTokens.IssueAsync(user.Id, familyId: null, ip, ct);
         SetRefreshCookie(http, refresh, refreshTokens.ExpiresFrom(clock.UtcNow));
-        await audit.WriteAsync(user.Id, user.Id, UserAuditWriter.Login, new { address = ip }, ct);
+        await audit.WriteAsync(user.Id, user.Id, UserAuditWriter.Login, new { address = ip }, CancellationToken.None);
         log.LogInformation("User {UserId} signed in", user.Id);
         return await SignedInAsync(http, users, user, tokens);
     }
@@ -219,7 +223,7 @@ public static class AuthEndpoints
         if (user is null || user.IsDisabled)
         {
             // Disabling revokes every token (spec 10.11); this is the belt to that braces.
-            await refreshTokens.RevokeAllAsync(result.UserId!, ct);
+            await refreshTokens.RevokeAllAsync(result.UserId!, CancellationToken.None);
             log.LogWarning("Refresh refused: user {UserId} is unknown or disabled", result.UserId);
             return InvalidRefresh(http);
         }
@@ -238,7 +242,7 @@ public static class AuthEndpoints
         {
             // Fix 6: the token in the cookie, and nothing else of the caller's. Whoever holds a cookie can already use it,
             // so revoking it, even when it is somebody else's, only ever takes power away.
-            revoked = await http.RequestServices.GetRequiredService<RefreshTokenService>().RevokeAsync(presented, ct);
+            revoked = await http.RequestServices.GetRequiredService<RefreshTokenService>().RevokeAsync(presented, CancellationToken.None);
         }
 
         ClearRefreshCookie(http);
@@ -291,14 +295,14 @@ public static class AuthEndpoints
         // atomically (fix 1a), and is recorded like any failed sign-in (fix 2).
         if (!await users.CheckPasswordAsync(user, current))
         {
-            if (await http.RequestServices.GetRequiredService<LockoutCounter>().RecordFailureAsync(user.Id, ct) is { } lockedUntil)
+            if (await http.RequestServices.GetRequiredService<LockoutCounter>().RecordFailureAsync(user.Id, CancellationToken.None) is { } lockedUntil)
             {
-                await audit.WriteAsync(user.Id, user.Id, UserAuditWriter.LockedOut, new { address = ip, reason = "wrong-current-password" }, ct);
+                await audit.WriteAsync(user.Id, user.Id, UserAuditWriter.LockedOut, new { address = ip, reason = "wrong-current-password" }, CancellationToken.None);
                 log.LogWarning("User {UserId} locked out after repeated wrong current passwords", user.Id);
                 return LockedOut(http, lockedUntil, clock);
             }
 
-            await audit.WriteAsync(user.Id, user.Id, UserAuditWriter.LoginFailed, new { address = ip, reason = "wrong-current-password" }, ct);
+            await audit.WriteAsync(user.Id, user.Id, UserAuditWriter.LoginFailed, new { address = ip, reason = "wrong-current-password" }, CancellationToken.None);
             log.LogWarning("Password change refused for user {UserId}: the current password is wrong", user.Id);
             // SPEC-GAP T-1010 (Q-88): 11.2 names no answer for a wrong current password. 400, not 401, so the
             // dashboard does not take it for an expired session and sign the user out.
@@ -319,8 +323,8 @@ public static class AuthEndpoints
         // ChangePasswordAsync has already rotated the security stamp, so every older access token stops working. The
         // password is changed, so the other sessions go and the change is recorded before anything else can fail.
         await http.RequestServices.GetRequiredService<RefreshTokenService>()
-            .RevokeOthersAsync(user.Id, http.Request.Cookies[RefreshCookie], ct);
-        await audit.WriteAsync(user.Id, user.Id, UserAuditWriter.PasswordChanged, new { address = ip }, ct);
+            .RevokeOthersAsync(user.Id, http.Request.Cookies[RefreshCookie], CancellationToken.None);
+        await audit.WriteAsync(user.Id, user.Id, UserAuditWriter.PasswordChanged, new { address = ip }, CancellationToken.None);
 
         // Fix 3: one retry on a fresh copy, then a 409 rather than a mustChangePassword: false that is not stored.
         if (!await PersistAsync(http, users, user, u =>

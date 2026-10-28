@@ -1,13 +1,21 @@
-using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Net;
 using System.Text.Json;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using QbAutopost.Api.Auth;
+using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Tests.TestSupport;
+using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Security;
 using QbAutopost.Data.Entities;
 
@@ -444,6 +452,95 @@ public sealed class UserApiTests(PostgresFixture postgres) : IClassFixture<Postg
         Assert.Contains("enabled", await AuditKindsAsync(ann.Id));
         using var login = await LoginAsync(client, "ann@example.com", Password);
         Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+    }
+
+    /// <summary>
+    /// M10 review: once the role change has committed, the admin's request being aborted must not skip ending the
+    /// target's sessions. The abort is simulated at the moment revocation starts; every refresh token is still revoked.
+    /// </summary>
+    [PostgresTheory]
+    [InlineData("role")]
+    [InlineData("disable")]
+    [InlineData("reset")]
+    public async Task Should_StillRevokeEveryToken_When_TheAdminsRequestIsAbortedAfterTheChangeCommitted(string change)
+    {
+        var abort = new AbortOnRevoke();
+        using var host = Factory.WithWebHostBuilder(b => b.ConfigureTestServices(services =>
+        {
+            services.AddSingleton<IStartupFilter>(abort);
+            services.RemoveAll<RefreshTokenService>();
+            services.AddSingleton(sp => new RefreshTokenService(
+                new AbortingContexts(sp.GetRequiredService<IDbContextFactory<QbAutopostDbContext>>(), abort),
+                sp.GetRequiredService<IOptions<AppSettings>>(),
+                sp.GetRequiredService<IClock>()));
+        }));
+        await AddUserAsync("root@example.com", DashboardRoles.Admin);
+        var ann = await AddUserAsync("ann@example.com", DashboardRoles.Editor);
+        using var client = host.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false });
+        var (adminToken, _) = await SignInAsync(client, "root@example.com", Password);
+        await SignInAsync(client, "ann@example.com", Password);
+        var etag = await EtagAsync(client, adminToken, ann.Id);
+
+        abort.Armed = true;
+        using (await (change switch
+        {
+            "role" => Send(client, HttpMethod.Patch, $"{Users}/{ann.Id}", adminToken, new { role = "viewer" }, etag),
+            "disable" => Send(client, HttpMethod.Patch, $"{Users}/{ann.Id}", adminToken, new { disabled = true }, etag),
+            _ => Send(client, HttpMethod.Post, $"{Users}/{ann.Id}/reset-password", adminToken),
+        }))
+        {
+        }
+
+        Assert.True(abort.Fired);
+        Assert.Equal(0, await DbAsync(db => db.RefreshTokens.CountAsync(t => t.UserId == ann.Id && t.RevokedUtc == null)));
+        Assert.Contains(
+            change switch { "role" => "role-changed", "disable" => "disabled", _ => "password-reset" },
+            await AuditKindsAsync(ann.Id));
+    }
+
+    /// <summary>Gives every request its own abort token, and cancels it when armed and revocation starts.</summary>
+    private sealed class AbortOnRevoke : IStartupFilter
+    {
+        private CancellationTokenSource? _current;
+
+        public bool Armed { get; set; }
+
+        public bool Fired { get; private set; }
+
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
+        {
+            app.Use(async (context, call) =>
+            {
+                using var aborted = new CancellationTokenSource();
+                _current = aborted;
+                context.RequestAborted = aborted.Token;
+                await call(context);
+            });
+            next(app);
+        };
+
+        public void FireIfArmed()
+        {
+            if (Armed)
+            {
+                Armed = false;
+                Fired = true;
+                _current?.Cancel();
+            }
+        }
+    }
+
+    /// <summary>The contexts <see cref="RefreshTokenService"/> uses: opening one is the moment revocation starts.</summary>
+    private sealed class AbortingContexts(IDbContextFactory<QbAutopostDbContext> inner, AbortOnRevoke abort)
+        : IDbContextFactory<QbAutopostDbContext>
+    {
+        public QbAutopostDbContext CreateDbContext() => inner.CreateDbContext();
+
+        public Task<QbAutopostDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
+        {
+            abort.FireIfArmed();
+            return inner.CreateDbContextAsync(cancellationToken);
+        }
     }
 
     /// <summary>

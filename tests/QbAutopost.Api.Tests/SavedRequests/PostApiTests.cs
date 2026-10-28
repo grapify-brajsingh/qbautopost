@@ -242,6 +242,65 @@ public sealed class PostApiTests : IDisposable
         Assert.Equal(AttemptOutcome.Unknown, Assert.Single(await AttemptsAsync(id)).Outcome);
     }
 
+    /// <summary>
+    /// R31: QuickBooks created the transaction but echoed another amount, so G5 holds it as <c>amount-mismatch</c> and
+    /// the post is <c>failed</c>. The transaction exists, and G4 matches on amount, so a re-post would double-post: the
+    /// request locks as unknown and the second post is refused without a write.
+    /// </summary>
+    [Fact]
+    public async Task Should_MarkUnknown_When_QuickBooksEchoesAnotherAmount()
+    {
+        var id = await SaveAsync(SyncPostFixtures.PostedOneRow);
+        Gateway.MisstateAmountLine = 1;
+        using var editor = _host.User(DashboardRoles.Editor);
+
+        var (response, body) = await PostAsync(editor, id);
+
+        using (response)
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("failed", body.GetProperty("status").GetString());
+            Assert.Equal("amount-mismatch", body.GetProperty("held")[0].GetProperty("reason").GetString());
+            Assert.Equal("unknown", body.GetProperty("savedRequestStatus").GetString());
+        }
+
+        Assert.Equal(SavedRequestStatus.Unknown, await StatusAsync(id));
+        Assert.Equal(AttemptOutcome.Unknown, Assert.Single(await AttemptsAsync(id)).Outcome);
+        Assert.Single(Gateway.Company.Transactions);
+
+        Gateway.MisstateAmountLine = null;
+        var (again, problem) = await PostAsync(editor, id);
+        using (again)
+        {
+            Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
+            Assert.Equal("not-postable", problem.GetProperty("type").GetString());
+        }
+
+        Assert.Single(Gateway.Writes);
+    }
+
+    /// <summary>R31: QuickBooks refused the add with a non-zero status, so nothing was created and the request is pending again.</summary>
+    [Fact]
+    public async Task Should_ReturnToPending_When_QuickBooksRejectsEveryRow()
+    {
+        var id = await SaveAsync(SyncPostFixtures.PostedOneRow);
+        Gateway.RejectLine = 1;
+        using var editor = _host.User(DashboardRoles.Editor);
+
+        var (response, body) = await PostAsync(editor, id);
+
+        using (response)
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("failed", body.GetProperty("status").GetString());
+            Assert.Equal("pending", body.GetProperty("savedRequestStatus").GetString());
+        }
+
+        Assert.Equal(SavedRequestStatus.Pending, await StatusAsync(id));
+        Assert.Equal(AttemptOutcome.Failed, Assert.Single(await AttemptsAsync(id)).Outcome);
+        Assert.Empty(Gateway.Company.Transactions);
+    }
+
     /// <summary>R3: an exception once the worker has started the post may follow a send, so it is unknown, never pending.</summary>
     [Fact]
     public async Task Should_MarkUnknown_When_TheEngineThrowsAfterTheWorkStarted()
@@ -597,6 +656,34 @@ public sealed class PostApiTests : IDisposable
         Assert.Equal(AttemptOutcome.Unknown, Assert.Single(await AttemptsAsync(id)).Outcome);
         Assert.Single(Gateway.Writes);
         Assert.Empty(restarted.Gateway.Requests);
+    }
+
+    /// <summary>
+    /// M10 review: the first try's commit landed but its acknowledgement was lost. The retry finds the attempt already
+    /// completed with the same outcome, which is success: the real status is answered and no evidence file is written.
+    /// </summary>
+    [Fact]
+    public async Task Should_AnswerTheRecordedStatus_When_TheFirstRecordingLandedButItsAcknowledgementWasLost()
+    {
+        var id = await SaveAsync(SyncPostFixtures.PostedOneRow);
+        Store.LoseCompleteAcknowledgements = 1;
+        using var editor = _host.User(DashboardRoles.Editor);
+
+        var (response, body) = await PostAsync(editor, id);
+
+        string postId;
+        using (response)
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("posted", body.GetProperty("savedRequestStatus").GetString());
+            postId = body.GetProperty("postId").GetString()!;
+        }
+
+        Assert.Equal(1, Store.CompleteCalls);
+        Assert.Equal(SavedRequestStatus.Posted, await StatusAsync(id));
+        Assert.Equal(AttemptOutcome.Posted, Assert.Single(await AttemptsAsync(id)).Outcome);
+        Assert.False(File.Exists(Path.Combine(new ApiBatchStore(BatchesRoot).FolderOf(postId), "saved-request.json")));
+        Assert.False(Directory.Exists(Path.Combine(BatchesRoot, "saved-requests")));
     }
 
     /// <summary>

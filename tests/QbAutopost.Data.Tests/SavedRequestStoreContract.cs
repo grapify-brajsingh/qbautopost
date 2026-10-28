@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using QbAutopost.Core.Api;
@@ -120,6 +121,54 @@ public abstract class SavedRequestStoreContract
         Assert.True(v1.Readable);
         Assert.Empty(v1.Changes);
         Assert.Equal(PayloadCanonicalizer.Canonicalize(JsonDocument.Parse(body).RootElement), PayloadCanonicalizer.Canonicalize(v1.Payload));
+    }
+
+    /// <summary>
+    /// R33: numeric(18,2) holds less than 1e16. A larger control total is NULL in the column on every store, and the
+    /// payload keeps the caller's number (validation flags the mismatch, CLAUDE.md rule 3).
+    /// </summary>
+    [ContractTheory]
+    [InlineData("10000000000000000")]
+    [InlineData("-10000000000000000")]
+    [InlineData("9999999999999999.995")]
+    [InlineData("1E+20")]
+    public async Task Should_StoreNullControlTotal_When_ItDoesNotFitTheColumn(string controlTotal)
+    {
+        var store = CreateStore();
+        var body = BodyOf().Replace("\"controlTotal\":10.00", $"\"controlTotal\":{controlTotal}", StringComparison.Ordinal);
+
+        var created = (await store.CreateAsync(NewRequest(body), default)).Record;
+
+        var r = (await store.GetAsync(created.Id, default))!;
+        Assert.Null(r.ControlTotal);
+        Assert.Equal(
+            decimal.Parse(controlTotal, NumberStyles.Float, CultureInfo.InvariantCulture),
+            r.CurrentPayload.GetProperty("controlTotal").GetDecimal());
+        Assert.Null(Assert.Single((await store.ListAsync(Query(), default)).Items).ControlTotal);
+    }
+
+    [ContractFact]
+    public async Task Should_StoreNullControlTotal_When_AnEditDoesNotFitTheColumn()
+    {
+        var store = CreateStore();
+        var created = (await store.CreateAsync(NewRequest(), default)).Record;
+        var body = BodyOf().Replace("\"controlTotal\":10.00", "\"controlTotal\":10000000000000000", StringComparison.Ordinal);
+
+        var edited = await store.AppendVersionAsync(created.Id, created.RowVersion, NewVersionOf(body), default);
+
+        Assert.Equal(MutationKind.Ok, edited.Kind);
+        Assert.Null((await store.GetAsync(created.Id, default))!.ControlTotal);
+    }
+
+    [ContractFact]
+    public async Task Should_KeepTheLargestControlTotal_When_ItFitsTheColumn()
+    {
+        var store = CreateStore();
+        var body = BodyOf().Replace("\"controlTotal\":10.00", "\"controlTotal\":9999999999999999.99", StringComparison.Ordinal);
+
+        var created = (await store.CreateAsync(NewRequest(body), default)).Record;
+
+        Assert.Equal(9999999999999999.99m, (await store.GetAsync(created.Id, default))!.ControlTotal);
     }
 
     [ContractFact]

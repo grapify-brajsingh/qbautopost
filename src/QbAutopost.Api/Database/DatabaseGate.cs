@@ -8,7 +8,7 @@ namespace QbAutopost.Api.Database;
 /// The one place that knows whether the database feature may be used (spec 5.5, 10.6, 10.7).
 /// <para>
 /// It checks the schema once at start, and again only when something asks: a store call that throws
-/// <see cref="NpgsqlException"/> or <see cref="TimeoutException"/> (see <see cref="IsDatabaseFailure"/>), an explicit
+/// connection, timeout or transient failure (see <see cref="IsDatabaseFailure"/>), an explicit
 /// <see cref="RefreshAsync"/>, or a request that finds the gate not ready with a check older than
 /// <see cref="StaleAfter"/> (<see cref="RefreshSharedAsync"/>). There is no timer (CLAUDE.md).
 /// </para>
@@ -78,9 +78,15 @@ public sealed class DatabaseGate
     public bool Checked => _checked;
 
     /// <summary>True when a check is configured, the gate is not ready, and its last check is older than <see cref="StaleAfter"/>.</summary>
-    public bool NeedsLookAgain =>
+    public bool NeedsLookAgain => !IsReady && IsStale;
+
+    /// <summary>
+    /// True when a check is configured and has not run, or its last check, in any state, is older than
+    /// <see cref="StaleAfter"/>. <c>/health/database</c> refreshes on this, so polling it costs at most one check per
+    /// <see cref="StaleAfter"/> and still notices an outage that began while the gate was Ready.
+    /// </summary>
+    public bool IsStale =>
         _check is not null
-        && !IsReady
         && (!_checked || _utcNow() - new DateTime(Interlocked.Read(ref _lastCheckedTicks), DateTimeKind.Utc) > StaleAfter);
 
     /// <summary>Checks the database now (and recovers in-flight requests first, once). A no-op when nothing is configured.</summary>
@@ -168,18 +174,44 @@ public sealed class DatabaseGate
             _ => null,
         });
 
-    /// <summary>True when <paramref name="ex"/>, or anything it wraps, says the database could not be reached.</summary>
+    /// <summary>
+    /// True when <paramref name="ex"/>, or anything it wraps, says the database could not be reached: a connection
+    /// failure (an <see cref="NpgsqlException"/> that is not a <see cref="PostgresException"/>), a server error
+    /// PostgreSQL marks transient (<see cref="PostgresException.IsTransient"/>: shutdown, connection, resources,
+    /// serialisation), or a <see cref="TimeoutException"/>. R33: any other <see cref="PostgresException"/> is the
+    /// server refusing one statement (a value it cannot store, a constraint), not an outage, so it is false.
+    /// </summary>
     public static bool IsDatabaseFailure(Exception ex)
     {
         for (Exception? e = ex; e is not null; e = e.InnerException)
         {
-            if (e is NpgsqlException or TimeoutException)
+            switch (e)
             {
-                return true;
+                case PostgresException postgres:
+                    return postgres.IsTransient;
+                case NpgsqlException or TimeoutException:
+                    return true;
             }
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// The SqlState of the first <see cref="PostgresException"/> in <paramref name="ex"/>, or null. R33: this, never
+    /// the message text, is what a refused statement logs, because the text can echo the data that was refused.
+    /// </summary>
+    public static string? SqlStateOf(Exception ex)
+    {
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is PostgresException postgres)
+            {
+                return postgres.SqlState;
+            }
+        }
+
+        return null;
     }
 
     private void Apply(DatabaseState next, string? reason)

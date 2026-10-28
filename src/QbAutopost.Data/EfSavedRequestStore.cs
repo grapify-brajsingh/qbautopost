@@ -67,7 +67,7 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
             Status = SavedRequestStatus.Pending,
             Source = request.Source,
             Reference = parsed?.Reference,
-            ControlTotal = parsed?.ControlTotal,
+            ControlTotal = SavedRequestColumns.ControlTotalOf(request.Read),
             TransactionCount = parsed?.Transactions.Count ?? 0,
             CurrentVersion = 1,
             OriginalBody = request.OriginalBody,
@@ -287,7 +287,7 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
             var parsed = version.Read.Request;
             r.CurrentVersion = number;
             r.Reference = parsed?.Reference;
-            r.ControlTotal = parsed?.ControlTotal;
+            r.ControlTotal = SavedRequestColumns.ControlTotalOf(version.Read);
             r.TransactionCount = parsed?.Transactions.Count ?? 0;
             r.CanonicalSha256 = version.CanonicalSha256;
             r.NeedsAttention = NeedsAttention(version.Read, version.Snapshot);
@@ -397,8 +397,12 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
                         db, id, SavedRequestEvents.PostStarted,
                         new JsonObject { ["attemptId"] = attempt.Id, ["version"] = versionNumber }, nowUtc, actor);
                     await db.SaveChangesAsync(ct);
+                    // The record is read inside the claim's transaction: if the read fails the claim rolls back and the
+                    // request is pending again, rather than committed as posting with nothing running for it.
+                    var record = await LoadAsync(db, id, ct)
+                                 ?? throw new InvalidOperationException($"Saved request {id} vanished inside its own claim.");
                     await tx.CommitAsync(ct);
-                    return new ClaimResult(ClaimKind.Claimed, attempt.Id, versionNumber, await LoadAsync(db, id, ct));
+                    return new ClaimResult(ClaimKind.Claimed, attempt.Id, versionNumber, record);
                 }
 
                 await tx.RollbackAsync(ct);

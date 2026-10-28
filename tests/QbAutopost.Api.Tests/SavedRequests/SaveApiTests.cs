@@ -72,6 +72,36 @@ public sealed class SaveApiTests : IDisposable
         Assert.Equal(999.99m, (await StoredAsync(body.GetProperty("id").GetInt64())).ControlTotal);
     }
 
+    /// <summary>R33: jsonb cannot hold U+0000, so the save is refused up front, naming why, and nothing is stored.</summary>
+    [Theory]
+    [InlineData("n8n-nul-in-memo.json")]
+    [InlineData("n8n-nul-in-key.json")]
+    public async Task Should_Return400PayloadNotStorable_When_ThePayloadContainsUPlus0000(string fixture)
+    {
+        var (response, problem) = await _host.SaveAsync(SavedRequestTestHost.Fixture(fixture));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("payload-not-storable", problem.GetProperty("type").GetString());
+        Assert.Contains("contains U+0000, which the database cannot store", problem.GetProperty("detail").GetString());
+        Assert.Equal(0, (await Store.StatsAsync(CancellationToken.None)).Total);
+    }
+
+    /// <summary>R33: a control total numeric(18,2) cannot hold is saved, kept in the payload, NULL in the column, and flagged.</summary>
+    [Fact]
+    public async Task Should_SaveWithNullControlTotalColumn_When_ControlTotalOverflowsTheColumn()
+    {
+        var (response, body) = await _host.SaveAsync(SavedRequestTestHost.Fixture("n8n-control-total-overflow.json"));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.True(body.GetProperty("needsAttention").GetBoolean());
+        Assert.Contains(
+            body.GetProperty("validation").GetProperty("errors").EnumerateArray(),
+            e => e.GetString()!.StartsWith("control-total-mismatch", StringComparison.Ordinal));
+        var stored = await StoredAsync(body.GetProperty("id").GetInt64());
+        Assert.Null(stored.ControlTotal);
+        Assert.Equal(10000000000000000m, stored.CurrentPayload.GetProperty("controlTotal").GetDecimal());
+    }
+
     [Fact]
     public async Task Should_SaveWithNeedsAttention_When_DryRunPresent()
     {

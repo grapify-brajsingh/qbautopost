@@ -1,5 +1,4 @@
 using QbAutopost.Core.Jobs;
-using QbAutopost.Core.Models;
 
 namespace QbAutopost.Core.SavedRequests;
 
@@ -24,13 +23,13 @@ public static class AttemptOutcomes
         JobStatus.Posted => new(AttemptOutcome.Posted, SavedRequestStatus.Posted, 200),
         // Partial already locks the request, so a no-response row inside it changes nothing.
         JobStatus.Partial => new(AttemptOutcome.Partial, SavedRequestStatus.Partial, 200),
-        // Failed alone cannot tell "nothing landed" from "nothing confirmed": a no-response row means the qbXML was sent.
-        // SPEC-GAP T-1014: so does a busy row. It is only ever written when the write itself outlived the busy timeout
-        // (DirectPostRunner, JobPipeline: "may or may not have been applied"), which is no-response by another name.
-        JobStatus.Failed when ending.HeldReasons.Contains(HoldReasons.QuickBooksNoResponse)
-                              || ending.HeldReasons.Contains(HoldReasons.QuickBooksBusy) =>
-            new(AttemptOutcome.Unknown, SavedRequestStatus.Unknown, 200),
-        JobStatus.Failed => new(AttemptOutcome.Failed, SavedRequestStatus.Pending, 200),
+        // R31 (Q-93): failed alone cannot tell "nothing landed" from "nothing confirmed". It returns to pending only when
+        // every held row proves its add was never created (NothingSentReasons); no-response, busy, amount-mismatch, a
+        // status-0 rejection or any reason not on that list may have landed, and G4 matches on amount, so a re-post of it
+        // could double-post. A failed ending with no held row is unexplained, so it locks too.
+        JobStatus.Failed when ending.Held.Count > 0 && ending.Held.All(NothingSentReasons.Proves) =>
+            new(AttemptOutcome.Failed, SavedRequestStatus.Pending, 200),
+        JobStatus.Failed => new(AttemptOutcome.Unknown, SavedRequestStatus.Unknown, 200),
         // SPEC-GAP T-1002: a completed ending with no or a non-terminal status is unexplained; lock rather than allow a re-post.
         _ => new(AttemptOutcome.Unknown, SavedRequestStatus.Unknown, 200),
     };

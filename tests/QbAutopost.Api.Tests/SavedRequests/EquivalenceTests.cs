@@ -38,6 +38,7 @@ public sealed class EquivalenceTests
         "no-response",
         "unavailable",
         "busy-timeout",
+        "amount-mismatch",
     };
 
     /// <summary>The fixture a scenario sends, and what QuickBooks does with it.</summary>
@@ -50,6 +51,7 @@ public sealed class EquivalenceTests
             g => g.Throw = new QuickBooksCallException("ProcessRequest failed (0x80010105)", unchecked((int)0x80010105))),
         "unavailable" => (SyncPostFixtures.PostedOneRow, g => g.Throw = new QuickBooksUnavailableException("simulated")),
         "busy-timeout" => (SyncPostFixtures.PostedOneRow, g => g.Throw = new QuickBooksBusyException("simulated")),
+        "amount-mismatch" => (SyncPostFixtures.PostedOneRow, g => g.MisstateAmountLine = 1),
         _ => (name + ".json", _ => { }),
     };
 

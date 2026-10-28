@@ -104,9 +104,14 @@ public static class SavedRequestEndpoints
             return failure;
         }
 
-        if (!SavedRequestIntake.TryParseObject(raw!, out _))
+        if (!SavedRequestIntake.TryParseObject(raw!, out var payload))
         {
             return NotAJsonObject("The body must be one JSON object: the validate-and-post body (validate-and-post §4).");
+        }
+
+        if (SavedRequestIntake.NotStorableReason(payload) is { } notStorable)
+        {
+            return NotStorable(notStorable);
         }
 
         var key = http.Request.Headers[IdempotencyMiddleware.KeyHeader].ToString().Trim();
@@ -341,6 +346,11 @@ public static class SavedRequestEndpoints
             || !body.TryGetProperty("payload", out var payload) || payload.ValueKind != JsonValueKind.Object)
         {
             return NotAJsonObject("The body must be { \"payload\": { ...the validate-and-post body... }, \"note\": \"...\" }.");
+        }
+
+        if (SavedRequestIntake.NotStorableReason(payload) is { } notStorable)
+        {
+            return NotStorable(notStorable);
         }
 
         string? note = null;
@@ -782,6 +792,12 @@ public static class SavedRequestEndpoints
 
     private static IResult NotAJsonObject(string detail) =>
         Problem(StatusCodes.Status400BadRequest, "Not a JSON object", detail + " Nothing was saved.", "not-a-json-object");
+
+    /// <summary>R33: valid JSON the database cannot hold. Refused, not stored, and never answered as an outage.</summary>
+    private static IResult NotStorable(string reason) =>
+        Problem(
+            StatusCodes.Status400BadRequest, "Payload not storable",
+            $"The payload is valid JSON, but {reason}. Remove it and send again. Nothing was saved.", "payload-not-storable");
 
     private static IResult BadRequest(string title, string detail) =>
         Problem(StatusCodes.Status400BadRequest, title, detail, "invalid-request");

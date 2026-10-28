@@ -104,16 +104,67 @@ public sealed class DatabaseHealthTests : IDisposable
         Assert.Equal("unreachable", body.GetProperty("reason").GetString());
     }
 
+    /// <summary>M10 review: throttled like the filter (R13), so the check runs once its last one is over 10 s old.</summary>
     [Fact]
-    public async Task Should_NoticeTheDatabaseIsBack_When_HealthDatabaseIsAsked()
+    public async Task Should_NoticeTheDatabaseIsBack_When_HealthDatabaseIsAskedAfterTheThrottle()
     {
-        _factory.Gate.Set(DatabaseState.Unreachable);
         using var client = _factory.CreateAuthorizedClient();
+        await client.GetAsync("/health");
+        _factory.Gate.Set(DatabaseState.Unreachable);
+        _factory.GateClockOffset = DatabaseGate.StaleAfter + TimeSpan.FromSeconds(1);
 
         using var response = await client.GetAsync("/api/v1/health/database");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(DatabaseState.Ready, _factory.Gate.State);
+    }
+
+    /// <summary>M10 review: /health/database no longer checks on every call; a poll inside 10 s reads the last check.</summary>
+    [Fact]
+    public async Task Should_CheckOnce_When_HealthDatabaseIsAskedTwiceWithin10Seconds()
+    {
+        using var client = _factory.CreateAuthorizedClient();
+        await client.GetAsync("/health");
+        var before = _factory.SchemaChecks;
+
+        using var first = await client.GetAsync("/api/v1/health/database");
+        using var second = await client.GetAsync("/api/v1/health/database");
+
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        Assert.Equal(before, _factory.SchemaChecks);
+        _factory.GateClockOffset = DatabaseGate.StaleAfter + TimeSpan.FromSeconds(1);
+        using var third = await client.GetAsync("/api/v1/health/database");
+        Assert.Equal(before + 1, _factory.SchemaChecks);
+    }
+
+    /// <summary>M10 review: readiness used to report the gate as it was left, so an ended outage stayed "unreachable" for ever.</summary>
+    [Fact]
+    public async Task Should_NoticeTheDatabaseIsBackInReadiness_When_TheLastCheckIsOlderThan10Seconds()
+    {
+        using var client = _factory.CreateClient();
+        await client.GetAsync("/health");
+        _factory.Gate.Set(DatabaseState.Unreachable);
+        _factory.GateClockOffset = DatabaseGate.StaleAfter + TimeSpan.FromSeconds(1);
+
+        using var response = await client.GetAsync("/api/v1/health/ready");
+
+        var checks = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("checks").EnumerateArray();
+        Assert.True(Assert.Single(checks, c => c.GetProperty("name").GetString() == "database").GetProperty("ok").GetBoolean());
+        Assert.Equal(DatabaseState.Ready, _factory.Gate.State);
+    }
+
+    [Fact]
+    public async Task Should_NotCheckFromReadiness_When_TheLastCheckIsRecent()
+    {
+        using var client = _factory.CreateClient();
+        await client.GetAsync("/health");
+        _factory.Gate.Set(DatabaseState.Unreachable);
+        var before = _factory.SchemaChecks;
+
+        using var response = await client.GetAsync("/api/v1/health/ready");
+
+        Assert.Equal(before, _factory.SchemaChecks);
+        Assert.Equal(DatabaseState.Unreachable, _factory.Gate.State);
     }
 
     [Fact]

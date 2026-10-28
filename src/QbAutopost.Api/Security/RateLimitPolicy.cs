@@ -25,7 +25,7 @@ public enum RateLimitBucket
 /// <para>
 /// Two decisions are worth stating. The bucket comes from <see cref="ApiRoutes.IsIdempotent"/>, the same predicate
 /// that names the four mutating routes for T-909, so "what changes something" has one definition instead of two that
-/// drift. And the partition is the <i>caller</i>, not the address: a client behind a NAT must not be throttled by its
+/// drift, plus <see cref="ApiRoutes.IsSavedRequestPost"/>, the one posting route whose replay belongs to the store. And the partition is the <i>caller</i>, not the address: a client behind a NAT must not be throttled by its
 /// neighbours, and a caller moving between addresses must not win a fresh budget by doing so. Health is the
 /// exception and is per address, because it answers without a key at all.
 /// </para>
@@ -44,7 +44,11 @@ public static class RateLimitPolicy
 
         // Queueing a job counts as posting: it is slower to reach QuickBooks than a direct post, but it reaches it
         // just the same, and the cheaper bucket is the one that would have to be defended later.
-        return ApiRoutes.IsIdempotent(method, path) ? RateLimitBucket.Post : RateLimitBucket.Default;
+        // M10 review: the saved post moves money like validate-and-post, but its replay protection is the store's claim,
+        // not IdempotencyMiddleware, so it is named here rather than added to IsIdempotent.
+        return ApiRoutes.IsIdempotent(method, path) || ApiRoutes.IsSavedRequestPost(method, path)
+            ? RateLimitBucket.Post
+            : RateLimitBucket.Default;
     }
 
     public static int PermitsFor(RateLimitBucket bucket, RateLimitSettings limits, ApiClient? client) => bucket switch
