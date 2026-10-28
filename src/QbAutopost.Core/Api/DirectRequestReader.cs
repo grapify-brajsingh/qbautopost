@@ -62,6 +62,12 @@ public sealed partial class DirectRequestReader(DirectLimits limits)
             errors.AddRange(ControlTotal(request, rows));
         }
 
+        var notPosted = request.NotPosted ?? new HashSet<int>();
+        if (rows.Count > 0 && Enumerable.Range(0, rows.Count).All(notPosted.Contains))
+        {
+            errors.Add("nothing-to-post: every row is marked post: false; nothing would be sent");
+        }
+
         if (errors.Count > 0)
         {
             // Nothing is read out of a request that will be refused: partial results invite partial posting.
@@ -70,9 +76,17 @@ public sealed partial class DirectRequestReader(DirectLimits limits)
 
         var lines = new List<DirectLine>();
         var held = new List<DirectRowIssue>();
+        var setAside = new List<DirectRowIssue>();
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
+            if (notPosted.Contains(i))
+            {
+                // Before Hold: a row the caller chose not to post is not held for being old, large or unnamed.
+                setAside.Add(new DirectRowIssue(i, row.ExternalId, SkipReasons.NotToPost));
+                continue;
+            }
+
             if (Hold(row, today) is { } reason)
             {
                 held.Add(new DirectRowIssue(i, row.ExternalId, reason));
@@ -83,7 +97,7 @@ public sealed partial class DirectRequestReader(DirectLimits limits)
                 i, row.ExternalId, row.Kind, row.Account.Trim(), Trimmed(row.LineAccount), Trimmed(row.Payee), ToLine(row, request, i)));
         }
 
-        return new DirectReadResult([], lines, held);
+        return new DirectReadResult([], lines, held) { NotPosted = setAside };
     }
 
     /// <summary>

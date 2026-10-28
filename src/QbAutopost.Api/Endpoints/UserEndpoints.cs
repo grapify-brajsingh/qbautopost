@@ -8,6 +8,7 @@ using Microsoft.Extensions.Options;
 using QbAutopost.Api.Auth;
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Database;
+using QbAutopost.Api.Endpoints.V2;
 using QbAutopost.Api.Security;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Security;
@@ -96,11 +97,24 @@ public static class UserEndpoints
 
     private const int DefaultPageSize = 25;
 
-    public static IEndpointRouteBuilder MapUserEndpoints(this IEndpointRouteBuilder v1)
+    /// <param name="flavor">
+    /// T-1109: the surface being mapped. T-1115 (dashboard v2 spec 12): under <see cref="ApiFlavor.V2"/>,
+    /// <c>GET /users</c> takes the repeatable <c>status</c> filter and its rows carry <c>status</c>
+    /// (<see cref="UserViewV2"/>), and <c>POST /users</c> answers a v2 <c>Location</c>. v1 is unchanged.
+    /// </param>
+    public static IEndpointRouteBuilder MapUserEndpoints(this IEndpointRouteBuilder v1, ApiFlavor flavor = ApiFlavor.V1)
     {
         var users = v1.MapGroup("/users").RequireDatabase();
-        users.MapGet("/", ListAsync);
-        users.MapPost("/", CreateAsync);
+        users.MapGet("/", (HttpContext http, IOptions<AppSettings> settings, IClock clock, CancellationToken ct) =>
+            ListAsync(http, settings, clock, flavor, ct));
+        users.MapPost("/", (
+                HttpContext http,
+                [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] CreateUserRequest? body,
+                IOptions<AppSettings> settings,
+                IClock clock,
+                ILoggerFactory loggers,
+                CancellationToken ct) =>
+            CreateAsync(http, body, settings, clock, loggers, flavor, ct));
         users.MapGet("/{id}", GetAsync);
         users.MapPatch("/{id}", PatchAsync);
         users.MapPost("/{id}/reset-password", ResetPasswordAsync);
@@ -111,7 +125,7 @@ public static class UserEndpoints
 
     // ---- list and read ----------------------------------------------------------------------------------------------
 
-    private static async Task<IResult> ListAsync(HttpContext http, IOptions<AppSettings> settings, IClock clock, CancellationToken ct)
+    private static async Task<IResult> ListAsync(HttpContext http, IOptions<AppSettings> settings, IClock clock, ApiFlavor flavor, CancellationToken ct)
     {
         var query = http.Request.Query;
         string? role = null;
@@ -131,6 +145,17 @@ public static class UserEndpoints
             disabled = parsed;
         }
 
+        // Spec 12: v2 only. Repeatable, OR'd within; each value exactly one of UserStatuses.All, else 400.
+        string[] statuses = [];
+        if (flavor == ApiFlavor.V2 && query.TryGetValue("status", out var statusValues))
+        {
+            statuses = statusValues.Select(v => v ?? "").ToArray();
+            if (statuses.Any(v => !UserStatuses.IsKnown(v)))
+            {
+                return BadRequest("Unknown status", $"status must be one of {string.Join(", ", UserStatuses.All)}.");
+            }
+        }
+
         var max = Math.Max(1, settings.Value.SavedRequests.MaxListPageSize);
         if (Paging(query, max) is not { } paging)
         {
@@ -141,6 +166,12 @@ public static class UserEndpoints
 
         var db = http.RequestServices.GetRequiredService<QbAutopostDbContext>();
         var users = db.Users.AsNoTracking();
+        var now = clock.UtcNow;
+        if (statuses.Length > 0)
+        {
+            users = WithStatus(users, statuses, now);
+        }
+
         if (role is not null)
         {
             var normalized = role.ToUpperInvariant();
@@ -162,9 +193,32 @@ public static class UserEndpoints
         var total = await users.CountAsync(ct);
         var rows = await users.OrderBy(u => u.NormalizedEmail).ThenBy(u => u.Id).Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(ct);
         var roles = await RolesOfAsync(db, rows.Select(u => u.Id).ToList(), ct);
-        var now = clock.UtcNow;
+        if (flavor == ApiFlavor.V2)
+        {
+            var itemsV2 = rows.Select(u => UserViewV2.Of(u, RoleOf(roles, u.Id), now)).ToList();
+            return Results.Ok(new UserPageV2(itemsV2, page, pageSize, total));
+        }
+
         var items = rows.Select(u => UserView.Of(u, RoleOf(roles, u.Id), now)).ToList();
         return Results.Ok(new UserPage(items, page, pageSize, total));
+    }
+
+    /// <summary>
+    /// Spec 12: the users whose status (<see cref="UserStatuses.Of"/>, the same order and the same <paramref name="nowUtc"/>
+    /// as the rows' <c>status</c>) is any of <paramref name="statuses"/>.
+    /// </summary>
+    private static IQueryable<AppUser> WithStatus(IQueryable<AppUser> users, IReadOnlyCollection<string> statuses, DateTime nowUtc)
+    {
+        var now = new DateTimeOffset(nowUtc, TimeSpan.Zero);
+        var disabled = statuses.Contains(UserStatuses.Disabled);
+        var locked = statuses.Contains(UserStatuses.Locked);
+        var mustChange = statuses.Contains(UserStatuses.MustChangePassword);
+        var active = statuses.Contains(UserStatuses.Active);
+        return users.Where(u =>
+            (disabled && u.IsDisabled)
+            || (locked && !u.IsDisabled && u.LockoutEnd != null && u.LockoutEnd > now)
+            || (mustChange && !u.IsDisabled && (u.LockoutEnd == null || u.LockoutEnd <= now) && u.MustChangePassword)
+            || (active && !u.IsDisabled && (u.LockoutEnd == null || u.LockoutEnd <= now) && !u.MustChangePassword));
     }
 
     private static async Task<IResult> GetAsync(HttpContext http, string id, IClock clock, CancellationToken ct)
@@ -184,10 +238,11 @@ public static class UserEndpoints
 
     private static async Task<IResult> CreateAsync(
         HttpContext http,
-        [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] CreateUserRequest? body,
+        CreateUserRequest? body,
         IOptions<AppSettings> settings,
         IClock clock,
         ILoggerFactory loggers,
+        ApiFlavor flavor,
         CancellationToken ct)
     {
         var email = body?.Email?.Trim() ?? "";
@@ -234,7 +289,8 @@ public static class UserEndpoints
         NoStore(http);
         var view = UserWithTemporaryPassword.Of(UserView.Of(user, role, now), temporary);
         http.Response.Headers.ETag = Etag(user);
-        return Results.Created($"{ApiRoutes.V1Prefix}/users/{user.Id}", view);
+        var prefix = flavor == ApiFlavor.V2 ? ApiRoutes.V2Prefix : ApiRoutes.V1Prefix;
+        return Results.Created($"{prefix}/users/{user.Id}", view);
     }
 
     // ---- patch ------------------------------------------------------------------------------------------------------

@@ -199,16 +199,30 @@ public sealed class DirectPlanner(DirectLimits limits)
         IReadOnlyList<DirectRow> submitted, DirectReadResult read, IReadOnlyDictionary<int, MappedTxn> mapped)
     {
         var held = read.Held.ToDictionary(h => h.Index);
+        var notPosted = read.NotPosted.ToDictionary(h => h.Index);
         var rows = new List<DirectPlanRow>(submitted.Count);
         for (var index = 0; index < submitted.Count; index++)
         {
-            rows.Add(held.TryGetValue(index, out var issue)
-                ? ReaderHeldRow(index, submitted[index], issue)
+            rows.Add(
+                notPosted.TryGetValue(index, out var aside) ? NotPostedRow(index, submitted[index], aside)
+                : held.TryGetValue(index, out var issue) ? ReaderHeldRow(index, submitted[index], issue)
                 : MappedRow(index, submitted[index], mapped[index]));
         }
 
         return rows;
     }
+
+    /// <summary>A row the caller marked <c>post: false</c>: reported as sent, skipped, never mapped or held.</summary>
+    private static DirectPlanRow NotPostedRow(int index, DirectRow row, DirectRowIssue issue) => new()
+    {
+        Index = index,
+        ExternalId = issue.ExternalId,
+        Outcome = DirectOutcome.Skipped,
+        Kind = row.Kind,
+        Account = row.Account,
+        Amount = row.Amount,
+        Reason = SkipReasons.NotToPost,
+    };
 
     /// <summary>A row the reader would not turn into a line at all (over the cap, outside the window, no account).</summary>
     private static DirectPlanRow ReaderHeldRow(int index, DirectRow row, DirectRowIssue issue) => new()

@@ -9,6 +9,10 @@ namespace QbAutopost.Core.SavedRequests;
 /// </summary>
 public interface ISavedRequestStore
 {
+    // Dashboard v2 columns (T-1105): create and append keep skip_count from the stored payload; every snapshot write
+    // stores the v1 snapshot and the v2 one (the v1 copy when none is given), and needs_attention_v2 and
+    // problem_count with it (see SavedRequestColumns.NeedsAttentionV2).
+
     /// <summary>
     /// Saves version 1 (and its row fingerprints, kept per version for duplicate detection) and the <c>created</c> event (plus <c>flagged-duplicate</c> when the duplicate is flagged).
     /// The same source and idempotency key with the same original body replays the existing record; with a different
@@ -43,13 +47,15 @@ public interface ISavedRequestStore
     Task<MutationResult> AppendVersionAsync(long id, int expectedRowVersion, NewVersion version, CancellationToken ct);
 
     /// <summary>
-    /// Stores the validation snapshot and duplicate flag of the current version; writes one <c>validated</c> event.
+    /// Stores both validation snapshots (v1 in <paramref name="snapshot"/>, v2 in <paramref name="snapshotV2"/>) and
+    /// the duplicate flag of the current version; writes one <c>validated</c> event.
     /// Bumps the row version (it is an update, so an ETag held by the dashboard goes stale).
     /// <see cref="MutationKind.WrongStatus"/> unless pending;
-    /// <see cref="MutationKind.Stale"/> when the snapshot is for another version than the current one.
+    /// <see cref="MutationKind.Stale"/> when either snapshot is for another version than the current one.
     /// </summary>
     Task<MutationResult> SetValidationAsync(
-        long id, ValidationSnapshot snapshot, DuplicateMatch duplicate, string actor, DateTime nowUtc, CancellationToken ct);
+        long id, ValidationSnapshot snapshot, ValidationSnapshot snapshotV2, DuplicateMatch duplicate, string actor,
+        DateTime nowUtc, CancellationToken ct);
 
     /// <summary>
     /// Moves <paramref name="from"/> to <paramref name="to"/> (discard, restore), bumps the row version, and writes

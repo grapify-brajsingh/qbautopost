@@ -1,0 +1,11 @@
+{
+  "reference": "v2-mixed-ids-2026-08",
+  "controlTotal": 336.90,
+  "transactions": [
+    { "externalId": "row-2", "kind": "Check", "date": "2026-08-05", "amount": 184.32, "account": "Chase Checking 4521", "payee": "HOME DEPOT #6412", "memo": "HOME DEPOT #6412 PURCHASE", "last4": "4521" },
+    { "kind": "Check", "date": "2026-08-05", "amount": 99.10, "account": "Chase Checking 4521", "payee": "SHELL OIL 4491", "memo": "SHELL OIL 4491", "last4": "4521" },
+    { "externalId": null, "kind": "Check", "date": "2026-08-06", "amount": 25.00, "account": "Chase Checking 4521", "payee": "CITY PARKING", "memo": "CITY PARKING", "last4": "4521" },
+    { "externalId": "", "kind": "Check", "date": "2026-08-06", "amount": 16.48, "account": "Chase Checking 4521", "payee": "OFFICE DEPOT", "memo": "OFFICE DEPOT", "last4": "4521" },
+    { "externalId": "n8n-77", "kind": "Check", "date": "2026-08-07", "amount": 12.00, "account": "Chase Checking 4521", "payee": "USPS", "memo": "USPS POSTAGE", "last4": "4521" }
+  ]
+}

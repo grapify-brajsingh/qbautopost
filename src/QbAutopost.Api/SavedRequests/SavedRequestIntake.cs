@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.Options;
 using QbAutopost.Api.Configuration;
+using QbAutopost.Api.Endpoints;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Api;
 using QbAutopost.Core.SavedRequests;
@@ -103,8 +104,15 @@ public sealed class SavedRequestIntake(
     /// <summary>
     /// Spec 6.1 step 3 onwards, for a body <see cref="TryParseObject"/> accepted. The source and the author are the
     /// caller (spec 5.3); a <c>createdBy</c> in the body is just another unknown field, kept and ignored.
+    /// <para>
+    /// Dashboard v2 (spec 5, 7, 7.1): a v2 save gives rows without an <c>externalId</c> a <c>row-&lt;n&gt;</c> id
+    /// before version 1 is written, reads <c>email</c> and <c>pushId</c> from the body as received, and hashes the
+    /// assigned payload by the v2 rules. The original body is kept byte for byte either way. A v1 save does none of
+    /// that. Both store the v2 snapshot beside the v1 one (spec 6.4); v1 answers never show it.
+    /// </para>
     /// </summary>
-    public async Task<CreateResult> SaveAsync(string rawBody, string? idempotencyKey, Caller caller, CancellationToken ct)
+    public async Task<CreateResult> SaveAsync(
+        string rawBody, string? idempotencyKey, Caller caller, CancellationToken ct, ApiFlavor flavor = ApiFlavor.V1)
     {
         if (!TryParseObject(rawBody, out var payload))
         {
@@ -113,26 +121,40 @@ public sealed class SavedRequestIntake(
 
         GuardStorable(payload);
 
+        var v2 = flavor == ApiFlavor.V2;
+        var version1 = v2 ? ExternalIdAssigner.AssignOnSave(payload) : payload;
+        var metadata = v2 ? SaveMetadataReader.Read(payload) : SaveMetadata.None;
+
         var now = clock.UtcNow;
-        var read = SavedPayloadReader.Read(payload);
-        var snapshot = validator.Validate(read, 1, now);
-        var canonical = PayloadCanonicalizer.Sha256(payload);
+        var read = SavedPayloadReader.Read(version1);
+        var (snapshot, snapshotV2) = validator.ValidateBoth(read, NotPostedRows.Read(version1), 1, now);
+        var canonical = PayloadCanonicalizer.Sha256(version1, v2 ? PayloadRules.V2 : PayloadRules.V1);
         var fingerprints = Fingerprints(read, now);
         var duplicate = await DetectAsync(canonical, read, fingerprints, null, now, ct);
 
         return await store.CreateAsync(
             new NewSavedRequest(
-                SourceOf(caller), caller.Actor, rawBody, payload, read, canonical, fingerprints, idempotencyKey,
-                snapshot, duplicate, now),
+                SourceOf(caller), caller.Actor, rawBody, version1, read, canonical, fingerprints, idempotencyKey,
+                snapshot, duplicate, now)
+            {
+                Metadata = metadata,
+                SnapshotV2 = snapshotV2,
+            },
             ct);
     }
 
     /// <summary>
     /// Spec 6.3: a full replacement payload becomes version n+1 with its change list. The store decides not found,
     /// stale, wrong status and unchanged, in that order, atomically.
+    /// <para>
+    /// Dashboard v2 (spec 6.4, 7, 7.1): a v2 edit gives rows without an <c>externalId</c> an <c>edit&lt;v&gt;-&lt;n&gt;</c>
+    /// id, and hashes and diffs the assigned payload by the v2 rules. A v1 edit does none of that. Both store the v2
+    /// snapshot beside the v1 one, which is computed exactly as before.
+    /// </para>
     /// </summary>
     public async Task<MutationResult> EditAsync(
-        long id, int expectedRowVersion, JsonElement payload, string? note, Caller caller, CancellationToken ct)
+        long id, int expectedRowVersion, JsonElement payload, string? note, Caller caller, CancellationToken ct,
+        ApiFlavor flavor = ApiFlavor.V1)
     {
         var current = await store.GetAsync(id, ct);
         if (current is null)
@@ -140,22 +162,33 @@ public sealed class SavedRequestIntake(
             return new MutationResult(MutationKind.NotFound, null);
         }
 
+        var v2 = flavor == ApiFlavor.V2;
+        var number = current.CurrentVersion + 1;
+        var next = v2 ? ExternalIdAssigner.AssignOnEdit(payload, number) : payload;
+        var rules = v2 ? PayloadRules.V2 : PayloadRules.V1;
+
         var now = clock.UtcNow;
-        var read = SavedPayloadReader.Read(payload);
-        var snapshot = validator.Validate(read, current.CurrentVersion + 1, now, id);
-        var canonical = PayloadCanonicalizer.Sha256(payload);
+        var read = SavedPayloadReader.Read(next);
+        var (snapshot, snapshotV2) = validator.ValidateBoth(read, NotPostedRows.Read(next), number, now, id);
+        var canonical = PayloadCanonicalizer.Sha256(next, rules);
         var fingerprints = Fingerprints(read, now);
         var duplicate = await DetectAsync(canonical, read, fingerprints, id, now, ct);
-        var changes = PayloadDiff.Compute(current.CurrentPayload, payload);
+        var changes = PayloadDiff.Compute(current.CurrentPayload, next, rules);
 
         return await store.AppendVersionAsync(
             id,
             expectedRowVersion,
-            new NewVersion(payload, read, canonical, fingerprints, changes, note, snapshot, duplicate, caller.Actor, now),
+            new NewVersion(next, read, canonical, fingerprints, changes, note, snapshot, duplicate, caller.Actor, now)
+            {
+                SnapshotV2 = snapshotV2,
+            },
             ct);
     }
 
-    /// <summary>Spec 6.4: re-runs validation and the duplicate rules for the current version and stores the snapshot.</summary>
+    /// <summary>
+    /// Spec 6.4: re-runs validation and the duplicate rules for the current version and stores both snapshots. The
+    /// flavor of the route does not change what is stored; v1 and v2 differ only in which snapshot they show.
+    /// </summary>
     public async Task<MutationResult> RevalidateAsync(long id, Caller caller, CancellationToken ct)
     {
         var current = await store.GetAsync(id, ct);
@@ -166,11 +199,12 @@ public sealed class SavedRequestIntake(
 
         var now = clock.UtcNow;
         var read = SavedPayloadReader.Read(current.CurrentPayload);
-        var snapshot = validator.Validate(read, current.CurrentVersion, now, id);
+        var (snapshot, snapshotV2) = validator.ValidateBoth(
+            read, NotPostedRows.Read(current.CurrentPayload), current.CurrentVersion, now, id);
         var fingerprints = Fingerprints(read, now);
         var duplicate = await DetectAsync(current.CanonicalSha256, read, fingerprints, id, now, ct);
 
-        return await store.SetValidationAsync(id, snapshot, duplicate, caller.Actor, now, ct);
+        return await store.SetValidationAsync(id, snapshot, snapshotV2, duplicate, caller.Actor, now, ct);
     }
 
     /// <summary>The routes answer <c>400 payload-not-storable</c> before this; reaching the store with such a payload is a bug.</summary>

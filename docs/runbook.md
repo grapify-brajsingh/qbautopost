@@ -619,3 +619,88 @@ caller has its own key.
 | `apply-migrations.ps1` says the API is running | Stop the API first; it never migrates under a live app |
 | `permission denied for table ...` in the log | `grants.sql` was not re-applied after a migration: run `apply-migrations.ps1` again |
 | Dump too old in the server check | Run the task (`Start-ScheduledTask -TaskName QbAutopostPostgresBackup`) and read `C:\qb-autopost\logs\backup-postgres-*.log` |
+
+## 11. The dashboard on the office network (T-1117)
+
+The dashboard is a set of static files that the API itself serves at `/`, beside the API. Nothing else runs: no web server,
+no proxy. Spec: `docs/saved-requests-dashboard-v2.md` section 13. Checklist: `docs/testing/T-1117.server-checklist.md`.
+
+### 11.1 Install the files
+
+```powershell
+.\deploy\install-dashboard.ps1 -Source <built dashboard dist folder> -WhatIf     # read the plan
+.\deploy\install-dashboard.ps1 -Source <built dashboard dist folder>
+```
+
+It copies to `C:\qb-autopost\dashboard.new`, checks `index.html` is there, then renames: the live folder becomes
+`dashboard.old`, and `dashboard.new` becomes `dashboard`. It touches no service, firewall rule, certificate or setting.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `Dashboard:Path` | `C:\qb-autopost\dashboard` | Folder served at `/` (a relative path resolves against the program folder) |
+| `Dashboard:Enabled` | `true` | `false` leaves `/` to the API exactly as before |
+
+The folder is checked per request: installing into a folder that already exists is picked up on the next request. If
+the folder was **missing when the service started** (the API logs one warning "dashboard not installed" and answers
+`404` text), **restart the API after the first install** (stop it, then `start-all.ps1` or `Start-ScheduledTask`).
+
+**Roll back:** `.\deploy\install-dashboard.ps1 -Rollback` renames `dashboard` to `dashboard.failed` and `dashboard.old` back
+to `dashboard`. By hand, rename the two folders the same way. Only one previous version is kept.
+
+### 11.2 HTTPS for the accountant's PC
+
+Sign-in sends a password and a refresh cookie, so the office network gets HTTPS (a non-loopback bind without TLS stops
+startup, section 3.5).
+
+1. **Bind and certificate.** Set `Api:Bind` to `https://0.0.0.0:5443` and `Api:Tls` to a `.pfx` (`PfxPath`) or a
+   machine-store certificate (`StoreThumbprint`). The pfx password is environment only:
+   `QBAUTOPOST__Api__Tls__PfxPassword`. Set `Paths:AllowedJobRoots` too (section 3.5). The certificate's name must match
+   the name the PC types (`https://<server>:5443/`).
+2. **Trust.** The accountant's PC must trust the certificate: issue it from an internal CA the PC already trusts, or
+   import a self-signed certificate (public part only) into that PC's **Trusted Root Certification Authorities** store.
+3. **Firewall**, from an elevated PowerShell, once: TCP 5443, Domain and Private profiles only, same subnet only
+   (`RemoteAddress LocalSubnet`). Never Public, and no router port forward.
+
+   ```powershell
+   New-NetFirewallRule -DisplayName 'QbAutopost dashboard 5443' -Direction Inbound -Protocol TCP -LocalPort 5443 `
+       -Action Allow -Profile Domain,Private -RemoteAddress LocalSubnet
+   ```
+4. **URL:** `https://<server>:5443/`. Sign-in uses `/api/v2/auth`, and the refresh cookie path is `/api/v2/auth`, so a
+   reload keeps the session.
+5. **CORS stays off.** The dashboard and the API share one origin: leave `Api:Cors:AllowedOrigins` **empty**. No
+   `Access-Control-*` header is sent.
+6. **Existing callers are unchanged:** the API answers `GET /api/v1/health` and `GET /api/v1/jobs` as before, and so do the legacy flat paths while `Api:LegacyRoutes` is on.
+
+### 11.3 Migrate for v2
+
+Two migrations, `DashboardV2` and `AuditEventsView`, go through the normal flow of section 10.3 (API stopped, then
+`.\deploy\apply-migrations.ps1`; it re-applies `grants.sql`, which now gives the app role `SELECT` on `audit_events`).
+**Before migrating**, check that no saved version already uses the new field names:
+
+```sql
+SELECT count(*) FROM saved_request_versions WHERE payload::text ~ '"(post|pushId|email)"';
+```
+
+It must print `0`. If not, stop and ask.
+
+### 11.4 Long posts and timeouts
+
+Kestrel has no request cut-off, the app runs as a bare process (no proxy), and a client disconnect does not cancel a post.
+The server-side bound is `QuickBooks:BusyTimeoutSeconds` (60) per QuickBooks step, including the one add call that
+carries every row. **Any future proxy timeout must be at least 10 minutes.** Nobody has measured a 500-row add yet: the
+checklist does (Q-96), and the setting stays unchanged until then. A post cut by the bound ends `unknown`, never posted twice.
+
+### 11.5 Switch n8n to v2 saved requests
+
+Same order as section 10.6 (key with `requests:submit`, verify, then withdraw `qb:post`). The differences:
+
+- URL: `POST /api/v2/saved-requests`.
+- The body adds `email`: `{ "subject": ..., "receivedUtc": ..., "from": ..., "messageId": ... }` and `pushId`, which must be
+  **stable per email across retries**: derive it deterministically from the Message-ID (for example a UUID v5 of the
+  Message-ID) or store it on the first run. A fresh `pushId` with the same `Idempotency-Key` makes the body differ and
+  answers `409 idempotency-key-reused`.
+- Keep the `Idempotency-Key` header equal to the email's Message-ID.
+- A batch evidence `request.json` does not show `post: false` rows (the engine's set is internal); `result.json` lists
+  them under `skipped` with reason `not-to-post`.
+- Testing note: the 1000-request list performance test (`ListV2PerformanceTests`, trait `Perf`) is skipped unless
+  `QBAUTOPOST_PERF=1` is set.

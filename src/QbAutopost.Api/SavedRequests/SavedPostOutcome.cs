@@ -26,6 +26,9 @@ public enum SavedPostKind
 
     /// <summary>Claimed, but the current version could not be bound; recorded as <c>refused</c> and back to pending.</summary>
     Unreadable,
+
+    /// <summary>v2 only (dashboard v2 6.2 item 5): every row is marked <c>post: false</c>. Nothing was claimed; no attempt.</summary>
+    NothingToPost,
 }
 
 /// <summary>

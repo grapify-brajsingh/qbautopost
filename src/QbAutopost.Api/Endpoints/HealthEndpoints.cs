@@ -8,9 +8,16 @@ namespace QbAutopost.Api.Endpoints;
 /// <summary>Health routes (spec §6, FR-16). No API key needed; 503 when the dependency is not ok.</summary>
 public static class HealthEndpoints
 {
-    public static IEndpointRouteBuilder MapHealthEndpoints(this IEndpointRouteBuilder app)
+    /// <param name="flavor">T-1109: <see cref="ApiFlavor.V2"/> maps <c>/health/database</c> only (dashboard v2 spec 3).</param>
+    public static IEndpointRouteBuilder MapHealthEndpoints(this IEndpointRouteBuilder app, ApiFlavor flavor = ApiFlavor.V1)
     {
         var health = app.MapGroup("/health");
+        if (flavor == ApiFlavor.V2)
+        {
+            health.MapGet("/database", GetDatabase);
+            return app;
+        }
+
         health.MapGet("/", GetApp);
         health.MapGet("/ready", GetReady);
         health.MapGet("/sdk", GetSdk);

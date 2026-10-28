@@ -44,4 +44,10 @@ public sealed record SyncPostRequest
         DryRun = false,
         AllowModelAccounts = false,
     };
+
+    /// <summary>
+    /// As <see cref="ToDirectRequest()"/>, with the rows the caller marked <c>post: false</c> (dashboard v2 §6.1).
+    /// Used only by v2; an empty set is the parameterless overload.
+    /// </summary>
+    public DirectRequest ToDirectRequest(IReadOnlySet<int> notPosted) => ToDirectRequest() with { NotPosted = notPosted };
 }

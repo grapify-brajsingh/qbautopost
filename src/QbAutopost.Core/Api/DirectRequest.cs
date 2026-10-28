@@ -50,6 +50,13 @@ public sealed record DirectRequest
     public bool AllowModelAccounts { get; init; }
 
     public IReadOnlyList<DirectRow> Transactions { get; init; } = [];
+
+    /// <summary>
+    /// Indexes of rows the caller marked <c>post: false</c> (dashboard v2 §6.2). They still count in the control total
+    /// and are still checked for malformed fields, but are set aside before any hold and never become lines.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlySet<int> NotPosted { get; init; } = new HashSet<int>();
 }
 
 /// <summary>Bounds from configuration (§6.1, §12), so the reader stays free of settings types.</summary>
@@ -83,4 +90,8 @@ public sealed record DirectLine(
 public sealed record DirectReadResult(
     IReadOnlyList<string> Errors,
     IReadOnlyList<DirectLine> Lines,
-    IReadOnlyList<DirectRowIssue> Held);
+    IReadOnlyList<DirectRowIssue> Held)
+{
+    /// <summary>Rows set aside because the caller marked them <c>post: false</c>; never held, never lines.</summary>
+    public IReadOnlyList<DirectRowIssue> NotPosted { get; init; } = [];
+}

@@ -285,9 +285,9 @@ public static class SavedRequestViews
             ? source[SavedRequestIntake.SourceUserPrefix.Length..]
             : source;
 
-    private static DuplicateView Duplicate(long? of, IReadOnlyList<string> reasons) => new(reasons.Count > 0, of, reasons);
+    internal static DuplicateView Duplicate(long? of, IReadOnlyList<string> reasons) => new(reasons.Count > 0, of, reasons);
 
-    private static ValidationView? Validation(ValidationSnapshot? s) =>
+    internal static ValidationView? Validation(ValidationSnapshot? s) =>
         s is null
             ? null
             : new ValidationView(
