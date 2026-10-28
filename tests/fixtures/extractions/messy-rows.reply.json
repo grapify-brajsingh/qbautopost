@@ -1,0 +1,11 @@
+{
+  "is_bank_statement": true,
+  "reference": "   ",
+  "transactions": [
+    { "externalId": "row-9", "kind": "deposit", "date": "2026-08-03", "amount": 1240.10, "account": "Sample Bank - 1111", "payee": "Counter Deposit", "refNumber": "R-77" },
+    { "externalId": "x", "kind": "Check", "date": "08/05/2026", "amount": -60.00, "payee": "  ", "memo": "", "checkNo": null },
+    { "kind": "Check", "amount": "1,240.00", "memo": "Amount printed as text" },
+    { "kind": "Whatever", "amount": 5, "lineAccount": " Supplies ", "last4": "4521" },
+    { "kind": "DEPOSIT", "amount": 20.5, "checkNo": "  " }
+  ]
+}
