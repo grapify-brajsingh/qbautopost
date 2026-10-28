@@ -22,6 +22,9 @@ public static class ReferenceEndpoints
     /// <summary>The document as it sits beside the executable, named once so the map and the copy rule agree.</summary>
     public const string DocumentFile = "openapi.json";
 
+    /// <summary>T-1109 (dashboard v2 spec 15): the v2 document, served at <c>/api/v2/openapi.json</c>.</summary>
+    public const string V2DocumentFile = "openapi-v2.json";
+
     /// <summary>
     /// Where <c>Api:Reference:UseCdn</c> points the page when an operator explicitly asks for the public bundle.
     /// Nothing reaches it by default; it is here so the setting has one meaning rather than a configurable URL that
@@ -30,19 +33,32 @@ public static class ReferenceEndpoints
     /// </summary>
     public const string CdnBundleUrl = "https://cdn.jsdelivr.net/npm/@scalar/api-reference";
 
+    /// <param name="flavor">
+    /// T-1109: <see cref="ApiFlavor.V2"/> maps the document only, serving <see cref="V2DocumentFile"/>; there is no
+    /// v2 reference page.
+    /// </param>
     public static IEndpointRouteBuilder MapReferenceEndpoints(
-        this IEndpointRouteBuilder routes, ReferenceSettings settings, IWebHostEnvironment environment)
+        this IEndpointRouteBuilder routes,
+        ReferenceSettings settings,
+        IWebHostEnvironment environment,
+        ApiFlavor flavor = ApiFlavor.V1)
     {
+        var name = flavor == ApiFlavor.V2 ? V2DocumentFile : DocumentFile;
         routes.MapGet(ApiRoutes.OpenApiPath, () =>
         {
-            var file = FindDocument(environment);
+            var file = FindDocument(environment, name);
             return file is null
                 ? Results.Problem(
                     statusCode: StatusCodes.Status404NotFound,
                     title: "The API document is missing",
-                    detail: $"{DocumentFile} was not found beside the application; the installation is incomplete.")
+                    detail: $"{name} was not found beside the application; the installation is incomplete.")
                 : Results.File(file, "application/json");
         });
+
+        if (flavor == ApiFlavor.V2)
+        {
+            return routes;
+        }
 
         routes.MapScalarApiReference(ApiRoutes.ReferencePath, options => Configure(options, settings));
         return routes;
@@ -78,7 +94,7 @@ public static class ReferenceEndpoints
     /// same folder on the server (api-v1 §12 sets the content root to <c>AppContext.BaseDirectory</c>) and different
     /// ones under <c>WebApplicationFactory</c>, which keeps its own content root at the project.
     /// </summary>
-    private static string? FindDocument(IWebHostEnvironment environment)
+    private static string? FindDocument(IWebHostEnvironment environment, string name)
     {
         string?[] roots =
         [
@@ -89,7 +105,7 @@ public static class ReferenceEndpoints
 
         return roots
             .Where(root => !string.IsNullOrWhiteSpace(root))
-            .Select(root => Path.Combine(root!, DocumentFile))
+            .Select(root => Path.Combine(root!, name))
             .FirstOrDefault(File.Exists);
     }
 }

@@ -1,0 +1,4423 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "QbAutopost API v2",
+    "version": "2.0",
+    "description": "The dashboard surface under `/api/v2` (docs/saved-requests-dashboard-v2.md). Paths are the v1 ones, relative to the prefix. Every route here uses the same scope as its v1 twin; `x-required-scope` on each operation is the scope the middleware actually enforces.\n\nThis document is **hand-authored** (`src/QbAutopost.Api/wwwroot/openapi-v2.json`) and kept honest by `OpenApiV2DriftTests`, which compares it with the application's own `/api/v2` route table. The v1 document at `/api/v1/openapi.json` is unchanged.\n\nThis document is served only when `Api:Reference:Enabled` is true, and needs the `health:read` scope."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "This installation"
+    }
+  ],
+  "security": [
+    {
+      "apiKeyAuth": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Health",
+      "description": "Liveness, readiness and dependency checks."
+    },
+    {
+      "name": "QuickBooks",
+      "description": "Connection, company file, lists, and the direct transaction path."
+    },
+    {
+      "name": "Reference",
+      "description": "This document and the page that renders it."
+    },
+    {
+      "name": "Auth",
+      "description": "Dashboard sign-in: a short-lived Bearer access token and a rotating refresh cookie (saved-requests §11.2)."
+    },
+    {
+      "name": "Users",
+      "description": "User management for admins (saved-requests §11.4): temporary passwords, roles, disabling, unlocking, audit."
+    },
+    {
+      "name": "Saved requests",
+      "description": "Saved requests (saved-requests §6): n8n saves a validate-and-post body here, people review and post it from the dashboard."
+    }
+  ],
+  "paths": {
+    "/api/v2/health/database": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "operationId": "getDatabaseHealth",
+        "summary": "Saved-requests database: reachability, schema state and check latency.",
+        "description": "Looks at the database now. Never includes the connection string. With `Database:ConnectionString` empty the feature is off and this answers 503 with reason `not-configured`; the rest of the API is unaffected. Either `requests:read` (any dashboard user, for the status light) or `health:read` satisfies it.",
+        "x-required-scope": "requests:read|health:read",
+        "responses": {
+          "200": {
+            "description": "The database answered and its schema is current.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseHealth"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not configured, unreachable, or the schema is out of date; `reason` says which.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseHealth"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v2/quickbooks/lists": {
+      "get": {
+        "tags": [
+          "QuickBooks"
+        ],
+        "operationId": "getLists",
+        "summary": "The cached QuickBooks account, vendor and customer names.",
+        "description": "Read from `qb-lists.json`, so it answers while QuickBooks is shut down and never queues behind a post. A `syncedUtc` of `null` with empty lists means the sync has not run yet; it is not an error. Needs `lists:read`, which every dashboard role holds; an API key holding `qb:read` satisfies it too.",
+        "x-required-scope": "lists:read",
+        "responses": {
+          "200": {
+            "description": "The names as the last sync left them.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QbLists"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/v2/openapi.json": {
+      "get": {
+        "tags": [
+          "Reference"
+        ],
+        "operationId": "getOpenApiDocumentV2",
+        "summary": "This document: the v2 surface.",
+        "description": "Served only when `Api:Reference:Enabled` is true, under the same rules as `/api/v1/openapi.json`; otherwise the route is not mapped at all and the answer is 404. There is no v2 reference page.",
+        "x-required-scope": "health:read",
+        "responses": {
+          "200": {
+            "description": "The OpenAPI document.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v2/auth/login": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "login",
+        "summary": "Sign in with email and password.",
+        "description": "Answers an access token (JWT, HS256, `Auth:Jwt:AccessTokenMinutes`) and sets the refresh cookie `qbautopost_refresh` (`HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`, `Auth:Jwt:RefreshTokenDays`). An unknown email, a wrong password and a disabled account all answer the same `401 invalid-credentials`. `Auth:Lockout:MaxFailedAttempts` wrong passwords lock the account for `Auth:Lockout:LockoutMinutes` (`423 locked-out`). Failed sign-ins are also braked per address and per email by `Api:RateLimits:FailedAuthPerMinute` (`429`). Every failure is recorded in `user_audit`. `503 auth-not-configured` when `Auth:Jwt:SigningKey` is missing; `503 database-unavailable` when the database is not ready.",
+        "x-required-scope": "none",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in. The refresh cookie is set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "description": "Wrong credentials: unknown email, wrong password or disabled account. One answer for all three (`invalid-credentials`).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "`locked-out`: too many wrong passwords; `Retry-After` says for how long.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v2/auth/refresh": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "refreshAccessToken",
+        "summary": "Exchange the refresh cookie for a new access token and a new refresh cookie.",
+        "description": "Takes no body and no header credential: only the `qbautopost_refresh` cookie. The presented token is revoked and its successor set. Presenting a token that was already revoked revokes its whole family (a theft signal) and answers `401`; so does a missing, unknown or expired token, and the cookie is then cleared.",
+        "x-required-scope": "none",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "A new access token; the refresh cookie is replaced.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid-refresh-token`: missing, unknown, expired or revoked. The cookie is cleared.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v2/auth/logout": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "logout",
+        "summary": "Sign out: revoke the current refresh token and clear the cookie.",
+        "description": "Revokes the refresh token in the `qbautopost_refresh` cookie (that token only, none of the caller's others), and always clears the cookie. Allowed while a password change is pending.",
+        "x-required-scope": "signed-in",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Signed out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v2/auth/me": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "getMe",
+        "summary": "The signed-in user, their role and its scopes.",
+        "description": "Allowed while a password change is pending, so the dashboard can tell the user to change it.",
+        "x-required-scope": "signed-in",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthUser"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v2/auth/change-password": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "changePassword",
+        "summary": "Change the caller's password.",
+        "description": "Needs the current password. The new one needs `Auth:Password:MinLength` characters (12) and nothing else (`400 invalid-password`). A wrong current password answers `400 current-password-incorrect` and counts toward lockout. On success the security stamp rotates (older access tokens stop working), `mustChangePassword` is cleared, every other refresh token of the user is revoked, and a new access token is returned; the current refresh cookie stays valid.",
+        "x-required-scope": "signed-in",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Changed. Use the access token in this answer from now on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "423": {
+            "description": "`locked-out`: too many wrong passwords; `Retry-After` says for how long.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v2/users": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "operationId": "listUsers",
+        "summary": "List users.",
+        "description": "Ordered by email. A bad `role`, `disabled`, `page` or `pageSize` answers `400`.",
+        "x-required-scope": "users:manage",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Case-insensitive text found in the email or the display name. `%` and `_` are literal.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "required": false,
+            "description": "Only users holding this role.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "admin",
+                "editor",
+                "viewer"
+              ]
+            }
+          },
+          {
+            "name": "disabled",
+            "in": "query",
+            "required": false,
+            "description": "Only disabled (`true`) or only enabled (`false`) users.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "1 or more. Default 1.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "description": "1 to `SavedRequests:MaxListPageSize`. Default 25.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of users.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Users"
+        ],
+        "operationId": "createUser",
+        "summary": "Create a user with a one-time temporary password.",
+        "description": "The answer is `201` with the user and `temporaryPassword` (16 characters, shown once, never stored in plain text, `Cache-Control: no-store`). The user has `mustChangePassword: true` and exactly the role given. Email is case-insensitive and unique (`409 email-exists`). Recorded in `user_audit` as `created`.",
+        "x-required-scope": "users:manage",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUserRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created. `Location` and `ETag` are set.",
+            "headers": {
+              "ETag": {
+                "description": "The user's ETag, to send back in `If-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "`no-store`: the body holds a temporary password.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserWithTemporaryPassword"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/users/{id}": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "operationId": "getUser",
+        "summary": "One user.",
+        "description": "Includes `lastLoginUtc` and `lockedOutUntilUtc`. Never a password or a hash. The `ETag` is the value to send as `If-Match` on a patch.",
+        "x-required-scope": "users:manage",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user's id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user.",
+            "headers": {
+              "ETag": {
+                "description": "The user's ETag, to send back in `If-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserView"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Users"
+        ],
+        "operationId": "updateUser",
+        "summary": "Change a user's display name, role or disabled flag.",
+        "description": "Needs `If-Match`. A role change replaces the old role in one save, so the user never holds zero or two roles. Changing the role or disabling the user rotates their security stamp (so their access tokens stop at once, not after the 30 s gate cache) and revokes all their refresh tokens; both are recorded in `user_audit` (`role-changed`, `disabled`, `enabled`). Demoting or disabling the only enabled admin answers `409 last-admin`, also when two admins do it to each other at the same moment (the admins are row-locked in one transaction). An admin cannot disable themselves (`409 cannot-disable-self`).",
+        "x-required-scope": "users:manage",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user's id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "The user's ETag from `GET /users/{id}` (Identity's concurrency stamp, in quotes). Missing answers `428 precondition-required`, a stale one `412 edited-by-someone-else`. Any failed sign-in of that user also changes it, so a `412` may only mean \"reload\".",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchUserRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Changed. The new `ETag` is set.",
+            "headers": {
+              "ETag": {
+                "description": "The user's ETag, to send back in `If-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: the `If-Match` ETag is stale.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`precondition-required`: no `If-Match` header.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/users/{id}/reset-password": {
+      "post": {
+        "tags": [
+          "Users"
+        ],
+        "operationId": "resetUserPassword",
+        "summary": "Issue a new one-time temporary password.",
+        "description": "Sets `mustChangePassword`, rotates the security stamp and revokes all the user's refresh tokens, so their sessions end at once. The new password is in the answer once (`Cache-Control: no-store`). Recorded as `password-reset`.",
+        "x-required-scope": "users:manage",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user's id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reset.",
+            "headers": {
+              "ETag": {
+                "description": "The user's ETag, to send back in `If-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "`no-store`: the body holds a temporary password.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserWithTemporaryPassword"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/users/{id}/unlock": {
+      "post": {
+        "tags": [
+          "Users"
+        ],
+        "operationId": "unlockUser",
+        "summary": "Clear a lockout.",
+        "description": "Clears the lockout and the failed-password count. Recorded as `unlocked` (SPEC-GAP T-1011, Q-89: the spec lists no kind for it).",
+        "x-required-scope": "users:manage",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user's id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unlocked.",
+            "headers": {
+              "ETag": {
+                "description": "The user's ETag, to send back in `If-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserView"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/users/{id}/audit": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "operationId": "listUserAudit",
+        "summary": "The `user_audit` rows about one user.",
+        "description": "Newest first. `actor` is a user id (with `actorName`), `anonymous` for a failed sign-in, `bootstrap`, or `api-client:<id>`. `detail` holds addresses and reasons, never a password or a token.",
+        "x-required-scope": "users:manage",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user's id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "1 or more. Default 1.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "description": "1 to `SavedRequests:MaxListPageSize`. Default 25.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of audit rows.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserAuditPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/saved-requests": {
+      "post": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "saveRequest",
+        "summary": "Save a validate-and-post body for a person to review and post.",
+        "description": "Saved-requests §6.1. The body is exactly the validate-and-post body; nothing is posted. Over `Api:MaxRequestBodyBytes` answers `413` and anything that is not one JSON object `400 not-a-json-object`; neither is stored. Every JSON object is stored as version 1, byte for byte, even when it cannot be read (`needsAttention: true`, the JSON path in `validation.errors`) or when validation refuses it (`dryRun`, `allowModelAccounts`, control-total mismatch, too many rows) or holds rows. When validation cannot run (rules file missing, lists unreadable) the snapshot is `unavailable` and the save still succeeds. A request that looks like another one is flagged (`duplicate`), never refused. `createdBy` and `updatedBy` come from the caller, never the body. Treat any `201` as success.",
+        "x-required-scope": "requests:submit",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Honoured per source (§10.1), by the store rather than the replay file: the same key and body answer `200` with the existing record and save nothing; the same key with a different body answers `409 idempotency-key-reused`. At most 128 characters.",
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncPostRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Saved. `Location` names the new record.",
+            "headers": {
+              "Location": {
+                "description": "`/api/v2/saved-requests/{id}`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestSaved"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "The same `Idempotency-Key` and body were saved before: the existing record (`Idempotency-Replayed: true`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestSaved"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`not-a-json-object`: the body is not one JSON object (or not UTF-8); nothing was saved. `invalid-request`: the `Idempotency-Key` is too long.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`idempotency-key-reused`: this source used the key for a different body; nothing was saved.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is over `Api:MaxRequestBodyBytes`; nothing was saved.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "listSavedRequests",
+        "summary": "List saved requests, filtered and paged.",
+        "description": "Saved-requests §6.5. Every value is checked: an unknown `status` or `sort`, a flag that is not `true`/`false`, a date that is not `yyyy-MM-dd`, or a page outside its range answers `400`. Rows hold everything in the detail except the payload, the validation findings and the read errors.",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Repeatable. Only these statuses.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "posting",
+                "posted",
+                "partial",
+                "unknown",
+                "discarded"
+              ]
+            }
+          },
+          {
+            "name": "needsAttention",
+            "in": "query",
+            "required": false,
+            "description": "Only requests that do (`true`) or do not (`false`) need attention.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "duplicate",
+            "in": "query",
+            "required": false,
+            "description": "Only flagged (`true`) or unflagged (`false`) requests.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Case-insensitive text in the reference, the public reference, or a payee or memo inside the payload.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "createdFrom",
+            "in": "query",
+            "required": false,
+            "description": "Created on or after this date (UTC).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "createdTo",
+            "in": "query",
+            "required": false,
+            "description": "Created on or before this date (UTC).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "description": "`api-client:<clientId>` or `user:<userId>`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "description": "Default `-created`; a leading `-` is descending.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "created",
+                "-created",
+                "updated",
+                "-updated",
+                "controlTotal",
+                "-controlTotal"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "1 or more. Default 1.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "description": "1 to `SavedRequests:MaxListPageSize` (100). Default 25.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of saved requests.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/saved-requests/stats": {
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "savedRequestStats",
+        "summary": "Counts for the dashboard header.",
+        "description": "Every status appears in `byStatus`, zero included.",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The counts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestStats"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/saved-requests/{id}": {
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "getSavedRequest",
+        "summary": "One saved request: latest payload, flags, validation snapshot and last attempt.",
+        "description": "Saved-requests §6.2. The `ETag` is the row version, to send as `If-Match` on an edit or a post. `allowedActions` follows the status and the caller's scopes; an API key never gets an action. Actors are `{ id, name, email }` for a user and `{ id, name }` for an API client (`api-client:<id>`).",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else, including `0`, a sign or more than 18 digits, answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The saved request.",
+            "headers": {
+              "ETag": {
+                "description": "The row version, in quotes.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "editSavedRequest",
+        "summary": "Replace the payload of a pending saved request; the old payload stays as an earlier version.",
+        "description": "Saved-requests §6.3, §8. The body is `{ \"payload\": { ...the full validate-and-post body... }, \"note\": \"...\" }`: a full payload, not a patch. `If-Match` is required. A payload that differs from the current one becomes version n+1 with its change list (numbers are compared as decimals, so `184.3` and `184.30` are equal), validation and the duplicate rules run again, and an `edited` event is written. An identical payload answers `200` and writes nothing. An unreadable payload is stored and flagged like a save. The API never recalculates `controlTotal`: change it together with an amount, or validation reports the mismatch. Only a `pending` request can be edited.",
+        "x-required-scope": "requests:edit",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "The row version from the last `GET` (its `ETag`), in quotes.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "payload"
+                ],
+                "properties": {
+                  "payload": {
+                    "$ref": "#/components/schemas/SyncPostRequest"
+                  },
+                  "note": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Why it was changed; kept with the version."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The saved request after the edit (or unchanged, when the payload was identical).",
+            "headers": {
+              "ETag": {
+                "description": "The new row version, in quotes.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`not-a-json-object`: the body is not an object with a `payload` object (or not UTF-8); nothing was stored. `invalid-request`: `note` is not text.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not-editable`: the request is not `pending`; the detail names its status. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: the `If-Match` row version is not the current one. The body carries the current `rowVersion` and `updatedBy` (`{ id, name }`), so the dashboard can say who changed it. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is over `Api:MaxRequestBodyBytes`; nothing was stored.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`precondition-required`: `If-Match` is missing; nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/saved-requests/{id}/validate": {
+      "post": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "validateSavedRequest",
+        "summary": "Re-run validation and the duplicate rules for the current version and store the new snapshot.",
+        "description": "Saved-requests §6.4. Takes no body. Rules, lists and the ledger change after a snapshot was taken, so this refreshes it (`validation.validatedUtc` moves) and writes a `validated` event. It bumps the row version, so an `ETag` held before goes stale. The snapshot is advisory: Post always validates again. Only a `pending` request can be validated.",
+        "x-required-scope": "requests:edit",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The saved request with its refreshed snapshot.",
+            "headers": {
+              "ETag": {
+                "description": "The new row version, in quotes.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not-editable`: the request is not `pending`; the detail names its status. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/saved-requests/{id}/discard": {
+      "post": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "discardSavedRequest",
+        "summary": "Discard a pending saved request, with a reason; an admin can restore it.",
+        "description": "Saved-requests §7.1. The body is `{ \"reason\": \"...\" }`, 1 to 500 characters after trimming. The reason is kept as `discardReason` and in a `discarded` event. A discarded request is never posted and is not compared for duplicates. `If-Match` is optional here; when sent, it must be the current row version.",
+        "x-required-scope": "requests:edit",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "The row version from the last `GET`, in quotes. Optional.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The discarded request.",
+            "headers": {
+              "ETag": {
+                "description": "The new row version, in quotes.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid-request`: the reason is missing, blank or over 500 characters; nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not-discardable`: the request is not `pending`; the detail names its status. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: the `If-Match` row version is not the current one. The body carries the current `rowVersion` and `updatedBy` (`{ id, name }`), so the dashboard can say who changed it. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/saved-requests/{id}/restore": {
+      "post": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "restoreSavedRequest",
+        "summary": "Return a discarded saved request to pending (admin only).",
+        "description": "Saved-requests §7.1. Takes no body. Clears `discardReason` and writes a `restored` event. `If-Match` is optional; when sent, it must be the current row version.",
+        "x-required-scope": "requests:admin",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "The row version from the last `GET`, in quotes. Optional.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The request, `pending` again.",
+            "headers": {
+              "ETag": {
+                "description": "The new row version, in quotes.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not-restorable`: the request is not `discarded`; the detail names its status. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: the `If-Match` row version is not the current one. The body carries the current `rowVersion` and `updatedBy` (`{ id, name }`), so the dashboard can say who changed it. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/saved-requests/{id}/resolve": {
+      "post": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "resolveSavedRequest",
+        "summary": "Settle an unknown or partial post (admin only).",
+        "description": "Saved-requests §10.6. After a person has checked QuickBooks (the attempt's `ledgerBatch`, from `GET /saved-requests/{id}/attempts/{attemptId}`, lists the batch and the transaction ids to look up). `posted` moves the request to `posted` and copies the attempt's `postId`; `not-posted` moves it to `pending`. Only `unknown` can go either way; `partial` can only be `posted` (accepted as is): to post the remaining rows, create a new saved request. The note is required, 1 to 500 characters after trimming; the resolver and the note are stored on the attempt and in a `resolved` event. Nothing is sent to QuickBooks. `If-Match` is optional; when sent, it must be the current row version.",
+        "x-required-scope": "requests:admin",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "The row version from the last `GET`, in quotes. Optional.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "outcome",
+                  "note"
+                ],
+                "properties": {
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "posted",
+                      "not-posted"
+                    ],
+                    "description": "What a person found in QuickBooks."
+                  },
+                  "note": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "description": "Why, after trimming. Required."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The request, `posted` or `pending`.",
+            "headers": {
+              "ETag": {
+                "description": "The new row version, in quotes.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid-request`: the body is not an object with a valid `outcome` and a note of 1 to 500 characters. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not-resolvable`: the request is not `unknown` or `partial`, or it is `partial` and the outcome is `not-posted`; the detail names its status. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: the `If-Match` row version is not the current one. The body carries the current `rowVersion` and `updatedBy`. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/saved-requests/{id}/post": {
+      "post": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "postSavedRequest",
+        "summary": "Post the current version through validate-and-post, and record the attempt.",
+        "description": "Saved-requests §7.2, §9, §10.2-§10.6. The request is claimed (pending to posting, with an `in-progress` attempt) and the claim is committed before anything is sent, so of two people pressing Post exactly one posts and the other is answered `409 already-posting`. The current version is then posted by validate-and-post's own engine and the answer is **validate-and-post's status code and body**, unchanged, plus `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt). Every ending is recorded on the attempt with its HTTP status, post id, counts and the body returned. Nothing is retried automatically. The post runs to the end even if the caller disconnects: read `GET /saved-requests/{id}` until it is no longer `posting`. A request flagged as a possible duplicate needs `{ \"confirmDuplicate\": true }`; the confirming user and time are stored. Only `pending` requests can be posted.",
+        "x-required-scope": "requests:post",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "The request's ETag from `GET /saved-requests/{id}`. When sent and stale the answer is `412` and nothing is claimed, so a person never posts a version they have not seen.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "confirmDuplicate": {
+                    "type": "boolean",
+                    "description": "Required (`true`) to post a request flagged as a possible duplicate (§9). G4 still runs inside the post."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "validate-and-post's `200`: posted (request `posted`), `partial` (request `partial`, locked), or `failed`. A `failed` post with a row held for `quickbooks-no-response` or `quickbooks-busy` was sent and not confirmed, so the request goes to `unknown`, locked until an admin resolves it; any other `failed` returns it to `pending`. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case). If the result could not be recorded, `savedRequestStatus` is `posting` and the result is in the evidence file.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SyncPostResult"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SavedPostFields"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "validate-and-post's `400` (control total, too many rows, `dryRun`, `allowModelAccounts`, ...), or the current version could not be bound: then `errors` names each JSON path. Recorded as `refused`; the request is `pending` again. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SavedPostFields"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "`already-posting` (with the running `attemptId`), `already-posted` (with the `postId`), `not-postable` (partial, unknown or discarded; `savedRequestStatus` names it) or `duplicate-unconfirmed` (`duplicate: { of, status, reasons }`): nothing was claimed or sent. Or validate-and-post's busy `409` with `Retry-After`: recorded as `busy`, the request is `pending` again. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SavedPostFields"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: `If-Match` is not the current row version, or the request changed between the duplicate check and the claim (the claim is made at the row version the check read). The body carries the current `rowVersion` and `updatedBy`. Nothing was claimed or sent.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is over `Api:MaxRequestBodyBytes`; nothing was claimed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validate-and-post's `422`: at least one row would be held, so none was sent. Recorded as `held`; the request is `pending` again. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SyncPostProblem"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SavedPostFields"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`post-not-started`: the engine failed before the post was started; nothing was sent and the request is `pending` again (attempt `error`). Or `post-outcome-unknown`: it failed after the post was started, QuickBooks may have it, and the request is `unknown`, locked until an admin resolves it. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SavedPostFields"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "validate-and-post's `503` (backup too old, QuickBooks unreachable: a `SyncPostResult` body) or the rules file is missing (problem details): nothing was sent, recorded as `unavailable`, the request is `pending` again. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case). Or `database-unavailable` (`Retry-After: 30`): nothing was read, claimed or sent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SyncPostResult"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SavedPostFields"
+                    }
+                  ]
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SavedPostFields"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/saved-requests/{id}/original": {
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "getSavedRequestOriginal",
+        "summary": "The original body exactly as it was received.",
+        "description": "Byte for byte, as UTF-8: key order, whitespace, escapes and duplicate keys are kept. Never re-serialised.",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else, including `0`, a sign or more than 18 digits, answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The original body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/saved-requests/{id}/versions": {
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "listSavedRequestVersions",
+        "summary": "Every version, newest first.",
+        "description": "Number, who, when, note and change count. Version 1 is the original.",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else, including `0`, a sign or more than 18 digits, answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The versions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestVersionList"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/saved-requests/{id}/versions/{n}": {
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "getSavedRequestVersion",
+        "summary": "One version's payload and change list.",
+        "description": "A version that does not exist answers `404`.",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else, including `0`, a sign or more than 18 digits, answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "n",
+            "in": "path",
+            "required": true,
+            "description": "The version number, 1 or more.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestVersion"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/saved-requests/{id}/attempts": {
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "listSavedRequestAttempts",
+        "summary": "Every post attempt, newest first.",
+        "description": "Without the stored result; `GET .../attempts/{attemptId}` has it.",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else, including `0`, a sign or more than 18 digits, answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The attempts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostAttemptList"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/saved-requests/{id}/attempts/{attemptId}": {
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "getSavedRequestAttempt",
+        "summary": "One attempt with the full stored result.",
+        "description": "`result` is the validate-and-post answer (200) or its problem body, stored as returned. When the attempt has a `postId`, `ledgerBatch` is the batch behind it, read from the same store as `GET /batches/{id}`, so an admin can check QuickBooks before resolving an unknown or partial post (§10.6). It is left out when the batch file is missing or unreadable; that never fails this read.",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else, including `0`, a sign or more than 18 digits, answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "attemptId",
+            "in": "path",
+            "required": true,
+            "description": "The attempt id.",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The attempt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostAttemptDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/saved-requests/{id}/events": {
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "listSavedRequestEvents",
+        "summary": "The timeline, newest first.",
+        "description": "`created`, `flagged-duplicate`, `edited`, `validated`, `post-started`, `post-finished`, `discarded`, `restored`, `resolved`.",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else, including `0`, a sign or more than 18 digits, answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestEventList"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "apiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Api-Key",
+        "description": "`X-Api-Key: <key>` — the header this build reads, and the one every operation is secured with here. Each key belongs to one caller in `clients.json` and carries only the scopes that caller was given; `x-required-scope` on every operation names the one it needs."
+      },
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "`Authorization: Bearer <access token>`: a dashboard user's JWT (saved-requests §11.3), not an API key. An API key still travels only in `X-Api-Key` (Q-67); sending both headers answers `400 ambiguous-credentials`."
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Malformed or self-inconsistent request. Nothing was posted.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "No key, or a key no caller holds.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The key is known but lacks the scope this operation needs.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "No such id.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "A state conflict, or an `Idempotency-Key` replayed with a different body.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "TooManyRequests": {
+        "description": "Rate limited; `Retry-After` says for how long.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Unavailable": {
+        "description": "QuickBooks or Hermes is unreachable or busy, or the app is not ready.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "description": "Matched case-insensitively."
+          },
+          "password": {
+            "type": "string",
+            "format": "password"
+          }
+        }
+      },
+      "ChangePasswordRequest": {
+        "type": "object",
+        "required": [
+          "currentPassword",
+          "newPassword"
+        ],
+        "properties": {
+          "currentPassword": {
+            "type": "string",
+            "format": "password"
+          },
+          "newPassword": {
+            "type": "string",
+            "format": "password",
+            "minLength": 12
+          }
+        }
+      },
+      "CreateUserRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "displayName",
+          "role"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 254
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "editor",
+              "viewer"
+            ]
+          }
+        }
+      },
+      "PatchUserRequest": {
+        "type": "object",
+        "description": "At least one field.",
+        "properties": {
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "editor",
+              "viewer"
+            ]
+          },
+          "disabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UserView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "description": "`admin`, `editor` or `viewer`; empty when the account holds no role, or more than one (Q-87)."
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "mustChangePassword": {
+            "type": "boolean"
+          },
+          "createdUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastLoginUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lockedOutUntilUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Set only while a lockout is still running."
+          }
+        }
+      },
+      "UserWithTemporaryPassword": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "description": "`admin`, `editor` or `viewer`; empty when the account holds no role, or more than one (Q-87)."
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "mustChangePassword": {
+            "type": "boolean"
+          },
+          "createdUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastLoginUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lockedOutUntilUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Set only while a lockout is still running."
+          },
+          "temporaryPassword": {
+            "type": "string",
+            "description": "16 characters from an unambiguous alphabet. Shown once; hand it over and it is gone."
+          }
+        }
+      },
+      "UserPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserView"
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "pageSize": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
+      },
+      "UserAuditEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`created`, `role-changed`, `disabled`, `enabled`, `password-reset`, `password-changed`, `login-failed`, `locked-out`, `login` or `unlocked`."
+          },
+          "actor": {
+            "type": "string"
+          },
+          "actorName": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          },
+          "atUtc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "UserAuditPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserAuditEntry"
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "pageSize": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
+      },
+      "AuthUser": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "description": "`admin`, `editor` or `viewer`; empty when the account holds no role, or more than one (Q-87), and it then has no scopes."
+          },
+          "mustChangePassword": {
+            "type": "boolean",
+            "description": "While true every route except `me`, `change-password` and `logout` answers `403 password-change-required`."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SignInResponse": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "Send as `Authorization: Bearer <accessToken>`."
+          },
+          "expiresUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "user": {
+            "$ref": "#/components/schemas/AuthUser"
+          }
+        }
+      },
+      "SignedOut": {
+        "type": "object",
+        "properties": {
+          "signedOut": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "description": "RFC 7807 problem details. `requestId` is the same id as the `X-Request-Id` header and every log line of that request.",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "traceId": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "errors": {
+            "type": "array",
+            "description": "Present when the failure is per item.",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "DatabaseHealth": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "Ready",
+              "NotConfigured",
+              "Unreachable",
+              "SchemaOutOfDate"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "not-configured",
+              "unreachable",
+              "schema-out-of-date"
+            ]
+          },
+          "reachable": {
+            "type": "boolean"
+          },
+          "schemaCurrent": {
+            "type": "boolean"
+          },
+          "pendingMigrations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "latencyMs": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "SyncPostRequest": {
+        "type": "object",
+        "required": [
+          "controlTotal",
+          "transactions"
+        ],
+        "description": "`DirectRequest` minus `dryRun` (validate-and-post §4). The rows are identical, so a caller can move between the two posting routes without rewriting one.",
+        "properties": {
+          "reference": {
+            "type": "string",
+            "nullable": true,
+            "description": "The caller's own name for this post; it names the ledger row `api-<reference>`."
+          },
+          "controlTotal": {
+            "type": "number",
+            "format": "double",
+            "description": "Required here. The caller's own sum over every submitted row: checked to the cent, never corrected. A mismatch refuses the whole request and no amount is adjusted to make it agree."
+          },
+          "dryRun": {
+            "type": "boolean",
+            "nullable": true,
+            "description": "NOT A FIELD OF THIS ROUTE. Sending any value, `false` included, is refused with 400 `dry-run-not-supported` — a caller who asks for a dry run and is answered `posted` would have moved money they believed they were only checking. Use `POST /api/v1/quickbooks/transactions/validate` to check a batch without sending it."
+          },
+          "allowModelAccounts": {
+            "type": "boolean",
+            "nullable": true,
+            "description": "NOT IMPLEMENTED, as on the direct path (T-915): tiers 3-4 never run here, so the flag would silently do nothing. Sending it is refused with 400. Give each row a `lineAccount`, or add a rule for its last four (Q-51)."
+          },
+          "transactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DirectRow"
+            }
+          }
+        }
+      },
+      "SyncPostResult": {
+        "type": "object",
+        "description": "What landed in QuickBooks (validate-and-post §6.1). There is no `batchId`, `dryRun` or `isRunning`: this route has no batch to poll and no mode to choose.",
+        "properties": {
+          "postId": {
+            "type": "string",
+            "description": "Names the ledger row, for `POST /api/v1/batches/{id}/undo`. It is NOT a polling resource — no `GET` accepts it. It contains `#`, which must be sent percent-encoded as `%23`."
+          },
+          "reference": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus",
+            "description": "`posted` on the ordinary path: a held row is a 422 before anything is sent. It can still read `partial` or `failed` if a gate that runs after the SDK was touched (G4's live half, G5) refused a row — a caller whose money half-moved is told, not reassured."
+          },
+          "companyFile": {
+            "type": "string",
+            "nullable": true
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "submitted": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "posted": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "held": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "skipped": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Rows a skip rule or G4 excluded; why `posted` can be below `submitted` on a clean post."
+              }
+            }
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "submitted": {
+                "type": "number",
+                "format": "double"
+              },
+              "posted": {
+                "type": "number",
+                "format": "double",
+                "description": "The money that actually moved."
+              }
+            }
+          },
+          "posted": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Position in the submitted `transactions` array."
+                },
+                "externalId": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "The caller's own key, echoed so a batch can be reconciled against their records."
+                },
+                "requestId": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "txnId": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "QuickBooks' own id for the transaction."
+                },
+                "editSequence": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "kind": {
+                  "$ref": "#/components/schemas/TxnKind"
+                },
+                "account": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "lineAccount": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "payee": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "amount": {
+                  "type": "number",
+                  "format": "double"
+                }
+              }
+            }
+          },
+          "held": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanRow"
+            },
+            "description": "Empty on the ordinary path; a held row is a 422 before anything is sent."
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanRow"
+            }
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "startedUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "SavedPostFields": {
+        "type": "object",
+        "description": "What post by id adds to validate-and-post's body or problem (saved-requests §7.2). All three are present whenever an attempt was made. They are absent on 404, 412 and `database-unavailable`; of the 409s that claim nothing, `already-posting` carries only `attemptId` (the running attempt) and `not-postable` only `savedRequestStatus`.",
+        "properties": {
+          "savedRequestId": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The saved request's numeric id."
+          },
+          "attemptId": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The attempt this post recorded: `GET /saved-requests/{id}/attempts/{attemptId}`."
+          },
+          "savedRequestStatus": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "posting",
+              "posted",
+              "partial",
+              "unknown",
+              "discarded"
+            ],
+            "description": "The request's status after the attempt. Named apart from `status`, which stays validate-and-post's (Q-90). `posting` means the result could not be recorded and is in the evidence file."
+          }
+        }
+      },
+      "SyncPostProblem": {
+        "type": "object",
+        "description": "The 422 of validate-and-post §6.2: RFC 7807, with every finding in `validation` — not the first, because one held row refuses the whole request and a caller must be able to fix them all in one pass.",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "detail": {
+            "type": "string",
+            "description": "e.g. `3 of 134 row(s) would be held; nothing was sent to QuickBooks.`"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "counts": {
+            "type": "object",
+            "description": "`postable + held + skipped` is `submitted`.",
+            "properties": {
+              "submitted": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "postable": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Rows that would have posted — and did not, because of the ones below."
+              },
+              "held": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "skipped": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          },
+          "validation": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "externalId": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "reason": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "A hold code, e.g. `no-account-rule`, `unknown-payee`, `date-too-old`, `already-posted`."
+                },
+                "detail": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "candidates": {
+                  "type": "array",
+                  "nullable": true,
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "postedIn": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "For `already-posted`: the earlier batch that posted this row."
+                }
+              }
+            }
+          },
+          "unknownNames": {
+            "type": "object",
+            "description": "Names this request would send that `qb-lists.json` does not have.",
+            "properties": {
+              "accounts": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "vendors": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "customers": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "DirectRow": {
+        "type": "object",
+        "required": [
+          "kind",
+          "date",
+          "amount",
+          "account"
+        ],
+        "properties": {
+          "externalId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The caller's key. Echoed and stored; never used to decide identity."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TxnKind"
+          },
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "amount": {
+            "type": "number",
+            "format": "double",
+            "description": "Positive, at most two decimals. The direction comes from `kind`."
+          },
+          "account": {
+            "type": "string",
+            "description": "The bank or credit-card account the money moves on."
+          },
+          "lineAccount": {
+            "type": "string",
+            "nullable": true,
+            "description": "The expense or income account; rules resolve it when it is left out."
+          },
+          "payee": {
+            "type": "string",
+            "nullable": true
+          },
+          "checkNo": {
+            "type": "string",
+            "nullable": true
+          },
+          "refNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "memo": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 4096
+          },
+          "last4": {
+            "type": "string",
+            "nullable": true,
+            "description": "Last four digits of the account; part of the fingerprint."
+          }
+        }
+      },
+      "TxnKind": {
+        "type": "string",
+        "enum": [
+          "check",
+          "ccCharge",
+          "ccCredit",
+          "deposit",
+          "skip"
+        ],
+        "description": "`check` and `deposit` move money on a bank account; `ccCharge` and `ccCredit` on a credit card. Read case-insensitively. `skip` is listed because the serialiser knows it, but it is refused on input (400): to leave a row out of a v2 post, send the row with `post: false`."
+      },
+      "JobStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "analysing",
+          "ready",
+          "posting",
+          "posted",
+          "partial",
+          "failed",
+          "undone"
+        ]
+      },
+      "PlanRow": {
+        "type": "object",
+        "description": "One submitted row and what would become of it.",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "externalId": {
+            "type": "string",
+            "nullable": true
+          },
+          "requestId": {
+            "type": "string",
+            "nullable": true,
+            "description": "First 16 characters of the row's fingerprint."
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "wouldPost",
+              "held",
+              "skipped"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TxnKind"
+          },
+          "account": {
+            "type": "string",
+            "nullable": true
+          },
+          "lineAccount": {
+            "type": "string",
+            "nullable": true
+          },
+          "payee": {
+            "type": "string",
+            "nullable": true
+          },
+          "amount": {
+            "type": "number",
+            "format": "double"
+          },
+          "confidence": {
+            "type": "string",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "description": "The hold or skip code, e.g. `no-account-rule`, `already-in-quickbooks`."
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "candidates": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "batchId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The earlier batch this row already posted in."
+          }
+        }
+      },
+      "QbLists": {
+        "type": "object",
+        "description": "The cached QuickBooks names (`qb-lists.json`). Empty lists with a null `syncedUtc` mean the sync has not run.",
+        "properties": {
+          "syncedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QbAccount"
+            }
+          },
+          "vendors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "customers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "QbAccount": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The QuickBooks `FullName` (`Utilities:Electric` for a sub-account)."
+          },
+          "type": {
+            "type": "string",
+            "nullable": true,
+            "description": "QuickBooks `AccountType`, e.g. `Expense`."
+          }
+        }
+      },
+      "SavedRequestActor": {
+        "type": "object",
+        "description": "Who did it (§5.3). Users are disabled, never deleted, so an id always has a name.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "A user id, or `api-client:<id>`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "description": "Users only.",
+            "nullable": true
+          }
+        }
+      },
+      "SavedRequestStamp": {
+        "type": "object",
+        "properties": {
+          "utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "by": {
+            "$ref": "#/components/schemas/SavedRequestActor"
+          }
+        }
+      },
+      "SavedRequestSource": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "api-client",
+              "user"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "SavedRequestCounts": {
+        "type": "object",
+        "description": "`postable + held + skipped` is `submitted`.",
+        "properties": {
+          "submitted": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "postable": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "held": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "SavedRequestFinding": {
+        "type": "object",
+        "description": "A validate-and-post §6.2 finding.",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "externalId": {
+            "type": "string",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "detail": {
+            "type": "string",
+            "nullable": true
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "postedIn": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "SavedRequestUnknownNames": {
+        "type": "object",
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "vendors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "customers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SavedRequestValidation": {
+        "type": "object",
+        "description": "§6.4. Advisory: Post always validates again. `needsAttention` is set by `unreadable`, `held` and `refused`, not by `unavailable`.",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "held",
+              "refused",
+              "unreadable",
+              "unavailable"
+            ]
+          },
+          "validatedUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "versionNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "counts": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestCounts"
+              }
+            ],
+            "nullable": true
+          },
+          "validation": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedRequestFinding"
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Request-level refusals, or the read errors (`$.path: message`)."
+          },
+          "unknownNames": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestUnknownNames"
+              }
+            ],
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "description": "Only when `unavailable`: why validation could not run."
+          }
+        }
+      },
+      "SavedRequestDuplicate": {
+        "type": "object",
+        "properties": {
+          "flagged": {
+            "type": "boolean"
+          },
+          "of": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`same-payload`, `same-reference`, `overlapping-rows`."
+          }
+        }
+      },
+      "SavedRequestDuplicateDetail": {
+        "type": "object",
+        "properties": {
+          "flagged": {
+            "type": "boolean"
+          },
+          "of": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "acknowledgedBy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestActor"
+              }
+            ],
+            "nullable": true
+          },
+          "acknowledgedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "SavedRequestLastAttempt": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "in-progress",
+              "posted",
+              "partial",
+              "failed",
+              "held",
+              "refused",
+              "busy",
+              "unavailable",
+              "error",
+              "unknown"
+            ]
+          },
+          "httpStatus": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "finishedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "SavedRequestSaved": {
+        "type": "object",
+        "description": "§6.1.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "publicRef": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "posting",
+              "posted",
+              "partial",
+              "unknown",
+              "discarded"
+            ]
+          },
+          "needsAttention": {
+            "type": "boolean"
+          },
+          "duplicate": {
+            "$ref": "#/components/schemas/SavedRequestDuplicate"
+          },
+          "validation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestValidation"
+              }
+            ],
+            "nullable": true
+          },
+          "createdUtc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SavedRequestDetail": {
+        "type": "object",
+        "description": "§6.2.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "publicRef": {
+            "type": "string",
+            "description": "`SR-000123`."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "posting",
+              "posted",
+              "partial",
+              "unknown",
+              "discarded"
+            ]
+          },
+          "rowVersion": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SavedRequestSource"
+          },
+          "reference": {
+            "type": "string",
+            "nullable": true
+          },
+          "controlTotal": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "transactionCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "currentVersion": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "needsAttention": {
+            "type": "boolean"
+          },
+          "readErrors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "duplicate": {
+            "$ref": "#/components/schemas/SavedRequestDuplicateDetail"
+          },
+          "validation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestValidation"
+              }
+            ],
+            "nullable": true
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The latest version, as stored."
+          },
+          "lastAttempt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestLastAttempt"
+              }
+            ],
+            "nullable": true
+          },
+          "postId": {
+            "type": "string",
+            "nullable": true
+          },
+          "discardReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "created": {
+            "$ref": "#/components/schemas/SavedRequestStamp"
+          },
+          "updated": {
+            "$ref": "#/components/schemas/SavedRequestStamp"
+          },
+          "allowedActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Of `edit`, `validate`, `post`, `discard`, `restore`, `resolve`, in that order."
+          }
+        }
+      },
+      "SavedRequestSummary": {
+        "type": "object",
+        "description": "§6.5: the detail without the payload, the findings and the read errors.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "publicRef": {
+            "type": "string",
+            "description": "`SR-000123`."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "posting",
+              "posted",
+              "partial",
+              "unknown",
+              "discarded"
+            ]
+          },
+          "rowVersion": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SavedRequestSource"
+          },
+          "reference": {
+            "type": "string",
+            "nullable": true
+          },
+          "controlTotal": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "transactionCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "currentVersion": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "needsAttention": {
+            "type": "boolean"
+          },
+          "duplicate": {
+            "$ref": "#/components/schemas/SavedRequestDuplicate"
+          },
+          "validation": {
+            "allOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "ok",
+                      "held",
+                      "refused",
+                      "unreadable",
+                      "unavailable"
+                    ]
+                  },
+                  "validatedUtc": {
+                    "type": "string",
+                    "format": "date-time",
+                    "nullable": true
+                  }
+                }
+              }
+            ],
+            "nullable": true
+          },
+          "postId": {
+            "type": "string",
+            "nullable": true
+          },
+          "created": {
+            "$ref": "#/components/schemas/SavedRequestStamp"
+          },
+          "updated": {
+            "$ref": "#/components/schemas/SavedRequestStamp"
+          },
+          "allowedActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Of `edit`, `validate`, `post`, `discard`, `restore`, `resolve`, in that order."
+          }
+        }
+      },
+      "SavedRequestPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedRequestSummary"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "SavedRequestStats": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "byStatus": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Every status, zero included."
+          },
+          "needsAttention": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "duplicates": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "SavedRequestChange": {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "description": "e.g. `$.transactions[3].payee`."
+          },
+          "old": {
+            "nullable": true
+          },
+          "new": {
+            "nullable": true
+          }
+        }
+      },
+      "SavedRequestVersionSummary": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "created": {
+            "$ref": "#/components/schemas/SavedRequestStamp"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "changeCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "readable": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SavedRequestVersionList": {
+        "type": "object",
+        "description": "Newest first.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedRequestVersionSummary"
+            }
+          }
+        }
+      },
+      "SavedRequestVersion": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "readable": {
+            "type": "boolean"
+          },
+          "readErrors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedRequestChange"
+            }
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "created": {
+            "$ref": "#/components/schemas/SavedRequestStamp"
+          }
+        }
+      },
+      "PostAttempt": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "versionNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "in-progress",
+              "posted",
+              "partial",
+              "failed",
+              "held",
+              "refused",
+              "busy",
+              "unavailable",
+              "error",
+              "unknown"
+            ]
+          },
+          "httpStatus": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "postId": {
+            "type": "string",
+            "nullable": true
+          },
+          "counts": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "startedUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "startedBy": {
+            "$ref": "#/components/schemas/SavedRequestActor"
+          },
+          "resolvedBy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestActor"
+              }
+            ],
+            "nullable": true
+          },
+          "resolvedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "resolutionNote": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "PostAttemptDetail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "versionNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "in-progress",
+              "posted",
+              "partial",
+              "failed",
+              "held",
+              "refused",
+              "busy",
+              "unavailable",
+              "error",
+              "unknown"
+            ]
+          },
+          "httpStatus": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "postId": {
+            "type": "string",
+            "nullable": true
+          },
+          "counts": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "startedUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "startedBy": {
+            "$ref": "#/components/schemas/SavedRequestActor"
+          },
+          "resolvedBy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestActor"
+              }
+            ],
+            "nullable": true
+          },
+          "resolvedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "resolutionNote": {
+            "type": "string",
+            "nullable": true
+          },
+          "result": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          },
+          "ledgerBatch": {
+            "$ref": "#/components/schemas/LedgerBatch"
+          }
+        }
+      },
+      "LedgerBatch": {
+        "type": "object",
+        "description": "The ledger batch of an attempt's `postId` (§10.6). Absent when the attempt has no `postId` or the batch cannot be read.",
+        "properties": {
+          "batchId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "The batch's job status, e.g. `posted`, `partial`, `failed`."
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "submitted": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "posted": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "held": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "skipped": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "submitted": {
+                "type": "number",
+                "format": "decimal"
+              },
+              "posted": {
+                "type": "number",
+                "format": "decimal"
+              }
+            }
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "posted": {
+            "type": "array",
+            "description": "The rows QuickBooks accepted, with the transaction ids to look up.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "txnId": {
+                  "type": "string"
+                },
+                "requestId": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "account": {
+                  "type": "string"
+                },
+                "payee": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "amount": {
+                  "type": "number",
+                  "format": "decimal"
+                }
+              }
+            }
+          }
+        }
+      },
+      "PostAttemptList": {
+        "type": "object",
+        "description": "Newest first.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PostAttempt"
+            }
+          }
+        }
+      },
+      "SavedRequestEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          },
+          "atUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/SavedRequestActor"
+          }
+        }
+      },
+      "SavedRequestEventList": {
+        "type": "object",
+        "description": "Newest first.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedRequestEvent"
+            }
+          }
+        }
+      }
+    }
+  }
+}

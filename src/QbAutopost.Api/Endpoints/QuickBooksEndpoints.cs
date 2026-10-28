@@ -21,8 +21,15 @@ public static class QuickBooksEndpoints
     /// <summary>FR-A-4 request; every field optional.</summary>
     public sealed record ConnectionTestRequest(string? CompanyFile, int? TimeoutSeconds, bool? IncludeCompanyInfo);
 
-    public static IEndpointRouteBuilder MapQuickBooksEndpoints(this IEndpointRouteBuilder app)
+    /// <param name="flavor">T-1109: <see cref="ApiFlavor.V2"/> maps <c>GET /quickbooks/lists</c> only (dashboard v2 spec 3).</param>
+    public static IEndpointRouteBuilder MapQuickBooksEndpoints(this IEndpointRouteBuilder app, ApiFlavor flavor = ApiFlavor.V1)
     {
+        if (flavor == ApiFlavor.V2)
+        {
+            app.MapGet("/quickbooks/lists", GetLists);
+            return app;
+        }
+
         // T-914 (api-v1 §3): the versioned spelling of the sync, and the read of what it cached. The flat
         // /qb/sync-lists stays mapped while Api:LegacyRoutes is true (api-v1 §9.1) so no caller is broken by the
         // rename; the documentation now names the route on the right — see Q-69.

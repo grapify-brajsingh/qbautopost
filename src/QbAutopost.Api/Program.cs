@@ -437,6 +437,19 @@ try
         v1.MapReferenceEndpoints(settings.Api.Reference, app.Environment);
     }
 
+    // T-1109 (dashboard v2 spec 2, 3): the dashboard surface. Only the routes of spec 3, each named in
+    // ApiRoutes.V2Routes; each handler answers as its v1 twin until its own task gives it the v2 behaviour.
+    var v2 = app.MapGroup(ApiRoutes.V2Prefix);
+    v2.MapAuthEndpoints(ApiFlavor.V2);
+    v2.MapUserEndpoints(ApiFlavor.V2);
+    v2.MapSavedRequestEndpoints(ApiFlavor.V2);
+    v2.MapQuickBooksEndpoints(ApiFlavor.V2);
+    v2.MapHealthEndpoints(ApiFlavor.V2);
+    if (settings.Api.Reference.Enabled)
+    {
+        v2.MapReferenceEndpoints(settings.Api.Reference, app.Environment, ApiFlavor.V2);
+    }
+
     if (settings.Api.LegacyRoutes)
     {
         var legacy = app.MapGroup(string.Empty);

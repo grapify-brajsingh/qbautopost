@@ -56,7 +56,11 @@ public static class AuthEndpoints
 
     private static string? _timingHash;
 
-    public static IEndpointRouteBuilder MapAuthEndpoints(this IEndpointRouteBuilder v1)
+    /// <param name="flavor">
+    /// T-1109: the surface being mapped. <see cref="ApiFlavor.V2"/> answers exactly as v1 until T-1115 gives it the
+    /// <c>/api/v2/auth</c> cookie path and the refresh reuse grace (dashboard v2 spec 11).
+    /// </param>
+    public static IEndpointRouteBuilder MapAuthEndpoints(this IEndpointRouteBuilder v1, ApiFlavor flavor = ApiFlavor.V1)
     {
         var auth = v1.MapGroup("/auth");
         // Answered from the caller CallerMiddleware resolved (which already passed the database gate).

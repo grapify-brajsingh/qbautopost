@@ -8,6 +8,8 @@
     <!-- T-913 (FR-A-18): the hand-authored OpenAPI document must reach the executable's folder, because the content
          root is AppContext.BaseDirectory on the server (api-v1 §12), not the folder the process was started in. -->
     <Content Update="wwwroot\openapi.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- T-1109 (dashboard v2 spec 15): the v2 document, beside the v1 one. -->
+    <Content Update="wwwroot\openapi-v2.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(Configuration)' == 'Debug'">

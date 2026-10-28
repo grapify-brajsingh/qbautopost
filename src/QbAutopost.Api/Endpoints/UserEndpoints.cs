@@ -96,7 +96,11 @@ public static class UserEndpoints
 
     private const int DefaultPageSize = 25;
 
-    public static IEndpointRouteBuilder MapUserEndpoints(this IEndpointRouteBuilder v1)
+    /// <param name="flavor">
+    /// T-1109: the surface being mapped. <see cref="ApiFlavor.V2"/> answers exactly as v1 until T-1115 gives
+    /// <c>GET /users</c> its <c>status</c> filter (dashboard v2 spec 12).
+    /// </param>
+    public static IEndpointRouteBuilder MapUserEndpoints(this IEndpointRouteBuilder v1, ApiFlavor flavor = ApiFlavor.V1)
     {
         var users = v1.MapGroup("/users").RequireDatabase();
         users.MapGet("/", ListAsync);

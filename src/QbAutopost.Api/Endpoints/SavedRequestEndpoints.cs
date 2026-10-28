@@ -47,11 +47,15 @@ public static class SavedRequestEndpoints
     /// <summary>Strict UTF-8: a body that is not valid UTF-8 cannot be stored "as received, as UTF-8" (spec 5.2).</summary>
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
-    public static IEndpointRouteBuilder MapSavedRequestEndpoints(this IEndpointRouteBuilder v1)
+    /// <param name="flavor">
+    /// T-1109: the surface being mapped. For now the only v2 difference is the save's <c>Location</c>
+    /// (<see cref="Location"/>); T-1110 to T-1113 give each v2 route its own behaviour (dashboard v2 spec 3).
+    /// </param>
+    public static IEndpointRouteBuilder MapSavedRequestEndpoints(this IEndpointRouteBuilder v1, ApiFlavor flavor = ApiFlavor.V1)
     {
         var group = v1.MapGroup("/saved-requests").RequireDatabase();
         group.AddEndpointFilter(SavedRequestLogContext);
-        group.MapPost("/", SaveAsync);
+        group.MapPost("/", (HttpContext http, SavedRequestIntake intake, CancellationToken ct) => SaveAsync(http, intake, flavor, ct));
         group.MapGet("/", ListAsync);
         group.MapGet("/stats", StatsAsync);
         group.MapGet("/{id}", GetAsync);
@@ -97,7 +101,7 @@ public static class SavedRequestEndpoints
     /// <c>409 idempotency-key-reused</c>.
     /// </para>
     /// </summary>
-    private static async Task<IResult> SaveAsync(HttpContext http, SavedRequestIntake intake, CancellationToken ct)
+    private static async Task<IResult> SaveAsync(HttpContext http, SavedRequestIntake intake, ApiFlavor flavor, CancellationToken ct)
     {
         var (raw, failure) = await ReadBodyAsync(http, ct);
         if (failure is not null)
@@ -142,12 +146,18 @@ public static class SavedRequestEndpoints
                 // v1 answer on purpose: any v1 body for it would be new behaviour. v2 maps it to push-id-reused.
                 throw new UnreachableException("A v1 save carries no pushId, so it cannot be push-id-reused.");
             default:
-                http.Response.Headers.Location =
-                    $"{ApiRoutes.V1Prefix}/saved-requests/{record.Id.ToString(CultureInfo.InvariantCulture)}";
+                http.Response.Headers.Location = Location(flavor, record.Id);
                 return Results.Json(
                     SavedRequestViews.Saved(record), SavedRequestJson.Options, statusCode: StatusCodes.Status201Created);
         }
     }
+
+    /// <summary>
+    /// The <c>Location</c> of a saved request on the surface it was saved through: <c>/api/v1/saved-requests/{id}</c>
+    /// for v1, as before, and <c>/api/v2/saved-requests/{id}</c> for v2 (T-1109).
+    /// </summary>
+    public static string Location(ApiFlavor flavor, long id) =>
+        $"{(flavor == ApiFlavor.V2 ? ApiRoutes.V2Prefix : ApiRoutes.V1Prefix)}/saved-requests/{id.ToString(CultureInfo.InvariantCulture)}";
 
     // ---- list and stats ---------------------------------------------------------------------------------------------
 
