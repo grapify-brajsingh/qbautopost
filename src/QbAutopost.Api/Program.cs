@@ -309,6 +309,7 @@ builder.Services.AddSingleton<ISavedRequestV2Store>(sp => Program.StoreAs<ISaved
 builder.Services.AddSingleton<ISavedRequestAuditStore>(sp => Program.StoreAs<ISavedRequestAuditStore>(sp));
 // T-1209: the extraction records (dashboard-api-m12 6.6), the same store instance again.
 builder.Services.AddSingleton<QbAutopost.Core.Extraction.IUploadStore>(sp => Program.StoreAs<QbAutopost.Core.Extraction.IUploadStore>(sp));
+builder.Services.AddSingleton<QbAutopost.Core.Dashboard.IDashboardSummaryStore>(sp => Program.StoreAs<QbAutopost.Core.Dashboard.IDashboardSummaryStore>(sp));
 
 // T-1009 (spec 10.11): CallerMiddleware resolves this only once the database gate is Ready, so without a database
 // (no Identity registered) a Bearer request answers 503 before anything asks for UserManager.

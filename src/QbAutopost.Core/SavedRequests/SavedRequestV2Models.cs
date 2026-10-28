@@ -21,7 +21,33 @@ public sealed record SavedRequestQueryV2(
     string? Reference,
     decimal? MinTotal,
     decimal? MaxTotal,
-    bool? HasErrors);
+    bool? HasErrors)
+{
+    // T-1211 (spec dashboard-api-m12 5): UTC instant bounds, AND-ed with the date-only ones above. From inclusive, To
+    // exclusive. Null (the default) leaves the list as before.
+
+    /// <summary>Compared with <c>coalesce(email_received_utc, created_utc)</c>.</summary>
+    public DateTime? ReceivedFromUtc { get; init; }
+
+    /// <inheritdoc cref="ReceivedFromUtc"/>
+    public DateTime? ReceivedToUtc { get; init; }
+
+    /// <summary>Compared with <c>created_utc</c>.</summary>
+    public DateTime? CreatedFromUtc { get; init; }
+
+    /// <inheritdoc cref="CreatedFromUtc"/>
+    public DateTime? CreatedToUtc { get; init; }
+
+    /// <summary>
+    /// Compared with <c>postSummary.postedUtc</c> (<see cref="PostSummaries.Of"/>). A request without a post time never
+    /// matches when either bound is set. <see cref="SavedRequestQuery.Sort"/> also accepts <c>posted</c> / <c>-posted</c>
+    /// on that time: requests without one last in both directions, then <c>id desc</c>.
+    /// </summary>
+    public DateTime? PostedFromUtc { get; init; }
+
+    /// <inheritdoc cref="PostedFromUtc"/>
+    public DateTime? PostedToUtc { get; init; }
+}
 
 /// <summary>A flag counted among pending requests and among all requests (spec 9.3).</summary>
 public sealed record FlagCounts(int Pending, int All);

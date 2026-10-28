@@ -49,11 +49,19 @@ public sealed partial class EfSavedRequestStore : ISavedRequestV2Store
         if (query.MinTotal is { } min) rows = rows.Where(r => r.ControlTotal != null && r.ControlTotal >= min);
         if (query.MaxTotal is { } max) rows = rows.Where(r => r.ControlTotal != null && r.ControlTotal <= max);
         if (query.HasErrors is { } hasErrors) rows = rows.Where(r => (r.ProblemCount > 0 || r.NeedsAttentionV2) == hasErrors);
+        if (query.ReceivedFromUtc is { } receivedFromUtc) rows = rows.Where(r => (r.EmailReceivedUtc ?? r.CreatedUtc) >= receivedFromUtc);
+        if (query.ReceivedToUtc is { } receivedToUtc) rows = rows.Where(r => (r.EmailReceivedUtc ?? r.CreatedUtc) < receivedToUtc);
+        if (query.CreatedFromUtc is { } createdFromUtc) rows = rows.Where(r => r.CreatedUtc >= createdFromUtc);
+        if (query.CreatedToUtc is { } createdToUtc) rows = rows.Where(r => r.CreatedUtc < createdToUtc);
+        if (query.PostedFromUtc is { } postedFromUtc)
+            rows = WithPostedUtc(db, rows).Where(x => x.PostedUtc >= postedFromUtc).Select(x => x.Row);
+        if (query.PostedToUtc is { } postedToUtc)
+            rows = WithPostedUtc(db, rows).Where(x => x.PostedUtc < postedToUtc).Select(x => x.Row);
 
         var total = await rows.CountAsync(ct);
         var size = Math.Max(1, query.Base.PageSize);
         var page = Math.Max(1, query.Base.Page);
-        var items = await OrderV2(rows, query.Base.Sort)
+        var items = await OrderV2(db, rows, query.Base.Sort)
             .Skip((page - 1) * size)
             .Take(size)
             .Select(r => new
@@ -192,11 +200,17 @@ public sealed partial class EfSavedRequestStore : ISavedRequestV2Store
         return counts.ToDictionary(c => c.RequestId!.Value, c => c.Count);
     }
 
-    private static IQueryable<SavedRequestEntity> OrderV2(IQueryable<SavedRequestEntity> rows, string sort)
+    private static IQueryable<SavedRequestEntity> OrderV2(QbAutopostDbContext db, IQueryable<SavedRequestEntity> rows, string sort)
     {
         var descending = sort.StartsWith('-');
         return sort.TrimStart('-') switch
         {
+            // T-1211: no post time last in both directions (NULLS LAST), then id desc, as in the fake.
+            "posted" => descending
+                ? WithPostedUtc(db, rows).OrderBy(x => x.PostedUtc == null).ThenByDescending(x => x.PostedUtc)
+                    .ThenByDescending(x => x.Row.Id).Select(x => x.Row)
+                : WithPostedUtc(db, rows).OrderBy(x => x.PostedUtc == null).ThenBy(x => x.PostedUtc)
+                    .ThenByDescending(x => x.Row.Id).Select(x => x.Row),
             "received" => descending
                 ? rows.OrderByDescending(r => r.EmailReceivedUtc ?? r.CreatedUtc).ThenByDescending(r => r.Id)
                 : rows.OrderBy(r => r.EmailReceivedUtc ?? r.CreatedUtc).ThenBy(r => r.Id),
