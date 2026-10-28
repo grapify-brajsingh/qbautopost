@@ -1,4 +1,6 @@
+using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using QbAutopost.Api.Auth;
@@ -132,6 +134,83 @@ public sealed class RefreshGraceStoreTests(PostgresFixture postgres) : IClassFix
 
         Assert.Equal(RefreshOutcome.ReuseDetected, reuse.Outcome);
         Assert.Null((await TokenAsync(first)).GraceSuccessorId);
+    }
+
+    /// <summary>
+    /// Ruling R11: a grace refresh holds the successor's lock and has inserted its second successor G (uncommitted);
+    /// a reuse with no grace (unknown address) revokes the family and waits on that lock; the grace commits. The
+    /// revocation must still revoke G, which its first UPDATE could not see.
+    /// </summary>
+    [PostgresFact]
+    public async Task Should_RevokeGraceSuccessor_When_FamilyRevokedConcurrently()
+    {
+        var first = await Service.IssueAsync(_userId!, null, Address, CancellationToken.None);
+        Assert.Equal(RefreshOutcome.Ok, (await Service.RotateWithGraceAsync(first, Address, Grace, CancellationToken.None)).Outcome);
+        var hold = new HoldBeforeGraceRecord();
+        await using var held = new ServiceCollection()
+            .AddPooledDbContextFactory<QbAutopostDbContext>(o => o.UseNpgsql(_connectionString!).AddInterceptors(hold))
+            .BuildServiceProvider();
+        var holding = new RefreshTokenService(
+            held.GetRequiredService<IDbContextFactory<QbAutopostDbContext>>(), Options.Create(new AppSettings()), new FixedClock { UtcNow = DateTime.UtcNow });
+
+        var grace = Task.Run(() => holding.RotateWithGraceAsync(first, Address, Grace, CancellationToken.None));
+        await hold.Reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        var theft = Task.Run(() => Service.RotateWithGraceAsync(first, ip: null, Grace, CancellationToken.None));
+        await WaitForALockWaiterAsync();
+        hold.Release.SetResult();
+
+        Assert.Equal(RefreshOutcome.Ok, (await grace).Outcome);
+        Assert.Equal(RefreshOutcome.ReuseDetected, (await theft).Outcome);
+        var presented = await TokenAsync(first);
+        Assert.NotNull(presented.GraceSuccessorId);
+        await using var db = await Contexts.CreateDbContextAsync();
+        var family = await db.RefreshTokens.AsNoTracking().Where(t => t.FamilyId == presented.FamilyId).ToListAsync();
+        Assert.Equal(3, family.Count);
+        Assert.All(family, t => Assert.NotNull(t.RevokedUtc));
+    }
+
+    /// <summary>Until another session of this database waits on a lock (the revocation, blocked on the successor's row).</summary>
+    private async Task WaitForALockWaiterAsync()
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (true)
+        {
+            await using var db = await Contexts.CreateDbContextAsync();
+            var waiting = await db.Database
+                .SqlQueryRaw<int>("SELECT count(*)::int AS \"Value\" FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'")
+                .SingleAsync();
+            if (waiting > 0)
+            {
+                return;
+            }
+
+            Assert.True(DateTime.UtcNow < deadline, "the revocation never waited on the successor's lock");
+            await Task.Delay(20);
+        }
+    }
+
+    /// <summary>Holds the grace transaction open just before it records <c>grace_successor_id</c>, once.</summary>
+    private sealed class HoldBeforeGraceRecord : DbCommandInterceptor
+    {
+        private int _fired;
+
+        public TaskCompletionSource Reached { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.TrimStart().StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase)
+                && command.CommandText.Contains("grace_successor_id", StringComparison.Ordinal)
+                && Interlocked.Exchange(ref _fired, 1) == 0)
+            {
+                Reached.SetResult();
+                await Release.Task;
+            }
+
+            return result;
+        }
     }
 
     private async Task<RefreshTokenEntity> TokenAsync(string raw)

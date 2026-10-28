@@ -130,7 +130,7 @@ public sealed class RefreshTokenService(IDbContextFactory<QbAutopostDbContext> c
             return new RefreshResult(RefreshOutcome.Ok, current.UserId, second, current.FamilyId);
         }
 
-        await RevokeFamilyAsync(db, current.FamilyId, now, CancellationToken.None);
+        await RevokeFamilyUntilQuietAsync(db, current.FamilyId, now);
         return new RefreshResult(RefreshOutcome.ReuseDetected, current.UserId, null, current.FamilyId);
     }
 
@@ -214,6 +214,12 @@ public sealed class RefreshTokenService(IDbContextFactory<QbAutopostDbContext> c
     {
         var none = CancellationToken.None;
 
+        // Ruling R12: a grace of zero or less is no grace at all, whatever the timestamps say.
+        if (grace <= TimeSpan.Zero)
+        {
+            return null;
+        }
+
         // (a) revoked by rotation, (b) within the grace, (e) no grace given yet.
         if (current.ReplacedById is not { } successorId
             || current.RevokedUtc is not { } revokedUtc
@@ -261,6 +267,19 @@ public sealed class RefreshTokenService(IDbContextFactory<QbAutopostDbContext> c
 
         await transaction.CommitAsync(none);
         return raw;
+    }
+
+    /// <summary>
+    /// Ruling R11: the grace path's family revocation. One UPDATE cannot see a token a concurrent grace refresh inserted
+    /// after the statement's snapshot (it waits on the successor's row lock, then revokes only what it saw), so the
+    /// UPDATE is repeated until it changes nothing. The first run returns only after every transaction holding a lock on
+    /// a family member has committed, so the next run sees what it added. v1's <see cref="RevokeFamilyAsync"/> is unchanged.
+    /// </summary>
+    private static async Task RevokeFamilyUntilQuietAsync(QbAutopostDbContext db, Guid familyId, DateTime now)
+    {
+        while (await RevokeFamilyAsync(db, familyId, now, CancellationToken.None) > 0)
+        {
+        }
     }
 
     private static Task<int> RevokeFamilyAsync(QbAutopostDbContext db, Guid familyId, DateTime now, CancellationToken ct) =>

@@ -6,10 +6,14 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using QbAutopost.Api.Auth;
 using QbAutopost.Api.Tests.TestSupport;
+using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Security;
 using QbAutopost.Data.Entities;
 
@@ -177,6 +181,39 @@ public sealed class V2RefreshGraceTests(PostgresFixture postgres) : IClassFixtur
         await AssertFamilyRevokedAsync(first);
         Assert.Null((await TokenAsync(first)).GraceSuccessorId);
         Assert.Empty(await DbAsync(db => db.UserAudit.Where(a => a.Kind == "refresh-reuse").ToListAsync()));
+    }
+
+    /// <summary>
+    /// Ruling R12: <c>Auth:Jwt:RefreshReuseGraceSeconds</c> 0 gives no grace, even for a reuse in the same instant as the
+    /// rotation (the clock is frozen, so revoked-ago is exactly zero).
+    /// </summary>
+    [PostgresFact]
+    public async Task Should_RevokeFamily_When_GraceDisabled()
+    {
+        await AddUserAsync("ann@example.com");
+        using var noGrace = Host.WithWebHostBuilder(b =>
+        {
+            b.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Auth:Jwt:RefreshReuseGraceSeconds"] = "0",
+            }));
+            b.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IClock>();
+                // Whole seconds: PostgreSQL keeps microseconds, so a finer instant would read back as already past.
+                var now = DateTime.UtcNow;
+                services.AddSingleton<IClock>(new FixedClock { UtcNow = new DateTime(now.Ticks - (now.Ticks % TimeSpan.TicksPerSecond), DateTimeKind.Utc) });
+            });
+        });
+        using var client = noGrace.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false });
+        var first = await SignInAsync(client, "v2", Home);
+        await RefreshedAsync(client, "v2", first, Home);
+
+        using var reuse = await RefreshAsync(client, "v2", first, Home);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, reuse.StatusCode);
+        await AssertFamilyRevokedAsync(first);
+        Assert.Null((await TokenAsync(first)).GraceSuccessorId);
     }
 
     [PostgresFact]
