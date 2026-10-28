@@ -15,6 +15,13 @@ public sealed partial class EfSavedRequestStore : ISavedRequestV2Store
     private static readonly SavedRequestStatus[] Unposted =
         [SavedRequestStatus.Pending, SavedRequestStatus.Posting, SavedRequestStatus.Partial, SavedRequestStatus.Unknown];
 
+    public async Task<SavedRequest?> GetV2Async(long id, CancellationToken ct)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var record = await LoadAsync(db, id, ct);
+        return record is null ? null : await WithPostSummaryAndHistoryAsync(db, record, ct);
+    }
+
     public async Task<PagedResult<SavedRequestSummary>> ListV2Async(SavedRequestQueryV2 query, CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
@@ -129,7 +136,7 @@ public sealed partial class EfSavedRequestStore : ISavedRequestV2Store
 
     // ---- helpers -----------------------------------------------------------------------------------------------
 
-    /// <summary>What <see cref="ISavedRequestStore.GetAsync"/> adds for v2: the post summary and the history count.</summary>
+    /// <summary>What <see cref="GetV2Async"/> adds to <see cref="ISavedRequestStore.GetAsync"/>'s record: the post summary and the history count.</summary>
     private static async Task<SavedRequest> WithPostSummaryAndHistoryAsync(QbAutopostDbContext db, SavedRequest record, CancellationToken ct)
     {
         List<long> ids = [record.Id];

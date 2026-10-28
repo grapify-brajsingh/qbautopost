@@ -12,6 +12,14 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestV2Store
     private static readonly SavedRequestStatus[] Unposted =
         [SavedRequestStatus.Pending, SavedRequestStatus.Posting, SavedRequestStatus.Partial, SavedRequestStatus.Unknown];
 
+    public Task<SavedRequest?> GetV2Async(long id, CancellationToken ct)
+    {
+        lock (_gate)
+        {
+            return Task.FromResult(_requests.TryGetValue(id, out var r) ? WithPostSummaryAndHistory(View(r)) : null);
+        }
+    }
+
     public Task<PagedResult<SavedRequestSummary>> ListV2Async(SavedRequestQueryV2 query, CancellationToken ct)
     {
         lock (_gate)

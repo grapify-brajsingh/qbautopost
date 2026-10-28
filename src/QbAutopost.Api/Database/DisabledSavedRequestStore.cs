@@ -58,6 +58,8 @@ public sealed class DisabledSavedRequestStore : ISavedRequestStore, ISavedReques
 
     public Task<int> AuditEventCountAsync(AuditQuery query, CancellationToken ct) => throw Off();
 
+    public Task<SavedRequest?> GetV2Async(long id, CancellationToken ct) => throw Off();
+
     public Task<PagedResult<SavedRequestSummary>> ListV2Async(SavedRequestQueryV2 query, CancellationToken ct) => throw Off();
 
     public Task<SavedRequestStatsV2> StatsV2Async(CancellationToken ct) => throw Off();

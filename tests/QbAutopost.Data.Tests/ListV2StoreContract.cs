@@ -9,7 +9,7 @@ namespace QbAutopost.Data.Tests;
 /// <summary>
 /// T-1107: the dashboard v2 reads every <see cref="ISavedRequestStore"/> serves through
 /// <see cref="ISavedRequestV2Store"/> (spec saved-requests-dashboard-v2 5.2 search, 5.3, 8.4, 9.1-9.3), and the
-/// <c>postSummary</c> and <c>historyCount</c> that <see cref="ISavedRequestStore.GetAsync"/> now fills. Store-agnostic,
+/// <c>postSummary</c> and <c>historyCount</c> that <see cref="ISavedRequestV2Store.GetV2Async"/> fills (ruling R7). Store-agnostic,
 /// so the fake and the EF Core store run the same tests.
 /// </summary>
 public abstract class ListV2StoreContract
@@ -320,7 +320,7 @@ public abstract class ListV2StoreContract
             new JsonObject { ["posted"] = 3, ["skipped"] = 1 });
 
         var expected = new PostSummary("P-1", 3, T0.AddMinutes(4), Client);
-        Assert.Equal(expected, (await store.GetAsync(created.Id, default))!.PostSummary);
+        Assert.Equal(expected, (await V2(store).GetV2Async(created.Id, default))!.PostSummary);
         Assert.Equal(expected, Assert.Single((await V2(store).ListV2Async(Query(), default)).Items).PostSummary);
     }
 
@@ -333,7 +333,7 @@ public abstract class ListV2StoreContract
         await CompleteAsync(store, attempt, AttemptOutcome.Unknown, SavedRequestStatus.Unknown, T0.AddMinutes(2));
         await store.ResolveAsync(created.Id, ResolveOutcome.Posted, "Checked in QuickBooks", Admin, T0.AddMinutes(3), default);
 
-        var summary = (await store.GetAsync(created.Id, default))!.PostSummary;
+        var summary = (await V2(store).GetV2Async(created.Id, default))!.PostSummary;
 
         Assert.Equal(new PostSummary(null, null, T0.AddMinutes(3), Admin), summary);
         Assert.Equal(summary, Assert.Single((await V2(store).ListV2Async(Query(), default)).Items).PostSummary);
@@ -348,7 +348,7 @@ public abstract class ListV2StoreContract
             store, await ClaimAsync(store, created.Id, T0.AddMinutes(1)), AttemptOutcome.Failed, SavedRequestStatus.Pending,
             T0.AddMinutes(2));
 
-        Assert.Null((await store.GetAsync(created.Id, default))!.PostSummary);
+        Assert.Null((await V2(store).GetV2Async(created.Id, default))!.PostSummary);
         Assert.Null(Assert.Single((await V2(store).ListV2Async(Query(), default)).Items).PostSummary);
     }
 
@@ -430,7 +430,7 @@ public abstract class ListV2StoreContract
 
         var expected = await Feed(store).AuditEventCountAsync(
             new AuditQuery(null, null, null, created.Id, null, null, [], null, false, 1, 50), default);
-        var read = (await store.GetAsync(created.Id, default))!;
+        var read = (await V2(store).GetV2Async(created.Id, default))!;
         var rows = (await V2(store).ListV2Async(Query(), default)).Items;
 
         // received, two changes (row added, control total), validated.

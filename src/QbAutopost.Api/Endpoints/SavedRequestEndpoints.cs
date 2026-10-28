@@ -48,17 +48,29 @@ public static class SavedRequestEndpoints
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     /// <param name="flavor">
-    /// T-1109: the surface being mapped. For now the only v2 difference is the save's <c>Location</c>
-    /// (<see cref="Location"/>); T-1110 to T-1113 give each v2 route its own behaviour (dashboard v2 spec 3).
+    /// T-1109: the surface being mapped. T-1110 gave v2 its own save; T-1111 maps the v2 list, stats, detail and
+    /// attempt detail to their own handlers (dashboard v2 spec 3, 9, 10); T-1112 and T-1113 do the rest.
     /// </param>
     public static IEndpointRouteBuilder MapSavedRequestEndpoints(this IEndpointRouteBuilder v1, ApiFlavor flavor = ApiFlavor.V1)
     {
         var group = v1.MapGroup("/saved-requests").RequireDatabase();
         group.AddEndpointFilter(SavedRequestLogContext);
         group.MapPost("/", (HttpContext http, SavedRequestIntake intake, CancellationToken ct) => SaveAsync(http, intake, flavor, ct));
-        group.MapGet("/", ListAsync);
-        group.MapGet("/stats", StatsAsync);
-        group.MapGet("/{id}", GetAsync);
+        if (flavor == ApiFlavor.V2)
+        {
+            group.MapGet("/", ListV2Async);
+            group.MapGet("/stats", StatsV2Async);
+            group.MapGet("/{id}", GetV2Async);
+            group.MapGet("/{id}/attempts/{attemptId}", AttemptV2Async);
+        }
+        else
+        {
+            group.MapGet("/", ListAsync);
+            group.MapGet("/stats", StatsAsync);
+            group.MapGet("/{id}", GetAsync);
+            group.MapGet("/{id}/attempts/{attemptId}", AttemptAsync);
+        }
+
         group.MapPut("/{id}", EditAsync);
         group.MapPost("/{id}/validate", ValidateAsync);
         group.MapPost("/{id}/discard", DiscardAsync);
@@ -69,7 +81,6 @@ public static class SavedRequestEndpoints
         group.MapGet("/{id}/versions", VersionsAsync);
         group.MapGet("/{id}/versions/{n}", VersionAsync);
         group.MapGet("/{id}/attempts", AttemptsAsync);
-        group.MapGet("/{id}/attempts/{attemptId}", AttemptAsync);
         group.MapGet("/{id}/events", EventsAsync);
         return v1;
     }
@@ -239,6 +250,26 @@ public static class SavedRequestEndpoints
     private static async Task<IResult> StatsAsync(ISavedRequestStore store, CancellationToken ct) =>
         Json(SavedRequestViews.Stats(await store.StatsAsync(ct)));
 
+    /// <summary>Dashboard v2 spec 9.2: v1's parameters plus the v2 ones (<see cref="V2QueryParser"/>); rows are v2 rows.</summary>
+    private static async Task<IResult> ListV2Async(
+        HttpContext http, ISavedRequestV2Store store, ActorDirectory actors, IOptions<AppSettings> settings, CancellationToken ct)
+    {
+        if (!V2QueryParser.TryParse(http.Request.Query, settings.Value.SavedRequests.MaxListPageSize, out var query, out var error))
+        {
+            return BadRequest("Invalid query", error!);
+        }
+
+        var page = await store.ListV2Async(query!, ct);
+        var names = await actors.ResolveAsync(page.Items.SelectMany(SavedRequestViewsV2.ActorsOf), ct);
+        var caller = CallerMiddleware.CallerOf(http)!;
+        var items = page.Items.Select(s => SavedRequestViewsV2.Summary(s, caller, names)).ToList();
+        return Json(new PageView<SavedRequestSummaryV2View>(items, page.Page, page.PageSize, page.Total));
+    }
+
+    /// <summary>Dashboard v2 spec 9.3: every flag counted among pending requests and among all, on the v2 columns.</summary>
+    private static async Task<IResult> StatsV2Async(ISavedRequestV2Store store, CancellationToken ct) =>
+        Json(SavedRequestViewsV2.Stats(await store.StatsV2Async(ct)));
+
     // ---- one request ------------------------------------------------------------------------------------------------
 
     /// <summary>Spec 6.2. The <c>ETag</c> is the row version; <c>allowedActions</c> follow the status and the caller's scopes.</summary>
@@ -251,6 +282,33 @@ public static class SavedRequestEndpoints
         }
 
         return await DetailAsync(http, record, store, actors, ct);
+    }
+
+    /// <summary>
+    /// Dashboard v2 spec 9.1, 6.4, 10 items 4.1 and 4.9: the v2 detail, with its <c>ETag</c>. Read through
+    /// <see cref="ISavedRequestV2Store.GetV2Async"/> (ruling R7), the only read that fills the post summary and history
+    /// count. <c>ledgerBatch</c> is read only for a partial or unknown request whose last attempt has a <c>postId</c>.
+    /// </summary>
+    private static async Task<IResult> GetV2Async(
+        HttpContext http, string id, ISavedRequestStore store, ISavedRequestV2Store v2, ActorDirectory actors,
+        ApiBatchStore batches, ILoggerFactory loggers, CancellationToken ct)
+    {
+        if (!SavedRequestId.TryParse(id, out var requestId) || await v2.GetV2Async(requestId, ct) is not { } record)
+        {
+            return NotFound();
+        }
+
+        var version = await store.VersionAsync(record.Id, record.CurrentVersion, ct);
+        var readErrors = SavedRequestViewsV2.ReadErrors(
+            record.Metadata, version?.ReadErrors ?? [], version?.Payload ?? record.CurrentPayload);
+        var others = await v2.OtherUnpostedPushesAsync(record.Id, ct);
+        var ledger = record.Status is SavedRequestStatus.Partial or SavedRequestStatus.Unknown
+                     && record.LastAttempt?.PostId is { } postId
+            ? LoadDetailLedgerBatch(batches, postId, record.Id, loggers)
+            : null;
+        var names = await actors.ResolveAsync(SavedRequestViewsV2.ActorsOf(record), ct);
+        http.Response.Headers.ETag = $"\"{record.RowVersion.ToString(CultureInfo.InvariantCulture)}\"";
+        return Json(SavedRequestViewsV2.Detail(record, readErrors, others, ledger, CallerMiddleware.CallerOf(http)!, names));
     }
 
     /// <summary>Spec 5.1, 6: the body exactly as it was received, byte for byte; never re-serialised.</summary>
@@ -318,6 +376,54 @@ public static class SavedRequestEndpoints
         var ledger = found.PostId is { } postId ? LoadLedgerBatch(batches, postId, requestId, loggers) : null;
         var names = await actors.ResolveAsync([found.StartedBy, found.ResolvedBy], ct);
         return Json(SavedRequestViews.AttemptDetail(found, names, ledger));
+    }
+
+    /// <summary>
+    /// Dashboard v2 spec 10 items 4.8 and 9.3: the v1 attempt detail, with <c>externalId</c> on each ledger row. The
+    /// ledger batch is read and left out exactly as v1 does (<see cref="AttemptAsync"/>).
+    /// </summary>
+    private static async Task<IResult> AttemptV2Async(
+        string id, string attemptId, ISavedRequestStore store, ActorDirectory actors, ApiBatchStore batches,
+        ILoggerFactory loggers, CancellationToken ct)
+    {
+        if (!long.TryParse(attemptId, NumberStyles.None, CultureInfo.InvariantCulture, out var attempt) || attempt < 1
+            || !SavedRequestId.TryParse(id, out var requestId)
+            || await store.AttemptAsync(requestId, attempt, ct) is not { } found)
+        {
+            return NotFound();
+        }
+
+        using var scope = LogContext.PushProperty(SavedRequestPoster.AttemptIdField, found.Id);
+        var ledger = found.PostId is { } postId ? LoadLedgerBatch(batches, postId, requestId, loggers) : null;
+        var names = await actors.ResolveAsync([found.StartedBy, found.ResolvedBy], ct);
+        return Json(SavedRequestViewsV2.AttemptDetail(found, names, ledger));
+    }
+
+    /// <summary>
+    /// The ledger batch of a v2 detail. Like <see cref="LoadLedgerBatch"/>, a batch that is missing or cannot be read
+    /// is left out and logged, and never fails the read.
+    /// </summary>
+    private static DirectPostResult? LoadDetailLedgerBatch(ApiBatchStore batches, string postId, long requestId, ILoggerFactory loggers)
+    {
+        var log = loggers.CreateLogger(typeof(SavedRequestEndpoints));
+        using var scope = LogContext.PushProperty("postId", postId);
+        try
+        {
+            var batch = batches.Load(postId);
+            if (batch is null)
+            {
+                log.LogWarning("Saved request {SavedRequestId}: ledger batch {PostId} is missing or unreadable; left out of the detail", requestId, postId);
+            }
+
+            return batch;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            log.LogWarning(
+                "Saved request {SavedRequestId}: ledger batch {PostId} could not be read ({Error}); left out of the detail",
+                requestId, postId, ex.GetType().Name);
+            return null;
+        }
     }
 
     private static DirectPostResult? LoadLedgerBatch(ApiBatchStore batches, string postId, long requestId, ILoggerFactory loggers)

@@ -170,8 +170,7 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
     public async Task<SavedRequest?> GetAsync(long id, CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        var record = await LoadAsync(db, id, ct);
-        return record is null ? null : await WithPostSummaryAndHistoryAsync(db, record, ct);
+        return await LoadAsync(db, id, ct);
     }
 
     public async Task<PagedResult<SavedRequestSummary>> ListAsync(SavedRequestQuery query, CancellationToken ct)

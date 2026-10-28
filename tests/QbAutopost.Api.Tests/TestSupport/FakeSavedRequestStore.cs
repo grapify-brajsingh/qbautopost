@@ -98,7 +98,7 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestStore
     {
         lock (_gate)
         {
-            return Task.FromResult(_requests.TryGetValue(id, out var r) ? WithPostSummaryAndHistory(View(r)) : null);
+            return Task.FromResult(_requests.TryGetValue(id, out var r) ? View(r) : null);
         }
     }
 

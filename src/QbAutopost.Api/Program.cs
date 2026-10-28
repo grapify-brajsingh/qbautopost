@@ -23,6 +23,7 @@ using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Mapping;
 using QbAutopost.Core.Pipeline;
 using QbAutopost.Core.SavedRequests;
+using QbAutopost.Core.SavedRequests.Audit;
 using QbAutopost.Core.Security;
 using QbAutopost.Core.Store;
 using QbAutopost.Data;
@@ -295,6 +296,11 @@ else
     builder.Services.AddSingleton<ISavedRequestStore, DisabledSavedRequestStore>();
 }
 
+// T-1111: the dashboard v2 reads and the audit feed are served by the same store instance, whichever one is
+// registered as ISavedRequestStore (EF Core, disabled, or a test's fake), so a swap of that one swaps these too.
+builder.Services.AddSingleton<ISavedRequestV2Store>(sp => Program.StoreAs<ISavedRequestV2Store>(sp));
+builder.Services.AddSingleton<ISavedRequestAuditStore>(sp => Program.StoreAs<ISavedRequestAuditStore>(sp));
+
 // T-1009 (spec 10.11): CallerMiddleware resolves this only once the database gate is Ready, so without a database
 // (no Identity registered) a Bearer request answers 503 before anything asks for UserManager.
 builder.Services.AddMemoryCache();
@@ -546,4 +552,12 @@ static void RequireApiKey(WebApplication app)
 /// <summary>Entry point; public so <c>WebApplicationFactory&lt;Program&gt;</c> can host it in tests.</summary>
 public partial class Program
 {
+    /// <summary>
+    /// The registered <see cref="ISavedRequestStore"/> as <typeparamref name="T"/>. Every store (EF Core, disabled, the
+    /// tests' fake) implements the v2 and audit interfaces; one that does not fails loudly at first use.
+    /// </summary>
+    internal static T StoreAs<T>(IServiceProvider services)
+        where T : class =>
+        services.GetRequiredService<ISavedRequestStore>() as T
+        ?? throw new InvalidOperationException($"The registered ISavedRequestStore does not implement {typeof(T).Name}.");
 }

@@ -151,10 +151,10 @@ public sealed record SavedRequest(
     /// <summary>Findings plus errors of <see cref="ValidationV2"/>.</summary>
     public int ProblemCount { get; init; }
 
-    /// <summary>The latest post's outcome (spec 9.1). Filled by <see cref="ISavedRequestStore.GetAsync"/> only.</summary>
+    /// <summary>The latest post's outcome (spec 9.1). Filled by <see cref="ISavedRequestV2Store.GetV2Async"/> only.</summary>
     public PostSummary? PostSummary { get; init; }
 
-    /// <summary>How many <c>audit_events</c> rows the request has (spec 8.4). Filled by <see cref="ISavedRequestStore.GetAsync"/> only.</summary>
+    /// <summary>How many <c>audit_events</c> rows the request has (spec 8.4). Filled by <see cref="ISavedRequestV2Store.GetV2Async"/> only.</summary>
     public int HistoryCount { get; init; }
 }
 

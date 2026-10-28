@@ -10,6 +10,13 @@ namespace QbAutopost.Core.SavedRequests;
 public interface ISavedRequestV2Store
 {
     /// <summary>
+    /// <see cref="ISavedRequestStore.GetAsync"/>'s record plus <see cref="SavedRequest.PostSummary"/> and
+    /// <see cref="SavedRequest.HistoryCount"/> (controller ruling R7: only the v2 detail reads these, so v1 reads never
+    /// depend on the <c>audit_events</c> view).
+    /// </summary>
+    Task<SavedRequest?> GetV2Async(long id, CancellationToken ct);
+
+    /// <summary>
     /// One page of v2 list rows, with <see cref="SavedRequestSummary.PostSummary"/> and
     /// <see cref="SavedRequestSummary.HistoryCount"/> filled, and how many match in all. The <c>id</c> tie-break of
     /// every sort is kept.

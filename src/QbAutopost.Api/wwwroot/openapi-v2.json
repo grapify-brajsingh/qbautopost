@@ -1084,7 +1084,7 @@
         ],
         "operationId": "listSavedRequests",
         "summary": "List saved requests, filtered and paged.",
-        "description": "Saved-requests §6.5. Every value is checked: an unknown `status` or `sort`, a flag that is not `true`/`false`, a date that is not `yyyy-MM-dd`, or a page outside its range answers `400`. Rows hold everything in the detail except the payload, the validation findings and the read errors.",
+        "description": "Saved-requests §6.5 with dashboard v2 §9.2: v1's parameters plus `receivedFrom`, `receivedTo`, `emailFrom`, `reference`, `minTotal`, `maxTotal`, `hasErrors` and the sorts `received`, `total` and `rows`, all combined with AND. `needsAttention`, `hasErrors` and the rows' flags use the v2 judgement (§5.3). Every value is checked: an unknown `status` or `sort`, a flag that is not `true`/`false`, a date that is not `yyyy-MM-dd`, a total that is not an invariant decimal, `minTotal` above `maxTotal`, or a page outside its range answers `400 invalid-request`.",
         "x-required-scope": "requests:read",
         "security": [
           {
@@ -1116,7 +1116,7 @@
             "name": "needsAttention",
             "in": "query",
             "required": false,
-            "description": "Only requests that do (`true`) or do not (`false`) need attention.",
+            "description": "Only requests that do (`true`) or do not (`false`) need attention under the v2 rule (§5.3).",
             "schema": {
               "type": "boolean"
             }
@@ -1134,7 +1134,7 @@
             "name": "q",
             "in": "query",
             "required": false,
-            "description": "Case-insensitive text in the reference, the public reference, or a payee or memo inside the payload.",
+            "description": "Case-insensitive text in the reference, the public reference, a payee or memo inside the payload, or the email subject. When it is 1 to 32 hex digits (dashes ignored) it also matches the start of the `pushId`.",
             "schema": {
               "type": "string"
             }
@@ -1169,10 +1169,77 @@
             }
           },
           {
+            "name": "receivedFrom",
+            "in": "query",
+            "required": false,
+            "description": "Received on or after this date (UTC): the email's `receivedUtc`, else the save time.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "receivedTo",
+            "in": "query",
+            "required": false,
+            "description": "Received on or before this date (UTC), as `receivedFrom`.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "emailFrom",
+            "in": "query",
+            "required": false,
+            "description": "Case-insensitive text in the email's `from`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "reference",
+            "in": "query",
+            "required": false,
+            "description": "Exactly this reference.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "minTotal",
+            "in": "query",
+            "required": false,
+            "description": "`controlTotal` at least this (invariant decimal, e.g. `1250.00`). A request without a total is left out when `minTotal` or `maxTotal` is given.",
+            "schema": {
+              "type": "number",
+              "format": "decimal"
+            }
+          },
+          {
+            "name": "maxTotal",
+            "in": "query",
+            "required": false,
+            "description": "`controlTotal` at most this, as `minTotal`. Below `minTotal` answers `400`.",
+            "schema": {
+              "type": "number",
+              "format": "decimal"
+            }
+          },
+          {
+            "name": "hasErrors",
+            "in": "query",
+            "required": false,
+            "description": "`true`: requests with a problem (`validationSummary.problemCount` above 0) or that need attention; `false`: the others.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "name": "sort",
             "in": "query",
             "required": false,
-            "description": "Default `-created`; a leading `-` is descending.",
+            "description": "Default `-created`; a leading `-` is descending. `received` is the email's received time, else the save time; `total` is `controlTotal` (no total last); `rows` is `transactionCount`. Ties are broken by id.",
             "schema": {
               "type": "string",
               "enum": [
@@ -1181,7 +1248,13 @@
                 "updated",
                 "-updated",
                 "controlTotal",
-                "-controlTotal"
+                "-controlTotal",
+                "received",
+                "-received",
+                "total",
+                "-total",
+                "rows",
+                "-rows"
               ]
             }
           },
@@ -1213,7 +1286,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SavedRequestPage"
+                  "$ref": "#/components/schemas/SavedRequestPageV2"
                 }
               }
             }
@@ -1247,7 +1320,7 @@
         ],
         "operationId": "savedRequestStats",
         "summary": "Counts for the dashboard header.",
-        "description": "Every status appears in `byStatus`, zero included.",
+        "description": "Dashboard v2 §9.3. `byStatus` names every status, zero included. Each flag is counted among `pending` requests and among `all`, on the v2 judgement (§5.3); `hasErrors` is a problem count above 0 or needing attention.",
         "x-required-scope": "requests:read",
         "security": [
           {
@@ -1263,7 +1336,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SavedRequestStats"
+                  "$ref": "#/components/schemas/SavedRequestStatsV2"
                 }
               }
             }
@@ -1294,7 +1367,7 @@
         ],
         "operationId": "getSavedRequest",
         "summary": "One saved request: latest payload, flags, validation snapshot and last attempt.",
-        "description": "Saved-requests §6.2. The `ETag` is the row version, to send as `If-Match` on an edit or a post. `allowedActions` follows the status and the caller's scopes; an API key never gets an action. Actors are `{ id, name, email }` for a user and `{ id, name }` for an API client (`api-client:<id>`).",
+        "description": "Saved-requests §6.2 with dashboard v2 §9.1 and §10 (4.1, 4.3, 4.9). The `ETag` is the row version, to send as `If-Match` on an edit or a post. `needsAttention` and `validation` are the v2 judgement. `readErrors` lists the metadata errors (e.g. `$.pushId: not a UUID`) first, then the read errors of the current version, then its `post` errors. `allowedActions` follows the status and the caller's scopes; an API key never gets an action. Actors are `{ id, name, email }` for a user and `{ id, name }` for an API client (`api-client:<id>`).",
         "x-required-scope": "requests:read",
         "security": [
           {
@@ -1329,7 +1402,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SavedRequestDetail"
+                  "$ref": "#/components/schemas/SavedRequestDetailV2"
                 }
               }
             }
@@ -2410,7 +2483,7 @@
         ],
         "operationId": "getSavedRequestAttempt",
         "summary": "One attempt with the full stored result.",
-        "description": "`result` is the validate-and-post answer (200) or its problem body, stored as returned. When the attempt has a `postId`, `ledgerBatch` is the batch behind it, read from the same store as `GET /batches/{id}`, so an admin can check QuickBooks before resolving an unknown or partial post (§10.6). It is left out when the batch file is missing or unreadable; that never fails this read.",
+        "description": "`result` is the validate-and-post answer (200) or its problem body, stored as returned. When the attempt has a `postId`, `ledgerBatch` is the batch behind it, read from the same store as `GET /batches/{id}`, so an admin can check QuickBooks before resolving an unknown or partial post (§10.6). It is left out when the batch file is missing or unreadable; that never fails this read. In v2 (§10 4.8), each `ledgerBatch.posted[]` row also carries the `externalId` of the row with the same `index` in `result.posted[]`.",
         "x-required-scope": "requests:read",
         "security": [
           {
@@ -2448,7 +2521,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PostAttemptDetail"
+                  "$ref": "#/components/schemas/PostAttemptDetailV2"
                 }
               }
             }
@@ -4533,6 +4606,657 @@
             "items": {
               "$ref": "#/components/schemas/SavedRequestEvent"
             }
+          }
+        }
+      },
+      "SavedRequestValidationSummary": {
+        "type": "object",
+        "description": "Dashboard v2 §9.1: the v2 snapshot in short.",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "held",
+              "refused",
+              "unreadable",
+              "unavailable",
+              "none"
+            ],
+            "description": "The v2 snapshot's state, or `none` when the request has none."
+          },
+          "problemCount": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Findings and errors of the v2 snapshot, plus the metadata errors."
+          },
+          "validatedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "versionNumber": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
+            "description": "The version the snapshot judged."
+          }
+        }
+      },
+      "SavedRequestPostSummary": {
+        "type": "object",
+        "description": "Dashboard v2 §9.1: from the latest `posted` or `partial` attempt; for a request settled `posted` by resolve without one, `postedCount` is `null`, `postedUtc` the resolution time and `postedBy` the resolver.",
+        "properties": {
+          "postId": {
+            "type": "string",
+            "nullable": true
+          },
+          "postedCount": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "postedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "postedBy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestActor"
+              }
+            ],
+            "nullable": true
+          }
+        }
+      },
+      "SavedRequestOtherPush": {
+        "type": "object",
+        "description": "Dashboard v2 §9.1: another request with the same non-empty reference that is `pending`, `posting`, `partial` or `unknown`.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "publicRef": {
+            "type": "string"
+          },
+          "pushId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "receivedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The email's `receivedUtc`, else the save time. The list is ordered by it."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "posting",
+              "posted",
+              "partial",
+              "unknown",
+              "discarded"
+            ]
+          }
+        }
+      },
+      "SavedRequestLedgerBatch": {
+        "type": "object",
+        "nullable": true,
+        "description": "Dashboard v2 §10 4.9: set when the request is `partial` or `unknown`, its last attempt has a `postId`, and the ledger has that batch; otherwise `null`.",
+        "properties": {
+          "postId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "The batch's job status, e.g. `posting`, `partial`."
+          },
+          "createdUtc": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the batch started."
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "submitted": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "posted": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          }
+        }
+      },
+      "SavedRequestSummaryV2": {
+        "type": "object",
+        "description": "Dashboard v2 §9.1: the v1 row (§6.5) with `needsAttention` and `validation` from the v2 judgement, plus `pushId`, `email`, `historyCount`, `validationSummary`, `postSummary` and `skipCount`.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "publicRef": {
+            "type": "string",
+            "description": "`SR-000123`."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "posting",
+              "posted",
+              "partial",
+              "unknown",
+              "discarded"
+            ]
+          },
+          "rowVersion": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SavedRequestSource"
+          },
+          "reference": {
+            "type": "string",
+            "nullable": true
+          },
+          "controlTotal": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "transactionCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "currentVersion": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "needsAttention": {
+            "type": "boolean"
+          },
+          "duplicate": {
+            "$ref": "#/components/schemas/SavedRequestDuplicate"
+          },
+          "validation": {
+            "allOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "ok",
+                      "held",
+                      "refused",
+                      "unreadable",
+                      "unavailable"
+                    ]
+                  },
+                  "validatedUtc": {
+                    "type": "string",
+                    "format": "date-time",
+                    "nullable": true
+                  }
+                }
+              }
+            ],
+            "nullable": true
+          },
+          "postId": {
+            "type": "string",
+            "nullable": true
+          },
+          "created": {
+            "$ref": "#/components/schemas/SavedRequestStamp"
+          },
+          "updated": {
+            "$ref": "#/components/schemas/SavedRequestStamp"
+          },
+          "allowedActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Of `edit`, `validate`, `post`, `discard`, `restore`, `resolve`, in that order."
+          },
+          "pushId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "Lower case with dashes; `null` when none was sent at a v2 save or it was not a UUID."
+          },
+          "email": {
+            "$ref": "#/components/schemas/SavedRequestEmail"
+          },
+          "historyCount": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many audit events the request has (§8.4)."
+          },
+          "validationSummary": {
+            "$ref": "#/components/schemas/SavedRequestValidationSummary"
+          },
+          "postSummary": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestPostSummary"
+              }
+            ],
+            "nullable": true
+          },
+          "skipCount": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Rows of the current version sent with `post: false`."
+          }
+        }
+      },
+      "SavedRequestPageV2": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedRequestSummaryV2"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "SavedRequestDetailV2": {
+        "type": "object",
+        "description": "Dashboard v2 §9.1: the v1 detail (§6.2) with `needsAttention`, `validation` (its `versionNumber` is the version judged, §10 4.3) and `readErrors` from the v2 judgement, plus the list row's additions, `otherUnpostedPushes` and `ledgerBatch`.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "publicRef": {
+            "type": "string",
+            "description": "`SR-000123`."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "posting",
+              "posted",
+              "partial",
+              "unknown",
+              "discarded"
+            ]
+          },
+          "rowVersion": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SavedRequestSource"
+          },
+          "reference": {
+            "type": "string",
+            "nullable": true
+          },
+          "controlTotal": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "transactionCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "currentVersion": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "needsAttention": {
+            "type": "boolean"
+          },
+          "readErrors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The metadata errors first, then the read errors of the current version, then its `post` errors (§6.4)."
+          },
+          "duplicate": {
+            "$ref": "#/components/schemas/SavedRequestDuplicateDetail"
+          },
+          "validation": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestValidation"
+              }
+            ],
+            "nullable": true
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The latest version, as stored."
+          },
+          "lastAttempt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestLastAttempt"
+              }
+            ],
+            "nullable": true
+          },
+          "postId": {
+            "type": "string",
+            "nullable": true
+          },
+          "discardReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "created": {
+            "$ref": "#/components/schemas/SavedRequestStamp"
+          },
+          "updated": {
+            "$ref": "#/components/schemas/SavedRequestStamp"
+          },
+          "allowedActions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Of `edit`, `validate`, `post`, `discard`, `restore`, `resolve`, in that order."
+          },
+          "pushId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "Lower case with dashes; `null` when none was sent at a v2 save or it was not a UUID."
+          },
+          "email": {
+            "$ref": "#/components/schemas/SavedRequestEmail"
+          },
+          "historyCount": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many audit events the request has (§8.4)."
+          },
+          "validationSummary": {
+            "$ref": "#/components/schemas/SavedRequestValidationSummary"
+          },
+          "postSummary": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestPostSummary"
+              }
+            ],
+            "nullable": true
+          },
+          "skipCount": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Rows of the current version sent with `post: false`."
+          },
+          "otherUnpostedPushes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedRequestOtherPush"
+            }
+          },
+          "ledgerBatch": {
+            "$ref": "#/components/schemas/SavedRequestLedgerBatch"
+          }
+        }
+      },
+      "SavedRequestStatsV2": {
+        "type": "object",
+        "description": "Dashboard v2 §9.3.",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "byStatus": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Every status, zero included."
+          },
+          "needsAttention": {
+            "type": "object",
+            "properties": {
+              "pending": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "all": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          },
+          "duplicate": {
+            "type": "object",
+            "properties": {
+              "pending": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "all": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          },
+          "hasErrors": {
+            "type": "object",
+            "properties": {
+              "pending": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "all": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          }
+        }
+      },
+      "LedgerBatchV2": {
+        "type": "object",
+        "description": "The ledger batch of an attempt's `postId` (§10.6). Absent when the attempt has no `postId` or the batch cannot be read.",
+        "properties": {
+          "batchId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "The batch's job status, e.g. `posted`, `partial`, `failed`."
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "submitted": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "posted": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "held": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "skipped": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "submitted": {
+                "type": "number",
+                "format": "decimal"
+              },
+              "posted": {
+                "type": "number",
+                "format": "decimal"
+              }
+            }
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "posted": {
+            "type": "array",
+            "description": "The rows QuickBooks accepted, with the transaction ids to look up.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "externalId": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "The `externalId` of the row with this `index` (§10 4.8)."
+                },
+                "txnId": {
+                  "type": "string"
+                },
+                "requestId": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "account": {
+                  "type": "string"
+                },
+                "payee": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "amount": {
+                  "type": "number",
+                  "format": "decimal"
+                }
+              }
+            }
+          }
+        }
+      },
+      "PostAttemptDetailV2": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "versionNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "in-progress",
+              "posted",
+              "partial",
+              "failed",
+              "held",
+              "refused",
+              "busy",
+              "unavailable",
+              "error",
+              "unknown"
+            ]
+          },
+          "httpStatus": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "postId": {
+            "type": "string",
+            "nullable": true
+          },
+          "counts": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "startedUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "startedBy": {
+            "$ref": "#/components/schemas/SavedRequestActor"
+          },
+          "resolvedBy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestActor"
+              }
+            ],
+            "nullable": true
+          },
+          "resolvedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "resolutionNote": {
+            "type": "string",
+            "nullable": true
+          },
+          "result": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true,
+            "description": "As stored. After a post, `result.posted[]` lists each row QuickBooks accepted with `index`, `externalId` and `txnId`."
+          },
+          "ledgerBatch": {
+            "$ref": "#/components/schemas/LedgerBatchV2"
           }
         }
       }
