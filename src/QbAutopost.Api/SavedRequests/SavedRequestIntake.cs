@@ -220,6 +220,13 @@ public sealed class SavedRequestIntake(
     public static string SourceOf(Caller caller) =>
         caller.Kind == CallerKind.User ? SourceUserPrefix + caller.Id : ActorNames.ClientPrefix + caller.Id;
 
+    /// <summary>
+    /// T-1212b (dashboard-api-m12 6.7 a): the row fingerprints a save of <paramref name="payload"/> would store, read
+    /// the same way, so an upload's rows are compared with saved ones on equal terms.
+    /// </summary>
+    public IReadOnlySet<string> RowFingerprintsOf(JsonElement payload, DateTime nowUtc) =>
+        Fingerprints(SavedPayloadReader.Read(payload), nowUtc);
+
     /// <summary>R6: the CLAUDE.md row fingerprints, only for a readable payload (spec 9, overlapping-rows).</summary>
     private IReadOnlySet<string> Fingerprints(PayloadRead read, DateTime nowUtc) =>
         read.Request is { } request

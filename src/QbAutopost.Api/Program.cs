@@ -9,6 +9,7 @@ using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Database;
 using QbAutopost.Api.Endpoints;
 using QbAutopost.Api.Endpoints.V2;
+using QbAutopost.Api.Extraction;
 using QbAutopost.Api.Health;
 using QbAutopost.Api.Hosting;
 using QbAutopost.Api.Jobs;
@@ -60,7 +61,10 @@ builder.WebHost.ConfigureKestrel((context, kestrel) =>
 {
     var api = context.Configuration.GetSection("Api").Get<ApiSettings>() ?? new ApiSettings();
     kestrel.AddServerHeader = false;
-    kestrel.Limits.MaxRequestBodySize = api.MaxRequestBodyBytes;
+    // T-1212b (dashboard-api-m12 6.1): the server limit is the larger of the two; RequestSizeMiddleware sets each
+    // request's own limit, so every route but the upload stays at Api:MaxRequestBodyBytes.
+    var extraction = context.Configuration.GetSection("Extraction").Get<ExtractionSettings>() ?? new ExtractionSettings();
+    kestrel.Limits.MaxRequestBodySize = RequestSizeMiddleware.ServerLimit(api, extraction);
     if (api.Tls.Configured)
     {
         kestrel.ConfigureHttpsDefaults(https => https.ServerCertificate = TlsCertificate.Load(api.Tls));
@@ -155,6 +159,15 @@ builder.Services.AddSingleton<IOcr>(sp =>
     return ocr.Enabled ? new TesseractOcr(ocr.TessDataPath) : new DisabledOcr();
 });
 builder.Services.AddSingleton<StatementLlmExtractor>();
+// T-1212b (dashboard-api-m12 6): the PDF upload. The prompt file is embedded and loaded once (a broken one stops
+// startup, below); the limiter is in memory and per user; the model call goes through the same IHermesClient as jobs.
+builder.Services.AddSingleton(_ => ExtractionPrompt.Load());
+builder.Services.AddSingleton(sp =>
+{
+    var options = sp.GetRequiredService<IOptions<AppSettings>>();
+    return new ExtractionLimiter(() => options.Value.Extraction.MaxPerUserPerHour);
+});
+builder.Services.AddSingleton<StatementExtractionService>();
 builder.Services.AddSingleton<StatementReader>();
 builder.Services.AddSingleton<InvoiceExtractor>();
 builder.Services.AddSingleton<AccountChooser>();
@@ -405,6 +418,10 @@ try
     }
 
     app.Services.GetRequiredService<PromptLibrary>();
+    var extractionPrompt = app.Services.GetRequiredService<ExtractionPrompt>();
+    app.Logger.LogInformation(
+        "Statement extraction: {State}, prompt {PromptVersion}",
+        ExtractionState.Of(settings), extractionPrompt.PromptVersion);
     app.Logger.LogInformation("Hermes prompts loaded from {PromptFolder}", Path.Combine(AppContext.BaseDirectory, PromptLibrary.DefaultFolder));
 
     // With Ocr:Enabled the engine loads now, so missing language data stops startup rather than failing a job.
@@ -482,6 +499,7 @@ try
     v2.MapSavedRequestEndpoints(ApiFlavor.V2);
     v2.MapAuditEventEndpoints();
     v2.MapDashboardSummaryEndpoints();
+    v2.MapStatementExtractionEndpoints();
     v2.MapQuickBooksEndpoints(ApiFlavor.V2);
     v2.MapHealthEndpoints(ApiFlavor.V2);
     if (settings.Api.Reference.Enabled)

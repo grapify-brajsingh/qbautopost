@@ -43,6 +43,43 @@
     }
   ],
   "paths": {
+    "/api/v2/health": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "operationId": "getAppHealthV2",
+        "summary": "Liveness from in-process state, with the model client and the PDF upload switch.",
+        "description": "The v1 `GET /api/v1/health` body plus two entries (dashboard-api-m12 §8, §14.1): `model` (`enabled` or `disabled`, and the job model `OpenRouter:Model`) and `extraction` (`disabled` while `Extraction:Enabled` is false; `misconfigured` when it is on but `OpenRouter:Enabled` is false or no key is set; otherwise `configured`). Read from settings only: it never calls OpenRouter and never shows the key. Either `requests:read` (any dashboard user, to show or hide the upload) or `health:read` satisfies it. The v1 route is unchanged.",
+        "x-required-scope": "requests:read|health:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The process is up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppHealthV2"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
     "/api/v2/health/database": {
       "get": {
         "tags": [
@@ -3080,6 +3117,151 @@
           },
           "503": {
             "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/statement-extractions": {
+      "post": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "createStatementExtraction",
+        "summary": "Read one uploaded statement PDF into rows for review; nothing is saved as a statement.",
+        "description": "Dashboard-api-m12 §6 (R-13). The PDF's text (PdfPig, no OCR) is sent to the model through OpenRouter with the prompt, schema and model of `extraction-prompt.json` (`promptVersion`) and `Extraction:Model`. The reply is tidied with no defaults: a field the model did not return stays absent, `kind` is `Deposit` only when the model said deposit, `amount` is made positive and omitted when not a number, `externalId` is renumbered `row-1`, `row-2`, ..., `reference` is the model's or null, and `controlTotal` is **always null** (the user types it). Possible duplicates warn and never block. The PDF and its text are discarded: only an extraction record (file name, size, SHA-256, page count, model, prompt version, tidied payload) is kept for `Extraction:RecordHours` (24) unless saved. Requires a signed-in **user** with `requests:submit` (editor or admin); an API key gets `403` whatever its scopes. Checks run in this order and none stores anything or calls the model: `503 extraction-unavailable`, `400 invalid-request`, `413 file-too-large` (bytes), `415 not-a-pdf` (no `%PDF-` prefix, or it cannot be opened), `422 pdf-protected`, `413 file-too-large` (pages), `422 no-text`, `429 too-many-extractions`.",
+        "x-required-scope": "requests:submit",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The statement PDF, at most `Extraction:MaxBytes` (10 485 760) bytes and `Extraction:MaxPages` (50) pages. Its name is stored as untrusted text (path parts, control and invisible characters removed, at most 255 characters). Any other part is ignored."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Read. `possibleDuplicates` lists at most 5 saved requests, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementExtraction"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid-request`: not `multipart/form-data`, no part named `file`, or more than one.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "413": {
+            "description": "`file-too-large`: the body or the file is over `Extraction:MaxBytes`, or the PDF has more than `Extraction:MaxPages` pages; the detail names the limit.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`not-a-pdf`: the file does not start with `%PDF-`, or it cannot be opened as a PDF.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`pdf-protected`: encrypted or password-protected. `no-text`: \"This PDF has no readable text. It may be a scan.\" `not-a-bank-statement`: \"This PDF doesn't look like a bank or card statement.\" (no record is kept).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too-many-extractions`: this user already has an extraction in flight (`Retry-After: 30`), or started `Extraction:MaxPerUserPerHour` (20) in the last hour (`Retry-After`: seconds until the oldest leaves the window).",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds to wait."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`extraction-failed`: OpenRouter answered with an error (not retried), or with JSON that does not match the schema twice. Nothing was stored; try again.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`extraction-unavailable`: `Extraction:Enabled` or `OpenRouter:Enabled` is false, or no key is set. `database-unavailable`: the database is not ready (`Retry-After: 30`).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`extraction-timeout`: no answer within `Extraction:TimeoutSeconds` (120). Nothing was stored.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6223,6 +6405,274 @@
                   "type": "integer"
                 }
               }
+            }
+          }
+        }
+      },
+      "AppHealthV2": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "example": "healthy"
+          },
+          "version": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "process": {
+            "type": "object",
+            "properties": {
+              "bitness": {
+                "type": "string",
+                "example": "x64"
+              },
+              "startedUtc": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "uptimeSeconds": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "windowsSession": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          },
+          "quickbooksGateway": {
+            "type": "string",
+            "enum": [
+              "sdk",
+              "simulated",
+              "unavailable",
+              "test"
+            ]
+          },
+          "hermes": {
+            "type": "string",
+            "enum": [
+              "enabled",
+              "disabled"
+            ]
+          },
+          "worker": {
+            "type": "object",
+            "properties": {
+              "running": {
+                "type": "boolean"
+              },
+              "activeJobId": {
+                "type": "string",
+                "nullable": true
+              },
+              "queueDepth": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          },
+          "model": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "enabled",
+                  "disabled"
+                ]
+              },
+              "name": {
+                "type": "string",
+                "description": "`OpenRouter:Model`, the model for job calls.",
+                "example": "~google/gemini-pro-latest"
+              }
+            }
+          },
+          "extraction": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "configured",
+              "misconfigured"
+            ]
+          }
+        },
+        "description": "`GET /api/v2/health`: the v1 health body plus `model` and `extraction`."
+      },
+      "StatementExtraction": {
+        "type": "object",
+        "description": "Dashboard-api-m12 §6.8.",
+        "properties": {
+          "extractionId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Send it as `upload.extractionId` when saving the reviewed rows."
+          },
+          "file": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "sizeBytes": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "sha256": {
+                "type": "string",
+                "description": "Lower-case hex of the uploaded bytes."
+              },
+              "pageCount": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          },
+          "model": {
+            "type": "string",
+            "description": "`Extraction:Model` as configured.",
+            "example": "~google/gemini-pro-latest"
+          },
+          "promptVersion": {
+            "type": "string",
+            "example": "2026-10-28.api-1"
+          },
+          "extractedUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresUtc": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Unsaved records are deleted after this."
+          },
+          "isBankStatement": {
+            "type": "boolean",
+            "description": "Always true in a `200`."
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "reference": {
+                "type": "string",
+                "nullable": true
+              },
+              "controlTotal": {
+                "type": "number",
+                "nullable": true,
+                "description": "Always null: the API never computes it."
+              },
+              "transactions": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/StatementExtractionRow"
+                }
+              }
+            }
+          },
+          "possibleDuplicates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatementExtractionDuplicate"
+            }
+          }
+        }
+      },
+      "StatementExtractionRow": {
+        "type": "object",
+        "description": "One tidied row. Only `externalId` and `kind` are always present; every other field appears only when the model returned it (no defaults).",
+        "required": [
+          "externalId",
+          "kind"
+        ],
+        "properties": {
+          "externalId": {
+            "type": "string",
+            "example": "row-1"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "Deposit",
+              "Check"
+            ]
+          },
+          "date": {
+            "type": "string",
+            "description": "As the model wrote it; meant to be `yyyy-MM-dd`, checked when saved."
+          },
+          "amount": {
+            "type": "number",
+            "description": "Positive, as transcribed; never computed or rounded."
+          },
+          "account": {
+            "type": "string"
+          },
+          "lineAccount": {
+            "type": "string"
+          },
+          "memo": {
+            "type": "string"
+          },
+          "last4": {
+            "type": "string"
+          },
+          "payee": {
+            "type": "string"
+          },
+          "checkNo": {
+            "type": "string"
+          }
+        }
+      },
+      "StatementExtractionDuplicate": {
+        "type": "object",
+        "description": "A saved request this upload may duplicate (§6.7). A warning only.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "publicRef": {
+            "type": "string",
+            "example": "SR-000118"
+          },
+          "reference": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "example": "pending"
+          },
+          "receivedUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "email",
+              "upload",
+              "other"
+            ]
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "same-file",
+                "same-reference",
+                "overlapping-rows"
+              ]
             }
           }
         }

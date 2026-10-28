@@ -17,6 +17,7 @@ public sealed class AppSettings
     public SavedRequestSettings SavedRequests { get; set; } = new();
     public AuthSettings Auth { get; set; } = new();
     public DashboardSettings Dashboard { get; set; } = new();
+    public ExtractionSettings Extraction { get; set; } = new();
 
     /// <summary>Makes every configured file path absolute, relative ones against <paramref name="root"/>.</summary>
     public void ResolvePaths(string root)

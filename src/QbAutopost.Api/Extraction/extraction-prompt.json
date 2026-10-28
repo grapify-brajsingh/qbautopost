@@ -1,0 +1,87 @@
+{
+  "promptVersion": "2026-10-28.api-1",
+  "systemPrompt": "You are an expert extraction algorithm.\nOnly extract relevant information from the text.\nIf you do not know the value of an attribute asked to extract, omit the attribute. Never guess or use a placeholder value.\n\nCRITICAL RULES FOR EXTRACTION:\n1. 'date': Convert all dates to standard 'YYYY-MM-DD' format (e.g., '12/02' becomes '2019-12-02').\n2. 'amount': Always output amounts as POSITIVE numbers (absolute values).\n3. 'kind': MUST ONLY BE 'Deposit' OR 'Check'. Set 'Deposit' for credits/deposits (positive amounts) and 'Check' for ALL withdrawals, debit card purchases, ACH fees, transfers out, service charges, or checks.\n4. 'externalId': Generate sequential row IDs starting from \"row-1\", \"row-2\", \"row-3\", etc.\n5. 'account': Use the bank name and last 4 digits of the account found in the statement header (e.g., \"Capital One - 3188\"). If the header does not show them, omit 'account'.\n6. 'lineAccount': Categorize based on description context:\n   - \"Merchant Card Deposits\" for BANKCARD SETTLEMENT\n   - \"Bank Service Charges\" for fees or monthly charges\n   - \"Supplies & Materials\" or \"Inventory Asset\" for purchases (Costco, LA Mart, Aldi)\n   - If the category is not clear from the description, omit 'lineAccount'.\n7. 'payee': Extract clean vendor or counterparty names:\n   - \"BANKCARD SETTLEMENT\" -> \"Bankcard Merchant Services\"\n   - \"BANKCARD MTHLY FEES\" / \"Service charge\" -> \"Bank Fees\"\n   - \"TRANSFER DEPOSIT\" -> \"Account Transfer In\"\n   - Vendor names -> \"Costco Wholesale\", \"LA Mart\", \"RJ Reynolds Tobacco\", etc.\n   - If no counterparty can be identified, omit 'payee'.\n8. 'checkNo': Extract numeric check number if present, otherwise null.\n9. 'last4': Extract card or account last 4 digits if present in text, otherwise null.",
+  "schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "is_bank_statement": {
+        "type": "boolean",
+        "description": "Return true if this is a bank statement, otherwise false."
+      },
+      "reference": {
+        "type": "string",
+        "description": "A statement reference identifier printed on the statement, if any. Omit if none."
+      },
+      "transactions": {
+        "type": "array",
+        "description": "List of transactions. Leave empty if not a bank statement.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "externalId": {
+              "type": "string",
+              "description": "Unique row identifier starting with 'row-1', 'row-2', etc."
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Deposit",
+                "Check"
+              ],
+              "description": "MUST BE EITHER 'Deposit' or 'Check'. Set 'Deposit' for credits/deposits and 'Check' for ALL other outgoing transactions."
+            },
+            "date": {
+              "type": "string",
+              "description": "Transaction date formatted as YYYY-MM-DD."
+            },
+            "amount": {
+              "type": "number",
+              "description": "Absolute positive transaction amount (always a positive number)."
+            },
+            "account": {
+              "type": "string",
+              "description": "Primary bank account name and last 4 digits from the statement header, e.g. '<Bank> - <last4>'. Omit if not shown."
+            },
+            "lineAccount": {
+              "type": "string",
+              "description": "Accounting category inferred from transaction detail (e.g., 'Merchant Card Deposits', 'Bank Service Charges', 'Supplies & Materials', 'Inventory Asset'). Omit if unclear."
+            },
+            "memo": {
+              "type": "string",
+              "description": "Full original transaction details/description line."
+            },
+            "last4": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "4-digit card or account number mentioned in description, if any."
+            },
+            "payee": {
+              "type": "string",
+              "description": "Entity/merchant/counterparty name (e.g., 'Bankcard Merchant Services', 'Costco Wholesale', 'Bank Fees', 'Account Transfer In')."
+            },
+            "checkNo": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Check number if the transaction is a check, otherwise null."
+            }
+          },
+          "required": [
+            "kind",
+            "amount"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "is_bank_statement",
+      "transactions"
+    ],
+    "additionalProperties": false
+  }
+}

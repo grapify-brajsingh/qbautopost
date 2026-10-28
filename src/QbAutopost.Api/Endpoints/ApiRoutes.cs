@@ -45,6 +45,7 @@ public static class ApiRoutes
         ("GET", "/audit-events"),
         ("GET", "/audit-events.csv"),
         ("GET", "/dashboard/summary"),
+        ("POST", "/statement-extractions"),
         ("GET", "/users"),
         ("POST", "/users"),
         ("GET", "/users/{id}"),
@@ -58,6 +59,7 @@ public static class ApiRoutes
         ("POST", "/auth/change-password"),
         ("GET", "/auth/me"),
         ("GET", "/quickbooks/lists"),
+        ("GET", "/health"),
         ("GET", "/health/database"),
         ("GET", OpenApiPath),
     ];
@@ -253,6 +255,13 @@ public static class ApiRoutes
         var p = Flat(path.Value!).TrimEnd('/');
         var get = HttpMethods.IsGet(method);
 
+        // T-1212b (dashboard-api-m12 8, 14.1): v2's /health is the dashboard's view of the server (the upload switch, the
+        // job model), so like /health/database it needs a dashboard user or a monitor. v1's stays keyless, unchanged.
+        if (p.Equals("/health", Ordinal) && path.Value!.StartsWith(V2Prefix + "/", Ordinal))
+        {
+            return get ? ApiScopes.AnyOf(ApiScopes.RequestsRead, ApiScopes.HealthRead) : ApiScopes.Admin;
+        }
+
         // Liveness and readiness answer without a key (spec §6); everything else under /health needs one.
         // R32: every exact match below ignores case, as routing does. A case-sensitive `is`/`==` here once let a
         // read-only key post: /QuickBooks/Transactions/Validate-And-Post missed its branch and fell through to qb:read.
@@ -295,6 +304,13 @@ public static class ApiRoutes
         if (p.Equals("/dashboard/summary", Ordinal) && path.Value!.StartsWith(V2Prefix + "/", Ordinal))
         {
             return get ? ApiScopes.RequestsRead : ApiScopes.Admin;
+        }
+
+        // T-1212b (dashboard-api-m12 6.1): the PDF upload, under /api/v2 only, like the summary. requests:submit, and the
+        // endpoint also requires a signed-in user (an API key gets 403 there). Anything but a POST stays admin.
+        if (p.Equals("/statement-extractions", Ordinal) && path.Value!.StartsWith(V2Prefix + "/", Ordinal))
+        {
+            return HttpMethods.IsPost(method) ? ApiScopes.RequestsSubmit : ApiScopes.Admin;
         }
 
         if (IsUnder(p, "/users"))
