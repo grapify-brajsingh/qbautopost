@@ -42,6 +42,8 @@ public static class ApiRoutes
         ("GET", "/saved-requests/{id}/attempts"),
         ("GET", "/saved-requests/{id}/attempts/{attemptId}"),
         ("GET", "/saved-requests/{id}/events"),
+        ("GET", "/audit-events"),
+        ("GET", "/audit-events.csv"),
         ("GET", "/users"),
         ("POST", "/users"),
         ("GET", "/users/{id}"),
@@ -240,6 +242,13 @@ public static class ApiRoutes
         if (IsUnder(p, "/saved-requests"))
         {
             return SavedRequestScope(method, p);
+        }
+
+        // T-1114 (dashboard v2 spec 8.1): the audit feed and its CSV are reads of saved-request history. Named here so
+        // they are a decision; only a GET is mapped, anything else on these paths stays admin.
+        if (p.Equals("/audit-events", Ordinal) || p.Equals("/audit-events.csv", Ordinal))
+        {
+            return get ? ApiScopes.RequestsRead : ApiScopes.Admin;
         }
 
         if (IsUnder(p, "/users"))

@@ -7,6 +7,7 @@ using QbAutopost.Api.Auth;
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Database;
 using QbAutopost.Api.Endpoints;
+using QbAutopost.Api.Endpoints.V2;
 using QbAutopost.Api.Health;
 using QbAutopost.Api.Jobs;
 using QbAutopost.Api.Logging;
@@ -449,6 +450,7 @@ try
     v2.MapAuthEndpoints(ApiFlavor.V2);
     v2.MapUserEndpoints(ApiFlavor.V2);
     v2.MapSavedRequestEndpoints(ApiFlavor.V2);
+    v2.MapAuditEventEndpoints();
     v2.MapQuickBooksEndpoints(ApiFlavor.V2);
     v2.MapHealthEndpoints(ApiFlavor.V2);
     if (settings.Api.Reference.Enabled)
