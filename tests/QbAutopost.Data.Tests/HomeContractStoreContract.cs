@@ -94,16 +94,20 @@ public abstract class HomeContractStoreContract
 
     private static async Task<List<AuditEvent>> AllAsync(ISavedRequestStore store, AuditQuery query)
     {
+        // Pages until an empty one, so a total that understates the rows cannot end the walk early.
         var all = new List<AuditEvent>();
-        for (var page = 1; ; page++)
+        for (var page = 1; page <= 500; page++)
         {
             var result = await Feed(store).AuditEventsAsync(query with { Page = page }, default);
-            all.AddRange(result.Items);
-            if (result.Items.Count == 0 || all.Count >= result.Total)
+            if (result.Items.Count == 0)
             {
                 return all;
             }
+
+            all.AddRange(result.Items);
         }
+
+        throw new InvalidOperationException("The feed did not end within 500 pages.");
     }
 
     [ContractFact]
@@ -119,10 +123,15 @@ public abstract class HomeContractStoreContract
         Assert.True(one.Total > 1);
         Assert.Equal(one.Total, across.Count);
         Assert.Equal(one.Total, await Feed(store).AuditEventCountAsync(Query(pageSize: 1), default));
-        foreach (var action in new[] { AuditActions.Received, AuditActions.Posted, AuditActions.PostFailed, AuditActions.Discarded })
+        var known = new (string Action, int Count)[]
+        {
+            (AuditActions.Received, 4), (AuditActions.Posted, 2), (AuditActions.PostFailed, 2), (AuditActions.Discarded, 2),
+        };
+        foreach (var (action, count) in known)
         {
             var q = Query(pageSize: 1, actions: [action]);
-            Assert.Equal((await AllAsync(store, q)).Count, (await Feed(store).AuditEventsAsync(q, default)).Total);
+            Assert.Equal(count, (await AllAsync(store, q)).Count);
+            Assert.Equal(count, (await Feed(store).AuditEventsAsync(q, default)).Total);
         }
     }
 
@@ -241,5 +250,32 @@ public abstract class HomeContractStoreContract
         Assert.Equal(new[] { s.S1 }, upTo.Items.Select(e => e.RequestId!.Value));
         Assert.Equal(1, upTo.Total);
         Assert.Equal(new[] { s.S2, s.S3, s.S4 }.Order(), from.Items.Select(e => e.RequestId!.Value).Order());
+    }
+
+    [ContractFact]
+    public async Task Should_SortByReceivedThenCreated_When_QueueListed()
+    {
+        var store = CreateStore();
+        var noEmail = (await store.CreateAsync(NewRequest("Q1", new DateTime(2026, 10, 1, 8, 0, 0, DateTimeKind.Utc)), default)).Record.Id;
+        var withEmail = (await store.CreateAsync(
+            NewRequest("Q2", new DateTime(2026, 10, 20, 8, 0, 0, DateTimeKind.Utc)) with
+            {
+                Metadata = SaveMetadata.None with { EmailReceivedUtc = new DateTime(2026, 9, 1, 8, 0, 0, DateTimeKind.Utc) },
+            },
+            default)).Record.Id;
+        var middle = (await store.CreateAsync(NewRequest("Q3", new DateTime(2026, 9, 15, 8, 0, 0, DateTimeKind.Utc)), default)).Record.Id;
+        var older = (await store.CreateAsync(NewRequest("Q4", new DateTime(2026, 8, 1, 8, 0, 0, DateTimeKind.Utc)), default)).Record.Id;
+        await store.ChangeStatusAsync(
+            older, null, SavedRequestStatus.Pending, SavedRequestStatus.Discarded, Admin, T0, SavedRequestEvents.Discarded,
+            new JsonObject { ["reason"] = "Sent Twice" }, default);
+
+        var statuses = new[] { SavedRequestStatus.Pending, SavedRequestStatus.Partial, SavedRequestStatus.Unknown };
+        var query = new SavedRequestQueryV2(
+            new SavedRequestQuery(statuses, null, null, null, null, null, null, "received", 1, 100),
+            null, null, null, null, null, null, null);
+
+        var ids = (await Assert.IsAssignableFrom<ISavedRequestV2Store>(store).ListV2Async(query, default)).Items.Select(i => i.Id);
+
+        Assert.Equal(new[] { withEmail, middle, noEmail }, ids);
     }
 }
