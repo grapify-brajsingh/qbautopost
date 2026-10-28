@@ -72,4 +72,9 @@ public sealed class DisabledSavedRequestStore : ISavedRequestStore, ISavedReques
     public Task<int> DeleteExpiredExtractionsAsync(DateTime nowUtc, CancellationToken ct) => throw Off();
 
     public Task<StatementExtraction?> GetExtractionAsync(Guid id, CancellationToken ct) => throw Off();
+
+    public Task<UploadSaveResult> SaveUploadAsync(NewUploadSave save, CancellationToken ct) => throw Off();
+
+    public Task<IReadOnlyList<UploadDuplicateCandidate>> UploadDuplicateCandidatesAsync(
+        string sha256, DateTime sinceUtc, CancellationToken ct) => throw Off();
 }

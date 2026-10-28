@@ -78,6 +78,20 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
         await using var db = await factory.CreateDbContextAsync(ct);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
 
+        var entity = NewRequestEntity(request, currentVersion: 1);
+        entity.Versions.Add(NewVersionEntity(1, request.Payload, request.Read, "[]", null, request));
+        entity.Events.Add(Event(SavedRequestEvents.Created, null, request.NowUtc, request.CreatedBy));
+        db.SavedRequests.Add(entity);
+        await db.SaveChangesAsync(ct);
+        await FlagDuplicateAsync(db, entity.Id, request, ct);
+
+        await tx.CommitAsync(ct);
+        return new CreateResult(CreateKind.Created, (await LoadAsync(db, entity.Id, ct))!);
+    }
+
+    /// <summary>The row of a new pending request at <paramref name="currentVersion"/>, without versions or events.</summary>
+    private static SavedRequestEntity NewRequestEntity(NewSavedRequest request, int currentVersion)
+    {
         var parsed = request.Read.Request;
         var entity = new SavedRequestEntity
         {
@@ -86,7 +100,7 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
             Reference = parsed?.Reference,
             ControlTotal = SavedRequestColumns.ControlTotalOf(request.Read),
             TransactionCount = parsed?.Transactions.Count ?? 0,
-            CurrentVersion = 1,
+            CurrentVersion = currentVersion,
             OriginalBody = request.OriginalBody,
             OriginalSha256 = Sha256(request.OriginalBody),
             CanonicalSha256 = request.CanonicalSha256,
@@ -111,32 +125,34 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
             SkipCount = SavedRequestColumns.SkipCountOf(request.Payload),
         };
         SetSnapshotV2(entity, request.Read.Readable, request.SnapshotV2 ?? request.Snapshot);
-        entity.Versions.Add(new SavedRequestVersionEntity
-        {
-            Number = 1,
-            Payload = request.Payload.GetRawText(),
-            Readable = request.Read.Readable,
-            ReadErrors = request.Read.Errors.ToList(),
-            Changes = "[]",
-            CreatedUtc = request.NowUtc,
-            CreatedBy = request.CreatedBy,
-        });
-        entity.Events.Add(Event(SavedRequestEvents.Created, null, request.NowUtc, request.CreatedBy));
-        db.SavedRequests.Add(entity);
-        await db.SaveChangesAsync(ct);
+        return entity;
+    }
 
-        // A second save, so the flag's id comes after the created event's and the timeline reads in order.
+    /// <summary>A version written by a save: by the save's author, at the save's time.</summary>
+    private static SavedRequestVersionEntity NewVersionEntity(
+        int number, JsonElement payload, PayloadRead read, string changes, string? note, NewSavedRequest request) => new()
+    {
+        Number = number,
+        Payload = payload.GetRawText(),
+        Readable = read.Readable,
+        ReadErrors = read.Errors.ToList(),
+        Changes = changes,
+        Note = note,
+        CreatedUtc = request.NowUtc,
+        CreatedBy = request.CreatedBy,
+    };
+
+    // A second save, so the flag's id comes after the created event's and the timeline reads in order.
+    private static async Task FlagDuplicateAsync(QbAutopostDbContext db, long id, NewSavedRequest request, CancellationToken ct)
+    {
         if (request.Duplicate.Flagged)
         {
             AddEvent(
-                db, entity.Id, SavedRequestEvents.FlaggedDuplicate,
+                db, id, SavedRequestEvents.FlaggedDuplicate,
                 new JsonObject { ["of"] = request.Duplicate.Of, ["reasons"] = ToArray(request.Duplicate.Reasons) },
                 request.NowUtc, request.CreatedBy);
             await db.SaveChangesAsync(ct);
         }
-
-        await tx.CommitAsync(ct);
-        return new CreateResult(CreateKind.Created, (await LoadAsync(db, entity.Id, ct))!);
     }
 
     private async Task<SavedRequest?> FindByKeyAsync(string source, string key, CancellationToken ct)
@@ -618,12 +634,14 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
             ValidationV2 = ReadSnapshot(r.ValidationV2),
             NeedsAttentionV2 = r.NeedsAttentionV2,
             ProblemCount = r.ProblemCount,
+            Upload = UploadOf(r.UploadExtractionId, r.UploadFileName, r.UploadSizeBytes, r.UploadSha256, r.UploadModel,
+                r.UploadPromptVersion, r.UploadExtractedUtc),
         };
     }
 
     /// <summary>
     /// The v1 list filters. With <paramref name="v2"/> (T-1107), <c>needsAttention</c> reads <c>needs_attention_v2</c>
-    /// and <c>q</c> also matches the email subject and the push id prefix.
+    /// and <c>q</c> also matches the email subject, the push id prefix and (T-1210) the upload file name.
     /// </summary>
     private static IQueryable<SavedRequestEntity> FilterRequests(QbAutopostDbContext db, SavedRequestQuery query, bool v2)
     {
@@ -677,6 +695,7 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
                     || EF.Functions.ILike(r.PublicRef, pattern, LikeEscape)
                     || payloadMatches.Contains(r.Id)
                     || EF.Functions.ILike(r.EmailSubject!, pattern, LikeEscape)
+                    || EF.Functions.ILike(r.UploadFileName!, pattern, LikeEscape)
                     || EF.Functions.Like(r.PushIdHex!, prefix));
             }
             else
@@ -685,7 +704,8 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
                     EF.Functions.ILike(r.Reference!, pattern, LikeEscape)
                     || EF.Functions.ILike(r.PublicRef, pattern, LikeEscape)
                     || payloadMatches.Contains(r.Id)
-                    || EF.Functions.ILike(r.EmailSubject!, pattern, LikeEscape));
+                    || EF.Functions.ILike(r.EmailSubject!, pattern, LikeEscape)
+                    || EF.Functions.ILike(r.UploadFileName!, pattern, LikeEscape));
             }
         }
 

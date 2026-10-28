@@ -97,15 +97,18 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestV2Store
         ProblemCount = r.ProblemCount,
         PostSummary = PostSummaries.Of(r.Status, r.PostId, _attempts[r.Id]),
         HistoryCount = HistoryCount(r.Id),
+
+        Upload = r.Upload,
     };
 
     private static DateTime ReceivedUtc(SavedRequest r) => r.Metadata.EmailReceivedUtc ?? r.CreatedUtc;
 
     private static bool HasErrors(SavedRequest r) => r.ProblemCount > 0 || r.NeedsAttentionV2;
 
-    /// <summary>The v2 additions to <c>q</c>: the email subject (contains) and, when <paramref name="q"/> without dashes is 1-32 hex digits, the push id prefix.</summary>
+    /// <summary>The v2 additions to <c>q</c>: the email subject and the upload file name (contains) and, when <paramref name="q"/> without dashes is 1-32 hex digits, the push id prefix.</summary>
     private static bool MatchesV2(SavedRequest r, string q) =>
         (r.Metadata.EmailSubject?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+        || (r.Upload?.FileName.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
         || (SavedRequestSearch.PushIdHexPrefix(q) is { } prefix
             && (r.Metadata.PushId?.ToString("N").StartsWith(prefix, StringComparison.Ordinal) ?? false));
 
