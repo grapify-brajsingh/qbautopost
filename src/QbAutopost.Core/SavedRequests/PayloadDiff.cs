@@ -15,7 +15,7 @@ public static class PayloadDiff
 {
     private const string TransactionsPath = "$.transactions";
 
-    public static IReadOnlyList<PayloadChange> Compute(JsonElement? previous, JsonElement next)
+    public static IReadOnlyList<PayloadChange> Compute(JsonElement? previous, JsonElement next, PayloadRules rules = PayloadRules.V1)
     {
         if (previous is null)
         {
@@ -23,11 +23,11 @@ public static class PayloadDiff
         }
 
         var changes = new List<PayloadChange>();
-        Diff("$", PayloadCanonicalizer.Normalize(previous.Value), PayloadCanonicalizer.Normalize(next), changes);
+        Diff("$", PayloadCanonicalizer.Normalize(previous.Value, rules), PayloadCanonicalizer.Normalize(next, rules), changes, rules);
         return changes;
     }
 
-    private static void Diff(string path, JsonNode? old, JsonNode? next, List<PayloadChange> changes)
+    private static void Diff(string path, JsonNode? old, JsonNode? next, List<PayloadChange> changes, PayloadRules rules)
     {
         if (Same(old, next))
         {
@@ -37,16 +37,16 @@ public static class PayloadDiff
         switch (old, next)
         {
             case (JsonObject o, JsonObject n):
-                DiffObject(path, o, n, changes);
+                DiffObject(path, o, n, changes, rules);
                 break;
             case (JsonArray o, JsonArray n):
                 if (path == TransactionsPath && Keys(o) is { } oldKeys && Keys(n) is { } newKeys)
                 {
-                    DiffKeyed(path, o, n, oldKeys, newKeys, changes);
+                    DiffKeyed(path, o, n, oldKeys, newKeys, changes, rules);
                 }
                 else
                 {
-                    DiffByIndex(path, o, n, changes);
+                    DiffByIndex(path, o, n, changes, rules);
                 }
 
                 break;
@@ -56,7 +56,7 @@ public static class PayloadDiff
         }
     }
 
-    private static void DiffObject(string path, JsonObject o, JsonObject n, List<PayloadChange> changes)
+    private static void DiffObject(string path, JsonObject o, JsonObject n, List<PayloadChange> changes, PayloadRules rules)
     {
         var keys = o.Select(p => p.Key).Union(n.Select(p => p.Key)).OrderBy(k => k, StringComparer.Ordinal);
         foreach (var key in keys)
@@ -66,7 +66,7 @@ public static class PayloadDiff
             var inNew = n.ContainsKey(key);
             if (inOld && inNew)
             {
-                Diff(childPath, o[key], n[key], changes);
+                Diff(childPath, o[key], n[key], changes, rules);
             }
             else if (inNew)
             {
@@ -79,13 +79,13 @@ public static class PayloadDiff
         }
     }
 
-    private static void DiffByIndex(string path, JsonArray o, JsonArray n, List<PayloadChange> changes)
+    private static void DiffByIndex(string path, JsonArray o, JsonArray n, List<PayloadChange> changes, PayloadRules rules)
     {
         for (var i = 0; i < n.Count; i++)
         {
             if (i < o.Count)
             {
-                Diff($"{path}[{i}]", o[i], n[i], changes);
+                DiffMatched(path, $"{path}[{i}]", o[i], n[i], changes, rules);
             }
             else
             {
@@ -100,7 +100,7 @@ public static class PayloadDiff
     }
 
     // New-payload order for add/replace (new index), then old-payload order for remove (old index).
-    private static void DiffKeyed(string path, JsonArray o, JsonArray n, string[] oldKeys, string[] newKeys, List<PayloadChange> changes)
+    private static void DiffKeyed(string path, JsonArray o, JsonArray n, string[] oldKeys, string[] newKeys, List<PayloadChange> changes, PayloadRules rules)
     {
         var oldIndex = new Dictionary<string, int>(StringComparer.Ordinal);
         for (var i = 0; i < oldKeys.Length; i++)
@@ -114,7 +114,7 @@ public static class PayloadDiff
             if (oldIndex.TryGetValue(newKeys[i], out var oi))
             {
                 matched.Add(newKeys[i]);
-                Diff($"{path}[{i}]", o[oi], n[i], changes);
+                DiffMatched(path, $"{path}[{i}]", o[oi], n[i], changes, rules);
             }
             else
             {
@@ -129,6 +129,30 @@ public static class PayloadDiff
                 changes.Add(new PayloadChange("remove", $"{path}[{i}]", Clone(o[i]), null));
             }
         }
+    }
+
+    // Under V2 the hash form drops post:true, so for two matched rows a missing post means true (R2). Only this
+    // comparison injects it: whole-row add/remove report the row as stored.
+    private static void DiffMatched(string arrayPath, string path, JsonNode? old, JsonNode? next, List<PayloadChange> changes, PayloadRules rules)
+    {
+        if (rules == PayloadRules.V2 && arrayPath == TransactionsPath && old is JsonObject o && next is JsonObject n)
+        {
+            old = WithDefaultPost(o);
+            next = WithDefaultPost(n);
+        }
+
+        Diff(path, old, next, changes, rules);
+    }
+
+    private static JsonObject WithDefaultPost(JsonObject row)
+    {
+        var copy = (JsonObject)row.DeepClone();
+        if (!copy.ContainsKey("post"))
+        {
+            copy["post"] = true;
+        }
+
+        return copy;
     }
 
     // Null unless every element is an object with a non-null externalId and no id repeats.
