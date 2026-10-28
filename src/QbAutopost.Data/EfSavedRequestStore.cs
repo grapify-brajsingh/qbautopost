@@ -17,7 +17,7 @@ namespace QbAutopost.Data;
 /// (<c>FOR UPDATE</c>), so its checks and its writes see the same row; the claim is the single conditional update of
 /// §10.2 instead. Nothing here updates or deletes a version or an event.
 /// </summary>
-public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> factory) : ISavedRequestStore
+public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> factory) : ISavedRequestStore
 {
     private const string RestartError = "the service restarted while this post was running";
     private const string SystemActor = "system";

@@ -293,6 +293,68 @@ namespace QbAutopost.Data.Migrations
                     b.ToTable("users", (string)null);
                 });
 
+            modelBuilder.Entity("QbAutopost.Data.Entities.AuditEventRow", b =>
+                {
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("action");
+
+                    b.Property<string>("ActorId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("actor_id");
+
+                    b.Property<string>("ActorKind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("actor_kind");
+
+                    b.Property<DateTime>("AtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("at_utc");
+
+                    b.Property<string>("Detail")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("detail");
+
+                    b.Property<string>("Field")
+                        .HasColumnType("text")
+                        .HasColumnName("field");
+
+                    b.Property<string>("Id")
+                        .HasColumnType("text")
+                        .HasColumnName("id");
+
+                    b.Property<string>("New")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("new");
+
+                    b.Property<string>("Old")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("old");
+
+                    b.Property<long?>("RequestId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("request_id");
+
+                    b.Property<string>("RowExternalId")
+                        .HasColumnType("text")
+                        .HasColumnName("row_external_id");
+
+                    b.Property<int?>("RowIndex")
+                        .HasColumnType("integer")
+                        .HasColumnName("row_index");
+
+                    b.Property<int?>("VersionNumber")
+                        .HasColumnType("integer")
+                        .HasColumnName("version_number");
+
+                    b.ToTable((string)null);
+
+                    b.ToView("audit_events", (string)null);
+                });
+
             modelBuilder.Entity("QbAutopost.Data.Entities.PostAttemptEntity", b =>
                 {
                     b.Property<long>("Id")

@@ -6,6 +6,7 @@
 --   * No DDL, no TRUNCATE, no DELETE ... except user_roles (see the end: changing a user's role replaces the row).
 --   * saved_request_versions, saved_request_events and user_audit are append-only: SELECT and INSERT, nothing else.
 --   * __EFMigrationsHistory is read-only (the app only compares it, spec 5.5).
+--   * The view audit_events is read-only (SELECT).
 
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM qbautopost_app;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM qbautopost_app;
@@ -36,6 +37,9 @@ TO qbautopost_app;
 
 -- Migration history: read only.
 GRANT SELECT ON "__EFMigrationsHistory" TO qbautopost_app;
+
+-- T-1106: the audit feed view (spec saved-requests-dashboard-v2 8.3). SELECT only: it is never written.
+GRANT SELECT ON audit_events TO qbautopost_app;
 
 -- Identity columns are GENERATED ... AS IDENTITY and need no grant; this covers any sequence a later migration adds.
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO qbautopost_app;

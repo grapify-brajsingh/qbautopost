@@ -12,7 +12,7 @@ namespace QbAutopost.Api.Tests.TestSupport;
 /// <c>SavedRequestStoreContract</c> as the EF Core store. Payloads and JSON nodes are deep-copied in and out, so a
 /// caller can never change stored data through a returned object.
 /// </summary>
-public sealed class FakeSavedRequestStore : ISavedRequestStore
+public sealed partial class FakeSavedRequestStore : ISavedRequestStore
 {
     private const string RestartError = "the service restarted while this post was running";
 
