@@ -65,9 +65,12 @@ public abstract class PostedFilterStoreContract
     private static async Task<long[]> IdsAsync(ISavedRequestStore store, SavedRequestQueryV2 query) =>
         (await V2(store).ListV2Async(query, default)).Items.Select(i => i.Id).ToArray();
 
-    // This project runs in invariant globalization (no ICU on Windows), where only the Windows id resolves.
-    private static TimeZoneInfo Kolkata() =>
-        DateBounds.TryZone("Asia/Kolkata", out var tz) ? tz! : TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+    // Ruling R4 (Q-112): Windows builds run with ICU, so the IANA id resolves directly on every platform.
+    private static TimeZoneInfo Kolkata()
+    {
+        Assert.True(DateBounds.TryZone("Asia/Kolkata", out var tz));
+        return tz!;
+    }
 
     private static DateTime Bound(string raw, TimeZoneInfo? tz, bool upper)
     {

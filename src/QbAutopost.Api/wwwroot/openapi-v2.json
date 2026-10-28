@@ -1098,7 +1098,7 @@
         ],
         "operationId": "listSavedRequests",
         "summary": "List saved requests, filtered and paged.",
-        "description": "Saved-requests §6.5 with dashboard v2 §9.2: v1's parameters plus `receivedFrom`, `receivedTo`, `emailFrom`, `reference`, `minTotal`, `maxTotal`, `hasErrors` and the sorts `received`, `total` and `rows`, all combined with AND. `needsAttention`, `hasErrors` and the rows' flags use the v2 judgement (§5.3). Every value is checked: an unknown `status` or `sort`, a flag that is not `true`/`false`, a date that is not `yyyy-MM-dd`, a total that is not an invariant decimal, `minTotal` above `maxTotal`, or a page outside its range answers `400 invalid-request`.",
+        "description": "Saved-requests §6.5 with dashboard v2 §9.2: v1's parameters plus `receivedFrom`, `receivedTo`, `emailFrom`, `reference`, `minTotal`, `maxTotal`, `hasErrors` the sorts `received`, `total` and `rows`, and (dashboard-api-m12 §5) `postedFrom`, `postedTo`, `tz` and the sort `posted`, all combined with AND. `needsAttention`, `hasErrors` and the rows' flags use the v2 judgement (§5.3). Every value is checked: an unknown `status` or `sort`, a flag that is not `true`/`false`, a date that is neither `yyyy-MM-dd` nor an instant with an offset, an unknown `tz`, a total that is not an invariant decimal, `minTotal` above `maxTotal`, or a page outside its range answers `400 invalid-request`.",
         "x-required-scope": "requests:read",
         "security": [
           {
@@ -1157,20 +1157,20 @@
             "name": "createdFrom",
             "in": "query",
             "required": false,
-            "description": "Created on or after this date (UTC).",
+            "description": "Created on or after this date. Inclusive: from the start of the day. A plain date is a UTC day, or with `tz` a local day in that zone; an ISO 8601 instant with an offset (`2026-10-27T00:00:00+05:30`, write `+` as `%2B`) is used as is and ignores `tz`.",
             "schema": {
               "type": "string",
-              "format": "date"
+              "description": "`yyyy-MM-dd` or an ISO 8601 instant with an offset."
             }
           },
           {
             "name": "createdTo",
             "in": "query",
             "required": false,
-            "description": "Created on or before this date (UTC).",
+            "description": "Created on or before this date. A date covers the whole day; an instant is exclusive. A plain date is a UTC day, or with `tz` a local day in that zone; an ISO 8601 instant with an offset (`2026-10-27T00:00:00+05:30`, write `+` as `%2B`) is used as is and ignores `tz`.",
             "schema": {
               "type": "string",
-              "format": "date"
+              "description": "`yyyy-MM-dd` or an ISO 8601 instant with an offset."
             }
           },
           {
@@ -1186,20 +1186,49 @@
             "name": "receivedFrom",
             "in": "query",
             "required": false,
-            "description": "Received on or after this date (UTC): the email's `receivedUtc`, else the save time.",
+            "description": "Received on or after this date: the email's `receivedUtc`, else the save time. Inclusive: from the start of the day. A plain date is a UTC day, or with `tz` a local day in that zone; an ISO 8601 instant with an offset (`2026-10-27T00:00:00+05:30`, write `+` as `%2B`) is used as is and ignores `tz`.",
             "schema": {
               "type": "string",
-              "format": "date"
+              "description": "`yyyy-MM-dd` or an ISO 8601 instant with an offset."
             }
           },
           {
             "name": "receivedTo",
             "in": "query",
             "required": false,
-            "description": "Received on or before this date (UTC), as `receivedFrom`.",
+            "description": "Received on or before this date, as `receivedFrom`. A date covers the whole day; an instant is exclusive. A plain date is a UTC day, or with `tz` a local day in that zone; an ISO 8601 instant with an offset (`2026-10-27T00:00:00+05:30`, write `+` as `%2B`) is used as is and ignores `tz`.",
             "schema": {
               "type": "string",
-              "format": "date"
+              "description": "`yyyy-MM-dd` or an ISO 8601 instant with an offset."
+            }
+          },
+          {
+            "name": "postedFrom",
+            "in": "query",
+            "required": false,
+            "description": "Posted on or after this day or instant: the list's `postSummary.postedUtc` (the latest posted or partial attempt's finish, or the resolve time of a request resolved to posted). A request with no post never matches when `postedFrom` or `postedTo` is sent. A plain date is a UTC day, or with `tz` a local day in that zone; an ISO 8601 instant with an offset (`2026-10-27T00:00:00+05:30`, write `+` as `%2B`) is used as is and ignores `tz`.",
+            "schema": {
+              "type": "string",
+              "description": "`yyyy-MM-dd` or an ISO 8601 instant with an offset."
+            }
+          },
+          {
+            "name": "postedTo",
+            "in": "query",
+            "required": false,
+            "description": "Posted on or before this day (the whole day), or before this instant (exclusive), as `postedFrom`. A plain date is a UTC day, or with `tz` a local day in that zone; an ISO 8601 instant with an offset (`2026-10-27T00:00:00+05:30`, write `+` as `%2B`) is used as is and ignores `tz`.",
+            "schema": {
+              "type": "string",
+              "description": "`yyyy-MM-dd` or an ISO 8601 instant with an offset."
+            }
+          },
+          {
+            "name": "tz",
+            "in": "query",
+            "required": false,
+            "description": "An IANA time zone id (`Asia/Kolkata`). Makes a plain date in `createdFrom`, `createdTo`, `receivedFrom`, `receivedTo`, `postedFrom` and `postedTo` a local day in this zone. Without it a plain date is a UTC day, as before. An unknown id answers `400 invalid-request`.",
+            "schema": {
+              "type": "string"
             }
           },
           {
@@ -1253,7 +1282,7 @@
             "name": "sort",
             "in": "query",
             "required": false,
-            "description": "Default `-created`; a leading `-` is descending. `received` is the email's received time, else the save time; `total` is `controlTotal` (no total last); `rows` is `transactionCount`. Ties are broken by id.",
+            "description": "Default `-created`; a leading `-` is descending. `received` is the email's received time, else the save time; `total` is `controlTotal` (no total last); `rows` is `transactionCount`. Ties are broken by id. `posted` is `postSummary.postedUtc`; requests without a post sort last in both directions, then by id descending.",
             "schema": {
               "type": "string",
               "enum": [
@@ -1268,7 +1297,9 @@
                 "total",
                 "-total",
                 "rows",
-                "-rows"
+                "-rows",
+                "posted",
+                "-posted"
               ]
             }
           },
@@ -2923,6 +2954,129 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/dashboard/summary": {
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "getDashboardSummary",
+        "summary": "The Home page figures for a time range.",
+        "description": "Dashboard-api-m12 §4. `counts` and `previous` equal the audit feed's `total` for `received`, `posted`, `post-failed` and `discarded` over the same range (`post-failed` includes `partial`). `posted` is money that reached QuickBooks: the entries and the sum of `posted[].amount` in the stored result of each attempt that finished `posted` or `partial` in the range; amounts are JSON numbers with two decimals. `timeToPost` measures minutes from received to posted for each request whose post time is in the range (nearest rank, rounded down) and is `null` when there is none. `series` has one entry per local day (or Monday-started week) in `tz` overlapping the range, empty ones included, clipped to the range, so it sums to `counts`. Nothing here names a person.",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "description": "Inclusive. An ISO 8601 instant with an offset (`2026-10-01T00:00:00+05:30`; write `+` as `%2B` in a URL).",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "description": "Exclusive; after `from` and at most 366 days after it. Same format as `from`.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "compareFrom",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive start of the compare range for `previous`, `previousRows` and `previousAmount`. Sent with `compareTo` or not at all.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "compareTo",
+            "in": "query",
+            "required": false,
+            "description": "Exclusive end of the compare range; after `compareFrom` and at most 366 days after it.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "bucket",
+            "in": "query",
+            "required": false,
+            "description": "`day` (default) or `week` (weeks start on Monday).",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "day",
+                "week"
+              ],
+              "default": "day"
+            }
+          },
+          {
+            "name": "tz",
+            "in": "query",
+            "required": false,
+            "description": "An IANA time zone id (default `UTC`). Buckets are local days in this zone, and `range` is rendered in it.",
+            "schema": {
+              "type": "string",
+              "default": "UTC"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid-request`: `from` or `to` missing; a value that is not an instant with an offset; `to` not after `from` (or `compareTo` not after `compareFrom`); a range over 366 days; only one of `compareFrom`/`compareTo`; an unknown `bucket` or `tz`; a parameter given twice.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "503": {
             "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read.",
@@ -5914,6 +6068,162 @@
           },
           "ledgerBatch": {
             "$ref": "#/components/schemas/LedgerBatchV2"
+          }
+        }
+      },
+      "DashboardSummaryCounts": {
+        "type": "object",
+        "required": [
+          "received",
+          "posted",
+          "postFailed",
+          "discarded"
+        ],
+        "properties": {
+          "received": {
+            "type": "integer"
+          },
+          "posted": {
+            "type": "integer"
+          },
+          "postFailed": {
+            "type": "integer"
+          },
+          "discarded": {
+            "type": "integer"
+          }
+        }
+      },
+      "DashboardSummary": {
+        "type": "object",
+        "required": [
+          "range",
+          "counts",
+          "previous",
+          "posted",
+          "timeToPost",
+          "series"
+        ],
+        "properties": {
+          "range": {
+            "type": "object",
+            "required": [
+              "from",
+              "to",
+              "tz",
+              "bucket"
+            ],
+            "description": "The request, echoed with `from` and `to` rendered in `tz` with its offset.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "tz": {
+                "type": "string"
+              },
+              "bucket": {
+                "type": "string",
+                "enum": [
+                  "day",
+                  "week"
+                ]
+              }
+            }
+          },
+          "counts": {
+            "$ref": "#/components/schemas/DashboardSummaryCounts"
+          },
+          "previous": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DashboardSummaryCounts"
+              }
+            ],
+            "nullable": true,
+            "description": "The compare range's counts; `null` when no compare range was sent."
+          },
+          "posted": {
+            "type": "object",
+            "required": [
+              "rows",
+              "amount",
+              "previousRows",
+              "previousAmount"
+            ],
+            "properties": {
+              "rows": {
+                "type": "integer",
+                "description": "Entries of `posted[]` over the posted and partial attempts that finished in the range."
+              },
+              "amount": {
+                "type": "number",
+                "description": "Two decimals, invariant (`248391.27`, `60.00`)."
+              },
+              "previousRows": {
+                "type": "integer",
+                "nullable": true,
+                "description": "As `rows`, for the compare range; `null` without one."
+              },
+              "previousAmount": {
+                "type": "number",
+                "nullable": true,
+                "description": "As `amount`, for the compare range; `null` without one."
+              }
+            }
+          },
+          "timeToPost": {
+            "type": "object",
+            "nullable": true,
+            "description": "`null` when no request has a post time in the range.",
+            "required": [
+              "medianMinutes",
+              "p90Minutes",
+              "statements"
+            ],
+            "properties": {
+              "medianMinutes": {
+                "type": "integer"
+              },
+              "p90Minutes": {
+                "type": "integer"
+              },
+              "statements": {
+                "type": "integer"
+              }
+            }
+          },
+          "series": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "start",
+                "received",
+                "posted",
+                "postFailed"
+              ],
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "format": "date",
+                  "description": "The bucket's local date in `tz` (the Monday for weeks)."
+                },
+                "received": {
+                  "type": "integer"
+                },
+                "posted": {
+                  "type": "integer"
+                },
+                "postFailed": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         }
       }

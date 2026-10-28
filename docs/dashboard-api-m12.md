@@ -158,7 +158,7 @@ index, the count path for these four actions may query `saved_request_events` di
   - `previousRows` / `previousAmount` cover the compare range, and are `null` when no compare range is sent.
 - **`timeToPost`:**
   - Covers each statement whose **posted time** falls in the range, using the same definition as
-    `postSummary.postedUtc` (`PostSummaries.Of`): the first posted or partial attempt's finish, or, for a request
+    `postSummary.postedUtc` (`PostSummaries.Of`): the latest posted or partial attempt's finish (as `PostSummaries.Of`), or, for a request
     resolved to posted, its `resolved_utc`. *My call:* one definition of "when it was posted" across the summary, the
     list filter (§5) and the list column.
   - For each, it measures minutes from `coalesce(email_received_utc, created_utc)` to that posted time.

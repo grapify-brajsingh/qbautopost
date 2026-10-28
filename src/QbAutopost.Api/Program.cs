@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
@@ -31,6 +32,11 @@ using QbAutopost.Core.Store;
 using QbAutopost.Data;
 using QbAutopost.Data.Entities;
 using QbAutopost.QuickBooks;
+
+// T-1212a (Ruling R4, Q-112): Windows builds run with ICU so IANA zone ids (Asia/Kolkata) resolve. ICU also brings real
+// cultures, so every thread is pinned to the invariant one and formatting stays exactly what invariant mode gave.
+CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
+CultureInfo.DefaultThreadCurrentUICulture = CultureInfo.InvariantCulture;
 
 // T-901 (api-v1 §12): read appsettings.json from the exe's folder, not the working directory (server defect 1).
 // The environment is read from the variable because the host does not exist yet; the test host keeps its own root.
@@ -388,6 +394,16 @@ try
     SecretWarnings.Warn(app.Configuration, app.Logger);
     LegacyHermesSection.Warn(app.Configuration, app.Logger);
 
+    // T-1212a (Ruling R4, Q-112): the dashboard's tz parameters need IANA ids. Windows needs ICU (1903+ / Server 2019+);
+    // Linux reads tzdata. Said once at startup rather than discovered as a 400 on the Home page.
+    if (!QbAutopost.Core.Dashboard.DateBounds.TryZone("Asia/Kolkata", out _))
+    {
+        app.Logger.LogWarning(
+            "IANA time zone ids do not resolve on this machine (Asia/Kolkata not found): the dashboard's tz parameters "
+            + "will answer 400 for every zone but UTC. On Windows this needs ICU (Windows 10 1903+ / Server 2019+); on "
+            + "Linux, the tzdata package.");
+    }
+
     app.Services.GetRequiredService<PromptLibrary>();
     app.Logger.LogInformation("Hermes prompts loaded from {PromptFolder}", Path.Combine(AppContext.BaseDirectory, PromptLibrary.DefaultFolder));
 
@@ -465,6 +481,7 @@ try
     v2.MapUserEndpoints(ApiFlavor.V2);
     v2.MapSavedRequestEndpoints(ApiFlavor.V2);
     v2.MapAuditEventEndpoints();
+    v2.MapDashboardSummaryEndpoints();
     v2.MapQuickBooksEndpoints(ApiFlavor.V2);
     v2.MapHealthEndpoints(ApiFlavor.V2);
     if (settings.Api.Reference.Enabled)
