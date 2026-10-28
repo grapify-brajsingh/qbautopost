@@ -63,13 +63,9 @@ public sealed partial class FakeSavedRequestStore : IUploadStore
                 return Done(UploadSaveKind.Replayed, View(holder));
             }
 
-            if (!_extractions.TryGetValue(save.ExtractionId, out var extraction) || extraction.ExpiresUtc <= request.NowUtc)
+            // Ruling R7: owner and saved checks before expiry, as the EF Core store.
+            if (!_extractions.TryGetValue(save.ExtractionId, out var extraction))
             {
-                if (extraction is { SavedRequestId: null })
-                {
-                    _extractions.Remove(extraction.Id);
-                }
-
                 return Done(UploadSaveKind.Expired, null);
             }
 
@@ -80,7 +76,14 @@ public sealed partial class FakeSavedRequestStore : IUploadStore
 
             if (extraction.SavedRequestId is { } savedId)
             {
-                return Task.FromResult(new UploadSaveResult(UploadSaveKind.AlreadySaved, null, savedId, $"SR-{savedId:000000}"));
+                return Task.FromResult(
+                    new UploadSaveResult(UploadSaveKind.AlreadySaved, null, savedId, _requests[savedId].PublicRef));
+            }
+
+            if (extraction.ExpiresUtc <= request.NowUtc)
+            {
+                _extractions.Remove(extraction.Id);
+                return Done(UploadSaveKind.Expired, null);
             }
 
             // SPEC-GAP T-1210 (Q-111): same key, other body, extraction not saved; KeyReused as CreateAsync, nothing written.

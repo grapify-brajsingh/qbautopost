@@ -247,6 +247,63 @@ public abstract class UploadSaveStoreContract
     }
 
     [ContractFact]
+    public async Task Should_ReturnAlreadySaved_When_SavedAndPastExpiry()
+    {
+        var store = CreateStore();
+        var extraction = await StoredAsync(store);
+        var first = (await store.SaveUploadAsync(Save(extraction), default)).Record!;
+
+        var late = await store.SaveUploadAsync(Save(extraction, now: Now.AddDays(2)), default);
+
+        Assert.Equal(UploadSaveKind.AlreadySaved, late.Kind);
+        Assert.Equal((first.Id, first.PublicRef), (late.SavedRequestId!.Value, late.PublicRef));
+        Assert.Equal(first.Id, (await store.GetExtractionAsync(extraction.Id, default))!.SavedRequestId);
+        Assert.Equal(1, await RequestCountAsync(store));
+    }
+
+    [ContractFact]
+    public async Task Should_ReturnNotFound_When_OtherUsersSavedExtraction()
+    {
+        var store = CreateStore();
+        var extraction = await StoredAsync(store);
+        await store.SaveUploadAsync(Save(extraction), default);
+
+        var result = await store.SaveUploadAsync(Save(extraction, user: "user-8"), default);
+
+        Assert.Equal(UploadSaveKind.NotFound, result.Kind);
+        Assert.Null(result.SavedRequestId);
+        Assert.Null(result.PublicRef);
+        Assert.Equal(1, await RequestCountAsync(store));
+    }
+
+    [ContractFact]
+    public async Task Should_ReturnNotFoundAndKeepRecord_When_OtherUsersExpiredExtraction()
+    {
+        var store = CreateStore();
+        var extraction = await StoredAsync(store, Extraction(expires: Now.AddMinutes(-1)));
+
+        var result = await store.SaveUploadAsync(Save(extraction, user: "user-8"), default);
+
+        Assert.Equal(UploadSaveKind.NotFound, result.Kind);
+        Assert.NotNull(await store.GetExtractionAsync(extraction.Id, default));
+        Assert.Equal(0, await RequestCountAsync(store));
+    }
+
+    [ContractFact]
+    public async Task Should_ReturnAlreadySaved_When_KeyReusedWithOtherBodyOnSavedExtraction()
+    {
+        var store = CreateStore();
+        var extraction = await StoredAsync(store);
+        var first = (await store.SaveUploadAsync(Save(extraction, key: "k-1"), default)).Record!;
+
+        var result = await store.SaveUploadAsync(Save(extraction, edited: true, key: "k-1"), default);
+
+        Assert.Equal(UploadSaveKind.AlreadySaved, result.Kind);
+        Assert.Equal((first.Id, first.PublicRef), (result.SavedRequestId!.Value, result.PublicRef));
+        Assert.Equal(1, await RequestCountAsync(store));
+    }
+
+    [ContractFact]
     public async Task Should_ReplayCreated_When_SameIdempotencyKey()
     {
         var store = CreateStore();

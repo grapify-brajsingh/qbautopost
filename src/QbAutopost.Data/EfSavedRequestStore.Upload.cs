@@ -104,15 +104,10 @@ public sealed partial class EfSavedRequestStore : IUploadStore
             return Answer(UploadSaveKind.Replayed, holder);
         }
 
-        if (extraction is null || extraction.ExpiresUtc <= request.NowUtc)
+        // Ruling R7: owner and saved checks come before expiry, so another user's record is never touched and a saved
+        // record (kept for good, spec 6.6) answers 409 however late the retry.
+        if (extraction is null)
         {
-            if (extraction is { SavedRequestId: null })
-            {
-                db.StatementExtractions.Remove(extraction);
-                await db.SaveChangesAsync(ct);
-                await tx.CommitAsync(ct);
-            }
-
             return Answer(UploadSaveKind.Expired, null);
         }
 
@@ -125,6 +120,15 @@ public sealed partial class EfSavedRequestStore : IUploadStore
         {
             var publicRef = await db.SavedRequests.Where(r => r.Id == savedId).Select(r => r.PublicRef).SingleAsync(ct);
             return new UploadSaveResult(UploadSaveKind.AlreadySaved, null, savedId, publicRef);
+        }
+
+        if (extraction.ExpiresUtc <= request.NowUtc)
+        {
+            // Own and unsaved here: delete it in the same step (spec 7.2.1).
+            db.StatementExtractions.Remove(extraction);
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+            return Answer(UploadSaveKind.Expired, null);
         }
 
         // SPEC-GAP T-1210 (Q-111): same key, other body, extraction not saved; KeyReused as CreateAsync, nothing written.
