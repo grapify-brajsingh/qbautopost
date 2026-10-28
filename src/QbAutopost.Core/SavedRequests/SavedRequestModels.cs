@@ -147,14 +147,15 @@ public sealed record SavedRequest(
     /// <summary>Findings plus errors of <see cref="ValidationV2"/>.</summary>
     public int ProblemCount { get; init; }
 
-    /// <summary>The latest post's outcome for v2 list rows. Filled by the store from T-1107; null until then.</summary>
+    /// <summary>The latest post's outcome (spec 9.1). Filled by <see cref="ISavedRequestStore.GetAsync"/> only.</summary>
     public PostSummary? PostSummary { get; init; }
 
-    /// <summary>Timeline length for v2 responses. Filled by the store from T-1107; 0 until then.</summary>
+    /// <summary>How many <c>audit_events</c> rows the request has (spec 8.4). Filled by <see cref="ISavedRequestStore.GetAsync"/> only.</summary>
     public int HistoryCount { get; init; }
 }
 
-/// <summary>What a v2 list row and detail show of the last post (T-1107 fills it).</summary>
+/// <summary>What a v2 list row and detail show of the last post (spec 9.1; built by <see cref="PostSummaries.Of"/>).</summary>
+/// <param name="PostedBy">The actor id; the API resolves the name.</param>
 public sealed record PostSummary(string? PostId, int? PostedCount, DateTime? PostedUtc, string? PostedBy);
 
 /// <summary>A list row: everything except the payload, the validation detail and the read errors (spec §6.5).</summary>
@@ -179,6 +180,30 @@ public sealed record SavedRequestSummary(
     int RowVersion)
 {
     public string PublicRef => $"SR-{Id:000000}";
+
+    // ---- dashboard v2 list rows (T-1107). Init-only with defaults, so v1 list rows and views are unchanged. ----
+
+    /// <summary>Email and pushId kept from the first save.</summary>
+    public SaveMetadata Metadata { get; init; } = SaveMetadata.None;
+
+    public int SkipCount { get; init; }
+
+    /// <summary>State of the v2 snapshot, or null when there is none.</summary>
+    public ValidationState? ValidationV2State { get; init; }
+
+    public DateTime? ValidationV2Utc { get; init; }
+
+    public int? ValidationV2Version { get; init; }
+
+    /// <summary>The v2 attention rule (spec 5.3).</summary>
+    public bool NeedsAttentionV2 { get; init; }
+
+    public int ProblemCount { get; init; }
+
+    public PostSummary? PostSummary { get; init; }
+
+    /// <summary>How many <c>audit_events</c> rows the request has (spec 8.4).</summary>
+    public int HistoryCount { get; init; }
 }
 
 public sealed record SavedRequestVersion(

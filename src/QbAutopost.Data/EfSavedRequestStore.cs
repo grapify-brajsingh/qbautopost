@@ -140,45 +140,14 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
     public async Task<SavedRequest?> GetAsync(long id, CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        return await LoadAsync(db, id, ct);
+        var record = await LoadAsync(db, id, ct);
+        return record is null ? null : await WithPostSummaryAndHistoryAsync(db, record, ct);
     }
 
     public async Task<PagedResult<SavedRequestSummary>> ListAsync(SavedRequestQuery query, CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        IQueryable<SavedRequestEntity> rows = db.SavedRequests.AsNoTracking();
-
-        if (query.Statuses.Count > 0)
-        {
-            var statuses = query.Statuses.ToList();
-            rows = rows.Where(r => statuses.Contains(r.Status));
-        }
-
-        if (query.NeedsAttention is { } needsAttention) rows = rows.Where(r => r.NeedsAttention == needsAttention);
-        if (query.Duplicate is { } duplicate) rows = rows.Where(r => (r.DuplicateReasons.Count > 0) == duplicate);
-        if (query.Source is { Length: > 0 } source) rows = rows.Where(r => r.Source == source);
-        if (query.CreatedFrom is { } from)
-        {
-            var fromUtc = from.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
-            rows = rows.Where(r => r.CreatedUtc >= fromUtc);
-        }
-
-        if (query.CreatedTo is { } to)
-        {
-            var untilUtc = to.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
-            rows = rows.Where(r => r.CreatedUtc < untilUtc);
-        }
-
-        if (!string.IsNullOrWhiteSpace(query.Q))
-        {
-            var q = query.Q.Trim();
-            var pattern = "%" + EscapeLike(q) + "%";
-            var payloadMatches = PayloadMatches(db, q);
-            rows = rows.Where(r =>
-                EF.Functions.ILike(r.Reference!, pattern, LikeEscape)
-                || EF.Functions.ILike(r.PublicRef, pattern, LikeEscape)
-                || payloadMatches.Contains(r.Id));
-        }
+        var rows = FilterRequests(db, query, v2: false);
 
         var total = await rows.CountAsync(ct);
         var size = Math.Max(1, query.PageSize);
@@ -620,6 +589,77 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
             NeedsAttentionV2 = r.NeedsAttentionV2,
             ProblemCount = r.ProblemCount,
         };
+    }
+
+    /// <summary>
+    /// The v1 list filters. With <paramref name="v2"/> (T-1107), <c>needsAttention</c> reads <c>needs_attention_v2</c>
+    /// and <c>q</c> also matches the email subject and the push id prefix.
+    /// </summary>
+    private static IQueryable<SavedRequestEntity> FilterRequests(QbAutopostDbContext db, SavedRequestQuery query, bool v2)
+    {
+        IQueryable<SavedRequestEntity> rows = db.SavedRequests.AsNoTracking();
+
+        if (query.Statuses.Count > 0)
+        {
+            var statuses = query.Statuses.ToList();
+            rows = rows.Where(r => statuses.Contains(r.Status));
+        }
+
+        if (query.NeedsAttention is { } needsAttention)
+        {
+            rows = v2
+                ? rows.Where(r => r.NeedsAttentionV2 == needsAttention)
+                : rows.Where(r => r.NeedsAttention == needsAttention);
+        }
+
+        if (query.Duplicate is { } duplicate) rows = rows.Where(r => (r.DuplicateReasons.Count > 0) == duplicate);
+        if (query.Source is { Length: > 0 } source) rows = rows.Where(r => r.Source == source);
+        if (query.CreatedFrom is { } from)
+        {
+            var fromUtc = from.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+            rows = rows.Where(r => r.CreatedUtc >= fromUtc);
+        }
+
+        if (query.CreatedTo is { } to)
+        {
+            var untilUtc = to.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+            rows = rows.Where(r => r.CreatedUtc < untilUtc);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Q))
+        {
+            var q = query.Q.Trim();
+            var pattern = "%" + EscapeLike(q) + "%";
+            var payloadMatches = PayloadMatches(db, q);
+            if (!v2)
+            {
+                rows = rows.Where(r =>
+                    EF.Functions.ILike(r.Reference!, pattern, LikeEscape)
+                    || EF.Functions.ILike(r.PublicRef, pattern, LikeEscape)
+                    || payloadMatches.Contains(r.Id));
+            }
+            else if (SavedRequestSearch.PushIdHexPrefix(q) is { } hex)
+            {
+                // Hex digits need no LIKE escaping; the prefix is a parameter.
+                var prefix = hex + "%";
+                rows = rows.Where(r =>
+                    EF.Functions.ILike(r.Reference!, pattern, LikeEscape)
+                    || EF.Functions.ILike(r.PublicRef, pattern, LikeEscape)
+                    || payloadMatches.Contains(r.Id)
+                    || EF.Functions.ILike(r.EmailSubject!, pattern, LikeEscape)
+                    || EF.Functions.Like(r.PushIdHex!, prefix));
+            }
+            else
+            {
+                rows = rows.Where(r =>
+                    EF.Functions.ILike(r.Reference!, pattern, LikeEscape)
+                    || EF.Functions.ILike(r.PublicRef, pattern, LikeEscape)
+                    || payloadMatches.Contains(r.Id)
+                    || EF.Functions.ILike(r.EmailSubject!, pattern, LikeEscape));
+            }
+        }
+
+        return rows;
     }
 
     /// <summary>Ids of requests whose current payload has a <c>payee</c> or <c>memo</c> string containing <paramref name="q"/>, ignoring case.</summary>

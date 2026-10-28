@@ -86,7 +86,7 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestStore
     {
         lock (_gate)
         {
-            return Task.FromResult(_requests.TryGetValue(id, out var r) ? View(r) : null);
+            return Task.FromResult(_requests.TryGetValue(id, out var r) ? WithPostSummaryAndHistory(View(r)) : null);
         }
     }
 
@@ -94,15 +94,7 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestStore
     {
         lock (_gate)
         {
-            IEnumerable<SavedRequest> rows = _requests.Values;
-            if (query.Statuses.Count > 0) rows = rows.Where(r => query.Statuses.Contains(r.Status));
-            if (query.NeedsAttention is { } na) rows = rows.Where(r => r.NeedsAttention == na);
-            if (query.Duplicate is { } dup) rows = rows.Where(r => (r.DuplicateReasons.Count > 0) == dup);
-            if (query.Source is { Length: > 0 } source) rows = rows.Where(r => r.Source == source);
-            if (query.CreatedFrom is { } from) rows = rows.Where(r => DateOnly.FromDateTime(r.CreatedUtc) >= from);
-            if (query.CreatedTo is { } to) rows = rows.Where(r => DateOnly.FromDateTime(r.CreatedUtc) <= to);
-            if (!string.IsNullOrWhiteSpace(query.Q)) rows = rows.Where(r => Matches(r, query.Q.Trim()));
-
+            var rows = Filter(_requests.Values, query, v2: false);
             var ordered = Order(rows, query.Sort).ToList();
             var size = Math.Max(1, query.PageSize);
             var page = Math.Max(1, query.Page);
@@ -566,12 +558,29 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestStore
         r.DuplicateOfId, r.DuplicateReasons.ToList(), r.Validation?.State, r.ValidatedUtc, r.PostId,
         r.CreatedUtc, r.CreatedBy, r.UpdatedUtc, r.UpdatedBy, r.RowVersion);
 
-    private static bool Matches(SavedRequest r, string q)
+    /// <summary>
+    /// The v1 list filters. With <paramref name="v2"/> (T-1107), <c>needsAttention</c> reads the v2 flag and <c>q</c>
+    /// also matches the email subject and the push id prefix.
+    /// </summary>
+    private static IEnumerable<SavedRequest> Filter(IEnumerable<SavedRequest> rows, SavedRequestQuery query, bool v2)
+    {
+        if (query.Statuses.Count > 0) rows = rows.Where(r => query.Statuses.Contains(r.Status));
+        if (query.NeedsAttention is { } na) rows = rows.Where(r => (v2 ? r.NeedsAttentionV2 : r.NeedsAttention) == na);
+        if (query.Duplicate is { } dup) rows = rows.Where(r => (r.DuplicateReasons.Count > 0) == dup);
+        if (query.Source is { Length: > 0 } source) rows = rows.Where(r => r.Source == source);
+        if (query.CreatedFrom is { } from) rows = rows.Where(r => DateOnly.FromDateTime(r.CreatedUtc) >= from);
+        if (query.CreatedTo is { } to) rows = rows.Where(r => DateOnly.FromDateTime(r.CreatedUtc) <= to);
+        if (!string.IsNullOrWhiteSpace(query.Q)) rows = rows.Where(r => Matches(r, query.Q.Trim(), v2));
+        return rows;
+    }
+
+    private static bool Matches(SavedRequest r, string q, bool v2)
     {
         const StringComparison ci = StringComparison.OrdinalIgnoreCase;
         return (r.Reference?.Contains(q, ci) ?? false)
             || $"SR-{r.Id:000000}".Contains(q, ci)
-            || PayloadText(r.CurrentPayload).Any(t => t.Contains(q, ci));
+            || PayloadText(r.CurrentPayload).Any(t => t.Contains(q, ci))
+            || (v2 && MatchesV2(r, q));
     }
 
     // Every string value of a "payee" or "memo" property, wherever it sits in the payload.

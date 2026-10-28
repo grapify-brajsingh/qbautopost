@@ -9,7 +9,7 @@ namespace QbAutopost.Api.Database;
 /// <c>RequireDatabase</c> filter answers 503 before any store call, so nothing reaches this; a route that forgot the
 /// filter fails loudly rather than pretending to save.
 /// </summary>
-public sealed class DisabledSavedRequestStore : ISavedRequestStore, ISavedRequestAuditStore
+public sealed class DisabledSavedRequestStore : ISavedRequestStore, ISavedRequestAuditStore, ISavedRequestV2Store
 {
     private static InvalidOperationException Off() =>
         new("The saved-requests database is not configured (Database:ConnectionString is empty).");
@@ -57,4 +57,10 @@ public sealed class DisabledSavedRequestStore : ISavedRequestStore, ISavedReques
     public Task<PagedResult<AuditEvent>> AuditEventsAsync(AuditQuery query, CancellationToken ct) => throw Off();
 
     public Task<int> AuditEventCountAsync(AuditQuery query, CancellationToken ct) => throw Off();
+
+    public Task<PagedResult<SavedRequestSummary>> ListV2Async(SavedRequestQueryV2 query, CancellationToken ct) => throw Off();
+
+    public Task<SavedRequestStatsV2> StatsV2Async(CancellationToken ct) => throw Off();
+
+    public Task<IReadOnlyList<OtherPush>> OtherUnpostedPushesAsync(long id, CancellationToken ct) => throw Off();
 }
