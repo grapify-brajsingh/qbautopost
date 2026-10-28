@@ -96,4 +96,36 @@ public sealed class ExternalIdAssignerTests
         Assert.Equal(12.50m, result.GetProperty("controlTotal").GetDecimal());
         Assert.Equal(12.50m, result.GetProperty("transactions")[0].GetProperty("amount").GetDecimal());
     }
+
+    [Theory]
+    [InlineData("""{"a":1,"a":2,"transactions":[{"amount":1}]}""")]
+    [InlineData("""{"transactions":[{"amount":1,"amount":2}]}""")]
+    public void Should_ReturnUnchanged_When_PayloadHasDuplicateKeys(string json)
+    {
+        var input = Parse(json);
+
+        Assert.Equal(input.GetRawText(), ExternalIdAssigner.AssignOnSave(input).GetRawText());
+        Assert.Equal(input.GetRawText(), ExternalIdAssigner.AssignOnEdit(input, 2).GetRawText());
+    }
+
+    [Fact]
+    public void Should_NotThrow_When_MetadataAndSkipCountReadDuplicateKeys()
+    {
+        var input = Parse("""{"pushId":"x","pushId":"y","email":{"subject":"a","subject":"b"},"transactions":[{"post":false,"post":false}]}""");
+
+        var metadata = QbAutopost.Core.SavedRequests.SaveMetadataReader.Read(input);
+        var skips = QbAutopost.Core.SavedRequests.SavedRequestColumns.SkipCountOf(input);
+
+        Assert.NotNull(metadata);
+        Assert.Equal(1, skips);
+    }
+
+    [Fact]
+    public void Should_AssignAndKeepNestedDuplicates_When_DuplicateKeyIsInUntouchedSubtree()
+    {
+        var result = ExternalIdAssigner.AssignOnSave(Parse("""{"transactions":[{},{"memo":{"k":1,"k":2}}]}"""));
+
+        Assert.Equal("row-1", result.GetProperty("transactions")[0].GetProperty("externalId").GetString());
+        Assert.Contains("\"k\":1,\"k\":2", result.GetRawText());
+    }
 }

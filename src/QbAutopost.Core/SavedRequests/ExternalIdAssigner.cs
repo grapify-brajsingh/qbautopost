@@ -23,6 +23,20 @@ public static class ExternalIdAssigner
             return payload;
         }
 
+        try
+        {
+            return AssignNodes(payload, baseId);
+        }
+        catch (ArgumentException)
+        {
+            // JsonNode rejects duplicate property names (lazily, on first access) that JsonDocument accepts:
+            // leave the payload as it is.
+            return payload;
+        }
+    }
+
+    private static JsonElement AssignNodes(JsonElement payload, Func<int, string> baseId)
+    {
         var root = JsonNode.Parse(payload.GetRawText())!;
         var rows = root["transactions"]!.AsArray();
 
