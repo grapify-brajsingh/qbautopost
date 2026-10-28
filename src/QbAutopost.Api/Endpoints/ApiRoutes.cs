@@ -95,13 +95,14 @@ public static class ApiRoutes
     /// True for a health route under either prefix. Health needs no API key (spec §6) and a healthy poll is logged at
     /// Debug (spec §14), so both places ask here rather than testing one prefix and forgetting the other.
     /// <para>
-    /// T-1109: left unchanged, as the plan says, so <c>/api/v2/health/database</c> is not a health route here: it is
-    /// rate-limited in the caller's default bucket and logged at Information. SPEC-GAP T-1109 (Q-100).
+    /// T-1109 (dashboard v2 spec 2, ruling R8): the <c>/api/v2/health</c> prefix too, so v2's
+    /// <c>/health/database</c> is rate-limited and logged exactly as v1's. Only the clause below is new.
     /// </para>
     /// </summary>
     public static bool IsHealth(PathString path) =>
         path.StartsWithSegments(HealthPrefix, StringComparison.OrdinalIgnoreCase)
-        || path.StartsWithSegments(V1Prefix + HealthPrefix, StringComparison.OrdinalIgnoreCase);
+        || path.StartsWithSegments(V1Prefix + HealthPrefix, StringComparison.OrdinalIgnoreCase)
+        || path.StartsWithSegments(V2Prefix + HealthPrefix, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// T-909 (FR-A-12): the four routes that change something and therefore accept an <c>Idempotency-Key</c> — the
