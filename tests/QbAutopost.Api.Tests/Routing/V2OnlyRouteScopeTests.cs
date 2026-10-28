@@ -8,6 +8,8 @@ namespace QbAutopost.Api.Tests.Routing;
 /// <summary>
 /// T-1114 (O-1, dashboard v2 spec 13.1): the audit feed exists under <c>/api/v2</c> only. Its v1 and flat forms are
 /// unmapped paths and keep the <c>admin</c> fall-through, so a viewer is refused (403), not told 404.
+/// T-1116 (ruling R14): over HTTP the flat forms are dashboard paths now (<c>DashboardHostingTests</c>); only their
+/// <c>ScopeFor</c> answer is pinned here.
 /// </summary>
 public sealed class V2OnlyRouteScopeTests : IDisposable
 {
@@ -41,8 +43,6 @@ public sealed class V2OnlyRouteScopeTests : IDisposable
     [Theory]
     [InlineData("/api/v1/audit-events")]
     [InlineData("/api/v1/audit-events.csv")]
-    [InlineData("/audit-events")]
-    [InlineData("/audit-events.csv")]
     public async Task Should_Refuse403_When_ViewerCallsUnmappedAuditEventsPath(string path)
     {
         using var viewer = _host.User(DashboardRoles.Viewer);

@@ -9,6 +9,7 @@ using QbAutopost.Api.Database;
 using QbAutopost.Api.Endpoints;
 using QbAutopost.Api.Endpoints.V2;
 using QbAutopost.Api.Health;
+using QbAutopost.Api.Hosting;
 using QbAutopost.Api.Jobs;
 using QbAutopost.Api.Logging;
 using QbAutopost.Api.Ocr;
@@ -416,6 +417,10 @@ try
     {
         app.UseCors(CorsPolicyName);
     }
+
+    // T-1116 (dashboard v2 spec 13.1, R-2): the dashboard's paths are answered here, before the audit, the caller
+    // resolver and everything else the API puts in front of its routes. An API path never enters the branch.
+    app.UseDashboard();
 
     // T-912 (FR-A-16): in front of the key check on purpose — a 403 is a refusal by an identified caller, and an
     // audit that sat behind the check would never see it (handoff trap 17). It records once the answer is known.

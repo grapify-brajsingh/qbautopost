@@ -16,6 +16,7 @@ public sealed class AppSettings
     public DatabaseSettings Database { get; set; } = new();
     public SavedRequestSettings SavedRequests { get; set; } = new();
     public AuthSettings Auth { get; set; } = new();
+    public DashboardSettings Dashboard { get; set; } = new();
 
     /// <summary>Makes every configured file path absolute, relative ones against <paramref name="root"/>.</summary>
     public void ResolvePaths(string root)
@@ -30,6 +31,11 @@ public sealed class AppSettings
         if (!string.IsNullOrWhiteSpace(Ocr.TessDataPath))
         {
             Ocr.TessDataPath = Path.GetFullPath(Ocr.TessDataPath, root);
+        }
+
+        if (!string.IsNullOrWhiteSpace(Dashboard.Path))
+        {
+            Dashboard.Path = Path.GetFullPath(Dashboard.Path, root);
         }
     }
 }

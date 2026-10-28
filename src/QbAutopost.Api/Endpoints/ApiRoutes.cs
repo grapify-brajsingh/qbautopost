@@ -94,6 +94,41 @@ public static class ApiRoutes
         || (path.HasValue && path.Value!.TrimEnd('/').Equals(V2Prefix + OpenApiPath, Ordinal));
 
     /// <summary>
+    /// T-1116 (dashboard v2 spec 13.1, R-2): the first segment of every flat route that <c>Api:LegacyRoutes</c> maps
+    /// beside <c>/api/v1</c>. A route added to the flat surface must start with one of these, or the dashboard would
+    /// answer its path (pinned by <c>DashboardHostingTests</c>).
+    /// </summary>
+    public static IReadOnlyList<string> LegacyFlatPrefixes { get; } =
+        ["/health", "/jobs", "/batches", "/quickbooks", "/qb", "/rules"];
+
+    /// <summary>The root of every versioned surface; nothing under it is ever the dashboard's.</summary>
+    private const string ApiRoot = "/api";
+
+    /// <summary>
+    /// T-1116 (dashboard v2 spec 13.1): true for a path the dashboard serves. Neither under <c>/api</c> nor under any
+    /// <see cref="LegacyFlatPrefixes"/> entry, whether or not the legacy routes are switched on, so turning them off
+    /// never hands their paths to the dashboard. Matched by whole segment, ignoring case as routing does: <c>/jobs/1</c>
+    /// is the API's, <c>/jobsite</c> is the dashboard's.
+    /// </summary>
+    public static bool IsDashboardPath(PathString path)
+    {
+        if (path.StartsWithSegments(ApiRoot, Ordinal))
+        {
+            return false;
+        }
+
+        foreach (var prefix in LegacyFlatPrefixes)
+        {
+            if (path.StartsWithSegments(prefix, Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// True for a health route under either prefix. Health needs no API key (spec §6) and a healthy poll is logged at
     /// Debug (spec §14), so both places ask here rather than testing one prefix and forgetting the other.
     /// <para>
