@@ -14,5 +14,8 @@ public sealed record ValidationSnapshot(
     IReadOnlyList<string> Errors,
     DirectUnknownNames? UnknownNames)
 {
+    /// <summary>Findings plus errors: the count a v2 list row shows.</summary>
+    public int ProblemCount => Validation.Count + Errors.Count;
+
     public bool NeedsAttention => State is ValidationState.Held or ValidationState.Refused or ValidationState.Unreadable;
 }

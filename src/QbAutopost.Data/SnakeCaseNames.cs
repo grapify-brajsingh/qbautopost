@@ -22,10 +22,13 @@ public static class SnakeCaseNames
                 entity.SetTableName(ToSnake(table));
             }
 
-            var tableId = StoreObjectIdentifier.Table(entity.GetTableName()!, entity.GetSchema());
+            // A view-mapped entity (audit_events, T-1106) has no table; its columns are named on the view.
+            var storeId = entity.GetTableName() is { } tableName
+                ? StoreObjectIdentifier.Table(tableName, entity.GetSchema())
+                : StoreObjectIdentifier.View(entity.GetViewName()!, entity.GetViewSchema());
             foreach (var property in entity.GetProperties())
             {
-                property.SetColumnName(ToSnake(property.GetColumnName(tableId) ?? property.Name));
+                property.SetColumnName(ToSnake(property.GetColumnName(storeId) ?? property.Name));
             }
         }
 

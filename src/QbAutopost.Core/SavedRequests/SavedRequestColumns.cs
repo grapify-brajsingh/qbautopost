@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace QbAutopost.Core.SavedRequests;
 
 /// <summary>The denormalised columns every store writes from a version's payload, so the fake and EF agree.</summary>
@@ -17,4 +19,39 @@ public static class SavedRequestColumns
         && Math.Abs(decimal.Round(total, 2, MidpointRounding.AwayFromZero)) <= MaxControlTotal
             ? total
             : null;
+
+    /// <summary>
+    /// The number of rows marked with a literal <c>post: false</c> (spec 4.1). The strings "false" and numbers do not
+    /// count; they are read errors elsewhere.
+    /// </summary>
+    public static int SkipCountOf(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.Object
+            || !payload.TryGetProperty("transactions", out var rows)
+            || rows.ValueKind != JsonValueKind.Array)
+        {
+            return 0;
+        }
+
+        var count = 0;
+        foreach (var row in rows.EnumerateArray())
+        {
+            if (row.ValueKind == JsonValueKind.Object
+                && row.TryGetProperty("post", out var post)
+                && post.ValueKind == JsonValueKind.False)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// The <c>needs_attention_v2</c> column (spec 5.3): the version is unreadable, or the v2 snapshot is held, refused
+    /// or unreadable, or the save carried a metadata error. The v1 read is part of it because a version v1 cannot
+    /// read is unreadable under v2 too, and it keeps the column equal to the backfilled copy of <c>needs_attention</c>.
+    /// </summary>
+    public static bool NeedsAttentionV2(bool readable, ValidationSnapshot snapshotV2, SaveMetadata metadata) =>
+        !readable || snapshotV2.NeedsAttention || metadata.MetadataErrors.Count > 0;
 }

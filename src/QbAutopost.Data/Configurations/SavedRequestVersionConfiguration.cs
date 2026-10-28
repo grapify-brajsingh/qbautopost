@@ -18,5 +18,8 @@ public sealed class SavedRequestVersionConfiguration : IEntityTypeConfiguration<
         builder.Property(e => e.Changes).HasColumnType("jsonb");
 
         builder.HasIndex(e => new { e.SavedRequestId, e.Number }).IsUnique();
+
+        // Dashboard v2 audit feed, newest first (T-1105, spec saved-requests-dashboard-v2 4.2).
+        builder.HasIndex(e => e.CreatedUtc).IsDescending();
     }
 }

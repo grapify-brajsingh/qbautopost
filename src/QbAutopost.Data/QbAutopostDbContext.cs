@@ -16,6 +16,9 @@ public sealed class QbAutopostDbContext(DbContextOptions<QbAutopostDbContext> op
     public DbSet<RefreshTokenEntity> RefreshTokens => Set<RefreshTokenEntity>();
     public DbSet<UserAuditEntity> UserAudit => Set<UserAuditEntity>();
 
+    /// <summary>The read-only view <c>audit_events</c> (T-1106).</summary>
+    public DbSet<AuditEventRow> AuditEvents => Set<AuditEventRow>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);

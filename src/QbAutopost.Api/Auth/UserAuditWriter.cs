@@ -29,6 +29,12 @@ public sealed class UserAuditWriter(IDbContextFactory<QbAutopostDbContext> conte
     /// </summary>
     public const string Unlocked = "unlocked";
 
+    /// <summary>
+    /// T-1115 (dashboard v2 spec 11): a v2 refresh refused because a revoked token came back outside the grace; its
+    /// family is revoked. <c>detail</c> is <c>{ familyId }</c>, which the audit feed shows as <c>user-session-revoked</c>.
+    /// </summary>
+    public const string RefreshReuse = "refresh-reuse";
+
     /// <summary>The actor of an event nobody signed in for: a failed or locked-out sign-in.</summary>
     public const string Anonymous = "anonymous";
 

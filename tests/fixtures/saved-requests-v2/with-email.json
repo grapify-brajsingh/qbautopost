@@ -1,0 +1,15 @@
+{
+  "reference": "v2-with-email-2026-08",
+  "controlTotal": 283.42,
+  "email": {
+    "subject": "August statement for Tropicana",
+    "receivedUtc": "2026-08-06T09:15:00Z",
+    "from": "bookkeeper@example.com",
+    "messageId": "<msg-0001@example.com>"
+  },
+  "pushId": "3F2504E0-4F89-11D3-9A0C-0305E82C3301",
+  "transactions": [
+    { "externalId": "row-1", "kind": "Check", "date": "2026-08-05", "amount": 184.32, "account": "Chase Checking 4521", "payee": "HOME DEPOT #6412", "memo": "HOME DEPOT #6412 PURCHASE", "last4": "4521" },
+    { "externalId": "row-2", "kind": "Check", "date": "2026-08-05", "amount": 99.10, "account": "Chase Checking 4521", "payee": "SHELL OIL 4491", "memo": "SHELL OIL 4491", "last4": "4521" }
+  ]
+}

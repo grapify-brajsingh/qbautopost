@@ -17,7 +17,11 @@ public static class SavedRequestEvents
     public const string Resolved = "resolved";
 }
 
-public enum CreateKind { Created, Replayed, KeyReused }
+/// <summary>
+/// <see cref="PushIdReused"/>: the save's <c>pushId</c> is held by a record with a different original body (spec
+/// dashboard-v2 5.2); the result carries that record. Only a save with <c>Metadata.PushId</c> can produce it.
+/// </summary>
+public enum CreateKind { Created, Replayed, KeyReused, PushIdReused }
 
 public enum MutationKind { Ok, NotFound, Stale, WrongStatus, Unchanged }
 
@@ -42,7 +46,14 @@ public sealed record NewSavedRequest(
     string? IdempotencyKey,
     ValidationSnapshot Snapshot,
     DuplicateMatch Duplicate,
-    DateTime NowUtc);
+    DateTime NowUtc)
+{
+    /// <summary>Email and pushId read from the original body of a v2 save; never changed afterwards (T-1105).</summary>
+    public SaveMetadata Metadata { get; init; } = SaveMetadata.None;
+
+    /// <summary>The v2 judgement of version 1. Null: the store copies <see cref="Snapshot"/> into it.</summary>
+    public ValidationSnapshot? SnapshotV2 { get; init; }
+}
 
 public sealed record NewVersion(
     JsonElement Payload,
@@ -54,7 +65,11 @@ public sealed record NewVersion(
     ValidationSnapshot Snapshot,
     DuplicateMatch Duplicate,
     string Actor,
-    DateTime NowUtc);
+    DateTime NowUtc)
+{
+    /// <summary>The v2 judgement of the new version. Null: the store copies <see cref="Snapshot"/> into it.</summary>
+    public ValidationSnapshot? SnapshotV2 { get; init; }
+}
 
 public sealed record AttemptCompletion(
     AttemptOutcome Outcome,
@@ -118,7 +133,34 @@ public sealed record SavedRequest(
     PostAttempt? LastAttempt)
 {
     public string PublicRef => $"SR-{Id:000000}";
+
+    // ---- dashboard v2 (T-1105). Init-only with defaults, so v1 call sites and v1 views are unchanged. ----
+
+    /// <summary>Email and pushId kept from the first save; never changed by an edit.</summary>
+    public SaveMetadata Metadata { get; init; } = SaveMetadata.None;
+
+    /// <summary>Rows of the current version whose <c>post</c> is the JSON literal <c>false</c>.</summary>
+    public int SkipCount { get; init; }
+
+    /// <summary>The v2 snapshot of the latest version (spec 6.4).</summary>
+    public ValidationSnapshot? ValidationV2 { get; init; }
+
+    /// <summary>The v2 attention rule (spec 5.3): what v2 responses, filters and stats use.</summary>
+    public bool NeedsAttentionV2 { get; init; }
+
+    /// <summary>Findings plus errors of <see cref="ValidationV2"/>.</summary>
+    public int ProblemCount { get; init; }
+
+    /// <summary>The latest post's outcome (spec 9.1). Filled by <see cref="ISavedRequestV2Store.GetV2Async"/> only.</summary>
+    public PostSummary? PostSummary { get; init; }
+
+    /// <summary>How many <c>audit_events</c> rows the request has (spec 8.4). Filled by <see cref="ISavedRequestV2Store.GetV2Async"/> only.</summary>
+    public int HistoryCount { get; init; }
 }
+
+/// <summary>What a v2 list row and detail show of the last post (spec 9.1; built by <see cref="PostSummaries.Of"/>).</summary>
+/// <param name="PostedBy">The actor id; the API resolves the name.</param>
+public sealed record PostSummary(string? PostId, int? PostedCount, DateTime? PostedUtc, string? PostedBy);
 
 /// <summary>A list row: everything except the payload, the validation detail and the read errors (spec §6.5).</summary>
 public sealed record SavedRequestSummary(
@@ -142,6 +184,30 @@ public sealed record SavedRequestSummary(
     int RowVersion)
 {
     public string PublicRef => $"SR-{Id:000000}";
+
+    // ---- dashboard v2 list rows (T-1107). Init-only with defaults, so v1 list rows and views are unchanged. ----
+
+    /// <summary>Email and pushId kept from the first save.</summary>
+    public SaveMetadata Metadata { get; init; } = SaveMetadata.None;
+
+    public int SkipCount { get; init; }
+
+    /// <summary>State of the v2 snapshot, or null when there is none.</summary>
+    public ValidationState? ValidationV2State { get; init; }
+
+    public DateTime? ValidationV2Utc { get; init; }
+
+    public int? ValidationV2Version { get; init; }
+
+    /// <summary>The v2 attention rule (spec 5.3).</summary>
+    public bool NeedsAttentionV2 { get; init; }
+
+    public int ProblemCount { get; init; }
+
+    public PostSummary? PostSummary { get; init; }
+
+    /// <summary>How many <c>audit_events</c> rows the request has (spec 8.4).</summary>
+    public int HistoryCount { get; init; }
 }
 
 public sealed record SavedRequestVersion(

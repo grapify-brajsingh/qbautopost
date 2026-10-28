@@ -17,11 +17,12 @@ namespace QbAutopost.Data;
 /// (<c>FOR UPDATE</c>), so its checks and its writes see the same row; the claim is the single conditional update of
 /// §10.2 instead. Nothing here updates or deletes a version or an event.
 /// </summary>
-public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> factory) : ISavedRequestStore
+public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> factory) : ISavedRequestStore
 {
     private const string RestartError = "the service restarted while this post was running";
     private const string SystemActor = "system";
     private const string IdempotencyIndex = "ix_saved_requests_source_idempotency_key";
+    private const string PushIdIndex = "ux_saved_requests_push_id";
     private const string LikeEscape = "\\";
 
     // A claim whose update matched nothing but which then finds the request pending again (claimed and finished in
@@ -40,6 +41,12 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
             return Replay(existing, request);
         }
 
+        // The key decides alone when it matched; the pushId check runs only when no key matched (spec 5.2).
+        if (request.Metadata.PushId is { } pushId && await FindByPushIdAsync(pushId, ct) is { } held)
+        {
+            return PushReplay(held, request);
+        }
+
         try
         {
             return await InsertAsync(request, ct);
@@ -53,6 +60,16 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
             var winner = await FindByKeyAsync(request.Source, request.IdempotencyKey!, ct)
                 ?? throw new InvalidOperationException("The idempotency key conflicted but no request holds it.", ex);
             return Replay(winner, request);
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException
+                                           {
+                                               SqlState: PostgresErrorCodes.UniqueViolation, ConstraintName: PushIdIndex,
+                                           })
+        {
+            // Another save with the same pushId committed between the look-up and the insert.
+            var winner = await FindByPushIdAsync(request.Metadata.PushId!.Value, ct)
+                ?? throw new InvalidOperationException("The pushId conflicted but no request holds it.", ex);
+            return PushReplay(winner, request);
         }
     }
 
@@ -85,7 +102,15 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
             UpdatedUtc = request.NowUtc,
             UpdatedBy = request.CreatedBy,
             RowVersion = 1,
+            EmailSubject = request.Metadata.EmailSubject,
+            EmailReceivedUtc = request.Metadata.EmailReceivedUtc,
+            EmailFrom = request.Metadata.EmailFrom,
+            EmailMessageId = request.Metadata.EmailMessageId,
+            PushId = request.Metadata.PushId,
+            MetadataErrors = request.Metadata.MetadataErrors.ToList(),
+            SkipCount = SavedRequestColumns.SkipCountOf(request.Payload),
         };
+        SetSnapshotV2(entity, request.Read.Readable, request.SnapshotV2 ?? request.Snapshot);
         entity.Versions.Add(new SavedRequestVersionEntity
         {
             Number = 1,
@@ -124,6 +149,19 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
         return id is null ? null : await LoadAsync(db, id.Value, ct);
     }
 
+    private async Task<SavedRequest?> FindByPushIdAsync(Guid pushId, CancellationToken ct)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var id = await db.SavedRequests
+            .Where(r => r.PushId == pushId)
+            .Select(r => (long?)r.Id)
+            .SingleOrDefaultAsync(ct);
+        return id is null ? null : await LoadAsync(db, id.Value, ct);
+    }
+
+    private static CreateResult PushReplay(SavedRequest existing, NewSavedRequest request) =>
+        new(existing.OriginalSha256 == Sha256(request.OriginalBody) ? CreateKind.Replayed : CreateKind.PushIdReused, existing);
+
     private static CreateResult Replay(SavedRequest existing, NewSavedRequest request) =>
         new(existing.OriginalSha256 == Sha256(request.OriginalBody) ? CreateKind.Replayed : CreateKind.KeyReused, existing);
 
@@ -138,39 +176,7 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
     public async Task<PagedResult<SavedRequestSummary>> ListAsync(SavedRequestQuery query, CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        IQueryable<SavedRequestEntity> rows = db.SavedRequests.AsNoTracking();
-
-        if (query.Statuses.Count > 0)
-        {
-            var statuses = query.Statuses.ToList();
-            rows = rows.Where(r => statuses.Contains(r.Status));
-        }
-
-        if (query.NeedsAttention is { } needsAttention) rows = rows.Where(r => r.NeedsAttention == needsAttention);
-        if (query.Duplicate is { } duplicate) rows = rows.Where(r => (r.DuplicateReasons.Count > 0) == duplicate);
-        if (query.Source is { Length: > 0 } source) rows = rows.Where(r => r.Source == source);
-        if (query.CreatedFrom is { } from)
-        {
-            var fromUtc = from.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
-            rows = rows.Where(r => r.CreatedUtc >= fromUtc);
-        }
-
-        if (query.CreatedTo is { } to)
-        {
-            var untilUtc = to.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
-            rows = rows.Where(r => r.CreatedUtc < untilUtc);
-        }
-
-        if (!string.IsNullOrWhiteSpace(query.Q))
-        {
-            var q = query.Q.Trim();
-            var pattern = "%" + EscapeLike(q) + "%";
-            var payloadMatches = PayloadMatches(db, q);
-            rows = rows.Where(r =>
-                EF.Functions.ILike(r.Reference!, pattern, LikeEscape)
-                || EF.Functions.ILike(r.PublicRef, pattern, LikeEscape)
-                || payloadMatches.Contains(r.Id));
-        }
+        var rows = FilterRequests(db, query, v2: false);
 
         var total = await rows.CountAsync(ct);
         var size = Math.Max(1, query.PageSize);
@@ -296,6 +302,8 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
             r.Validation = JsonSerializer.Serialize(version.Snapshot, Json);
             r.ValidatedUtc = version.Snapshot.ValidatedUtc;
             r.RowFingerprints = version.RowFingerprints.ToList();
+            r.SkipCount = SavedRequestColumns.SkipCountOf(version.Payload);
+            SetSnapshotV2(r, version.Read.Readable, version.SnapshotV2 ?? version.Snapshot);
             Touch(r, version.Actor, version.NowUtc);
             AddEvent(
                 db, id, SavedRequestEvents.Edited,
@@ -314,11 +322,13 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
         });
 
     public Task<MutationResult> SetValidationAsync(
-        long id, ValidationSnapshot snapshot, DuplicateMatch duplicate, string actor, DateTime nowUtc, CancellationToken ct) =>
+        long id, ValidationSnapshot snapshot, ValidationSnapshot snapshotV2, DuplicateMatch duplicate, string actor,
+        DateTime nowUtc, CancellationToken ct) =>
         MutateAsync(id, ct, async (db, r) =>
         {
             if (r.Status != SavedRequestStatus.Pending) return MutationKind.WrongStatus;
             if (snapshot.VersionNumber != r.CurrentVersion) return MutationKind.Stale;
+            if (snapshotV2.VersionNumber != r.CurrentVersion) return MutationKind.Stale;
 
             var readable = await db.SavedRequestVersions
                 .Where(v => v.SavedRequestId == id && v.Number == r.CurrentVersion)
@@ -327,6 +337,7 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
             r.Validation = JsonSerializer.Serialize(snapshot, Json);
             r.ValidatedUtc = snapshot.ValidatedUtc;
             r.NeedsAttention = !readable || snapshot.NeedsAttention;
+            SetSnapshotV2(r, readable, snapshotV2);
             r.DuplicateOfId = duplicate.Of;
             r.DuplicateReasons = duplicate.Reasons.ToList();
             Touch(r, actor, nowUtc);
@@ -599,7 +610,86 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
             r.DuplicateOfId, r.DuplicateReasons.ToList(), r.DuplicateAcknowledgedBy, r.DuplicateAcknowledgedUtc,
             ReadSnapshot(r.Validation), r.ValidatedUtc, r.PostId, r.DiscardReason,
             r.CreatedUtc, r.CreatedBy, r.UpdatedUtc, r.UpdatedBy, r.RowVersion,
-            ParseElement(payload), last is null ? null : ToModel(last));
+            ParseElement(payload), last is null ? null : ToModel(last))
+        {
+            Metadata = new SaveMetadata(
+                r.EmailSubject, r.EmailReceivedUtc, r.EmailFrom, r.EmailMessageId, r.PushId, r.MetadataErrors.ToList()),
+            SkipCount = r.SkipCount,
+            ValidationV2 = ReadSnapshot(r.ValidationV2),
+            NeedsAttentionV2 = r.NeedsAttentionV2,
+            ProblemCount = r.ProblemCount,
+        };
+    }
+
+    /// <summary>
+    /// The v1 list filters. With <paramref name="v2"/> (T-1107), <c>needsAttention</c> reads <c>needs_attention_v2</c>
+    /// and <c>q</c> also matches the email subject and the push id prefix.
+    /// </summary>
+    private static IQueryable<SavedRequestEntity> FilterRequests(QbAutopostDbContext db, SavedRequestQuery query, bool v2)
+    {
+        IQueryable<SavedRequestEntity> rows = db.SavedRequests.AsNoTracking();
+
+        if (query.Statuses.Count > 0)
+        {
+            var statuses = query.Statuses.ToList();
+            rows = rows.Where(r => statuses.Contains(r.Status));
+        }
+
+        if (query.NeedsAttention is { } needsAttention)
+        {
+            rows = v2
+                ? rows.Where(r => r.NeedsAttentionV2 == needsAttention)
+                : rows.Where(r => r.NeedsAttention == needsAttention);
+        }
+
+        if (query.Duplicate is { } duplicate) rows = rows.Where(r => (r.DuplicateReasons.Count > 0) == duplicate);
+        if (query.Source is { Length: > 0 } source) rows = rows.Where(r => r.Source == source);
+        if (query.CreatedFrom is { } from)
+        {
+            var fromUtc = from.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+            rows = rows.Where(r => r.CreatedUtc >= fromUtc);
+        }
+
+        if (query.CreatedTo is { } to)
+        {
+            var untilUtc = to.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+            rows = rows.Where(r => r.CreatedUtc < untilUtc);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Q))
+        {
+            var q = query.Q.Trim();
+            var pattern = "%" + EscapeLike(q) + "%";
+            var payloadMatches = PayloadMatches(db, q);
+            if (!v2)
+            {
+                rows = rows.Where(r =>
+                    EF.Functions.ILike(r.Reference!, pattern, LikeEscape)
+                    || EF.Functions.ILike(r.PublicRef, pattern, LikeEscape)
+                    || payloadMatches.Contains(r.Id));
+            }
+            else if (SavedRequestSearch.PushIdHexPrefix(q) is { } hex)
+            {
+                // Hex digits need no LIKE escaping; the prefix is a parameter.
+                var prefix = hex + "%";
+                rows = rows.Where(r =>
+                    EF.Functions.ILike(r.Reference!, pattern, LikeEscape)
+                    || EF.Functions.ILike(r.PublicRef, pattern, LikeEscape)
+                    || payloadMatches.Contains(r.Id)
+                    || EF.Functions.ILike(r.EmailSubject!, pattern, LikeEscape)
+                    || EF.Functions.Like(r.PushIdHex!, prefix));
+            }
+            else
+            {
+                rows = rows.Where(r =>
+                    EF.Functions.ILike(r.Reference!, pattern, LikeEscape)
+                    || EF.Functions.ILike(r.PublicRef, pattern, LikeEscape)
+                    || payloadMatches.Contains(r.Id)
+                    || EF.Functions.ILike(r.EmailSubject!, pattern, LikeEscape));
+            }
+        }
+
+        return rows;
     }
 
     /// <summary>Ids of requests whose current payload has a <c>payee</c> or <c>memo</c> string containing <paramref name="q"/>, ignoring case.</summary>
@@ -696,6 +786,15 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
     private static JsonNode? ParseNode(string? json) => json is null ? null : JsonNode.Parse(json);
 
     private static JsonArray ToArray(IEnumerable<string> items) => new(items.Select(i => (JsonNode)JsonValue.Create(i)!).ToArray());
+
+    /// <summary>T-1105: the v2 snapshot and the two columns written with it. Metadata must already be on the row.</summary>
+    private static void SetSnapshotV2(SavedRequestEntity r, bool readable, ValidationSnapshot snapshotV2)
+    {
+        r.ValidationV2 = JsonSerializer.Serialize(snapshotV2, Json);
+        r.NeedsAttentionV2 = SavedRequestColumns.NeedsAttentionV2(
+            readable, snapshotV2, SaveMetadata.None with { MetadataErrors = r.MetadataErrors });
+        r.ProblemCount = snapshotV2.ProblemCount;
+    }
 
     private static bool NeedsAttention(PayloadRead read, ValidationSnapshot snapshot) => !read.Readable || snapshot.NeedsAttention;
 

@@ -12,7 +12,7 @@ namespace QbAutopost.Api.Tests.TestSupport;
 /// <c>SavedRequestStoreContract</c> as the EF Core store. Payloads and JSON nodes are deep-copied in and out, so a
 /// caller can never change stored data through a returned object.
 /// </summary>
-public sealed class FakeSavedRequestStore : ISavedRequestStore
+public sealed partial class FakeSavedRequestStore : ISavedRequestStore
 {
     private const string RestartError = "the service restarted while this post was running";
 
@@ -44,6 +44,18 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
                 }
             }
 
+            if (request.Metadata.PushId is { } pushId)
+            {
+                var holder = _requests.Values.FirstOrDefault(r => r.Metadata.PushId == pushId);
+                if (holder is not null)
+                {
+                    var kind = string.Equals(holder.OriginalBody, request.OriginalBody, StringComparison.Ordinal)
+                        ? CreateKind.Replayed
+                        : CreateKind.PushIdReused;
+                    return Task.FromResult(new CreateResult(kind, View(holder)));
+                }
+            }
+
             var id = _nextRequestId++;
             var payload = request.Payload.Clone();
             var record = new SavedRequest(
@@ -53,7 +65,12 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
                 NeedsAttention(request.Read, request.Snapshot),
                 request.Duplicate.Of, request.Duplicate.Reasons.ToList(), null, null,
                 request.Snapshot, request.Snapshot.ValidatedUtc, null, null,
-                request.NowUtc, request.CreatedBy, request.NowUtc, request.CreatedBy, 1, payload, null);
+                request.NowUtc, request.CreatedBy, request.NowUtc, request.CreatedBy, 1, payload, null)
+            {
+                Metadata = Copy(request.Metadata),
+                SkipCount = SavedRequestColumns.SkipCountOf(payload),
+            };
+            record = WithSnapshotV2(record, request.Read.Readable, request.SnapshotV2 ?? request.Snapshot);
             _requests[id] = record;
             _versions[id] =
             [
@@ -89,15 +106,7 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
     {
         lock (_gate)
         {
-            IEnumerable<SavedRequest> rows = _requests.Values;
-            if (query.Statuses.Count > 0) rows = rows.Where(r => query.Statuses.Contains(r.Status));
-            if (query.NeedsAttention is { } na) rows = rows.Where(r => r.NeedsAttention == na);
-            if (query.Duplicate is { } dup) rows = rows.Where(r => (r.DuplicateReasons.Count > 0) == dup);
-            if (query.Source is { Length: > 0 } source) rows = rows.Where(r => r.Source == source);
-            if (query.CreatedFrom is { } from) rows = rows.Where(r => DateOnly.FromDateTime(r.CreatedUtc) >= from);
-            if (query.CreatedTo is { } to) rows = rows.Where(r => DateOnly.FromDateTime(r.CreatedUtc) <= to);
-            if (!string.IsNullOrWhiteSpace(query.Q)) rows = rows.Where(r => Matches(r, query.Q.Trim()));
-
+            var rows = Filter(_requests.Values, query, v2: false);
             var ordered = Order(rows, query.Sort).ToList();
             var size = Math.Max(1, query.PageSize);
             var page = Math.Max(1, query.Page);
@@ -213,7 +222,9 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
                 UpdatedUtc = version.NowUtc,
                 UpdatedBy = version.Actor,
                 RowVersion = r.RowVersion + 1,
+                SkipCount = SavedRequestColumns.SkipCountOf(payload),
             };
+            updated = WithSnapshotV2(updated, version.Read.Readable, version.SnapshotV2 ?? version.Snapshot);
             _requests[id] = updated;
             AddEvent(
                 id, SavedRequestEvents.Edited,
@@ -231,14 +242,22 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
         }
     }
 
+    /// <summary>T-1112: runs once, at the start of the next <see cref="SetValidationAsync"/>, to stage a change that lands between the validator's read and the write.</summary>
+    public Action? BeforeNextSetValidation { get; set; }
+
     public Task<MutationResult> SetValidationAsync(
-        long id, ValidationSnapshot snapshot, DuplicateMatch duplicate, string actor, DateTime nowUtc, CancellationToken ct)
+        long id, ValidationSnapshot snapshot, ValidationSnapshot snapshotV2, DuplicateMatch duplicate, string actor,
+        DateTime nowUtc, CancellationToken ct)
     {
+        var before = BeforeNextSetValidation;
+        BeforeNextSetValidation = null;
+        before?.Invoke();
         lock (_gate)
         {
             if (!_requests.TryGetValue(id, out var r)) return Mutation(MutationKind.NotFound, null);
             if (r.Status != SavedRequestStatus.Pending) return Mutation(MutationKind.WrongStatus, r);
             if (snapshot.VersionNumber != r.CurrentVersion) return Mutation(MutationKind.Stale, r);
+            if (snapshotV2.VersionNumber != r.CurrentVersion) return Mutation(MutationKind.Stale, r);
 
             var readable = _versions[id].Single(v => v.Number == r.CurrentVersion).Readable;
             var updated = r with
@@ -252,6 +271,7 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
                 UpdatedUtc = nowUtc,
                 UpdatedBy = actor,
             };
+            updated = WithSnapshotV2(updated, readable, snapshotV2);
             _requests[id] = updated;
             AddEvent(
                 id, SavedRequestEvents.Validated,
@@ -507,8 +527,23 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
     private SavedRequest View(SavedRequest r)
     {
         var last = _attempts[r.Id].MaxBy(a => a.Id);
-        return r with { LastAttempt = last is null ? null : Copy(last), DuplicateReasons = r.DuplicateReasons.ToList() };
+        return r with
+        {
+            LastAttempt = last is null ? null : Copy(last),
+            DuplicateReasons = r.DuplicateReasons.ToList(),
+            Metadata = Copy(r.Metadata),
+        };
     }
+
+    // T-1105: the v2 snapshot and the two columns written with it.
+    private static SavedRequest WithSnapshotV2(SavedRequest r, bool readable, ValidationSnapshot snapshotV2) => r with
+    {
+        ValidationV2 = snapshotV2,
+        NeedsAttentionV2 = SavedRequestColumns.NeedsAttentionV2(readable, snapshotV2, r.Metadata),
+        ProblemCount = snapshotV2.ProblemCount,
+    };
+
+    private static SaveMetadata Copy(SaveMetadata m) => m with { MetadataErrors = m.MetadataErrors.ToList() };
 
     private static bool NeedsAttention(PayloadRead read, ValidationSnapshot snapshot) => !read.Readable || snapshot.NeedsAttention;
 
@@ -542,12 +577,29 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
         r.DuplicateOfId, r.DuplicateReasons.ToList(), r.Validation?.State, r.ValidatedUtc, r.PostId,
         r.CreatedUtc, r.CreatedBy, r.UpdatedUtc, r.UpdatedBy, r.RowVersion);
 
-    private static bool Matches(SavedRequest r, string q)
+    /// <summary>
+    /// The v1 list filters. With <paramref name="v2"/> (T-1107), <c>needsAttention</c> reads the v2 flag and <c>q</c>
+    /// also matches the email subject and the push id prefix.
+    /// </summary>
+    private static IEnumerable<SavedRequest> Filter(IEnumerable<SavedRequest> rows, SavedRequestQuery query, bool v2)
+    {
+        if (query.Statuses.Count > 0) rows = rows.Where(r => query.Statuses.Contains(r.Status));
+        if (query.NeedsAttention is { } na) rows = rows.Where(r => (v2 ? r.NeedsAttentionV2 : r.NeedsAttention) == na);
+        if (query.Duplicate is { } dup) rows = rows.Where(r => (r.DuplicateReasons.Count > 0) == dup);
+        if (query.Source is { Length: > 0 } source) rows = rows.Where(r => r.Source == source);
+        if (query.CreatedFrom is { } from) rows = rows.Where(r => DateOnly.FromDateTime(r.CreatedUtc) >= from);
+        if (query.CreatedTo is { } to) rows = rows.Where(r => DateOnly.FromDateTime(r.CreatedUtc) <= to);
+        if (!string.IsNullOrWhiteSpace(query.Q)) rows = rows.Where(r => Matches(r, query.Q.Trim(), v2));
+        return rows;
+    }
+
+    private static bool Matches(SavedRequest r, string q, bool v2)
     {
         const StringComparison ci = StringComparison.OrdinalIgnoreCase;
         return (r.Reference?.Contains(q, ci) ?? false)
             || $"SR-{r.Id:000000}".Contains(q, ci)
-            || PayloadText(r.CurrentPayload).Any(t => t.Contains(q, ci));
+            || PayloadText(r.CurrentPayload).Any(t => t.Contains(q, ci))
+            || (v2 && MatchesV2(r, q));
     }
 
     // Every string value of a "payee" or "memo" property, wherever it sits in the payload.

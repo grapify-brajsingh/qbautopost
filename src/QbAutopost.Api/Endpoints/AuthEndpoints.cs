@@ -34,7 +34,8 @@ public sealed record SignedOutResponse(bool SignedOut);
 /// <summary>
 /// Saved-requests spec 11.2: dashboard sign-in. A short-lived JWT access token (<see cref="TokenService"/>) and a
 /// rotating refresh token in an <c>HttpOnly; Secure; SameSite=Strict</c> cookie scoped to <see cref="CookiePath"/>
-/// (<see cref="RefreshTokenService"/>). Served under <c>/api/v1</c> only: the cookie's path names that surface.
+/// (<see cref="RefreshTokenService"/>). Served under <c>/api/v1</c> and, since T-1115, <c>/api/v2</c> with its own
+/// cookie path (<see cref="CookiePathFor"/>): the cookie's path names the surface.
 /// <para>
 /// Login and refresh carry no credential, so <c>CallerMiddleware</c> passes them through; they are braked here (R15):
 /// per address and per email with the failed-auth brake, on top of Identity's per-user lockout. Every failed sign-in
@@ -51,12 +52,24 @@ public static class AuthEndpoints
 
     public const string CookiePath = ApiRoutes.V1Prefix + "/auth";
 
+    /// <summary>T-1115 (dashboard v2 spec 11): the v2 refresh cookie's path, so v1 and v2 sessions never see each other's cookie.</summary>
+    public const string CookiePathV2 = ApiRoutes.V2Prefix + "/auth";
+
+    /// <summary>The refresh cookie's path on the surface <paramref name="flavor"/>: <see cref="CookiePath"/> or <see cref="CookiePathV2"/>.</summary>
+    public static string CookiePathFor(ApiFlavor flavor) => flavor == ApiFlavor.V2 ? CookiePathV2 : CookiePath;
+
     /// <summary>Spec 11.2: unknown email, wrong password and disabled user all get exactly this answer.</summary>
     public const string InvalidCredentialsType = "invalid-credentials";
 
     private static string? _timingHash;
 
-    public static IEndpointRouteBuilder MapAuthEndpoints(this IEndpointRouteBuilder v1)
+    /// <param name="flavor">
+    /// T-1109: the surface being mapped. T-1115 (dashboard v2 spec 11): <see cref="ApiFlavor.V2"/> sets and clears the
+    /// refresh cookie under <see cref="CookiePathV2"/>, and its refresh has the reuse grace
+    /// (<see cref="RefreshTokenService.RotateWithGraceAsync"/>) and audits a refusal as <c>refresh-reuse</c>. v1 is
+    /// unchanged: <see cref="CookiePath"/>, no grace.
+    /// </param>
+    public static IEndpointRouteBuilder MapAuthEndpoints(this IEndpointRouteBuilder v1, ApiFlavor flavor = ApiFlavor.V1)
     {
         var auth = v1.MapGroup("/auth");
         // Answered from the caller CallerMiddleware resolved (which already passed the database gate).
@@ -64,9 +77,20 @@ public static class AuthEndpoints
 
         // Spec 10.7: everything that reads or writes users or tokens answers 503 while the database is not ready.
         var stored = auth.MapGroup(string.Empty).RequireDatabase();
-        stored.MapPost("/login", LoginAsync);
-        stored.MapPost("/refresh", RefreshAsync);
-        stored.MapPost("/logout", LogoutAsync);
+        stored.MapPost("/login", (
+                HttpContext http,
+                [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] LoginRequest? body,
+                TokenService tokens,
+                AuthBrake brake,
+                IClock clock,
+                IOptions<AppSettings> settings,
+                ILoggerFactory loggers,
+                CancellationToken ct) =>
+            LoginAsync(http, body, tokens, brake, clock, settings, loggers, flavor, ct));
+        stored.MapPost("/refresh", (
+                HttpContext http, TokenService tokens, AuthBrake brake, IClock clock, IOptions<AppSettings> settings, ILoggerFactory loggers, CancellationToken ct) =>
+            RefreshAsync(http, tokens, brake, clock, settings, loggers, flavor, ct));
+        stored.MapPost("/logout", (HttpContext http, ILoggerFactory loggers, CancellationToken ct) => LogoutAsync(http, loggers, flavor, ct));
         stored.MapPost("/change-password", ChangePasswordAsync);
         return v1;
     }
@@ -75,12 +99,13 @@ public static class AuthEndpoints
 
     private static async Task<IResult> LoginAsync(
         HttpContext http,
-        [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] LoginRequest? body,
+        LoginRequest? body,
         TokenService tokens,
         AuthBrake brake,
         IClock clock,
         IOptions<AppSettings> settings,
         ILoggerFactory loggers,
+        ApiFlavor flavor,
         CancellationToken ct)
     {
         var log = loggers.CreateLogger(typeof(AuthEndpoints));
@@ -176,14 +201,15 @@ public static class AuthEndpoints
 
         var refreshTokens = http.RequestServices.GetRequiredService<RefreshTokenService>();
         var refresh = await refreshTokens.IssueAsync(user.Id, familyId: null, ip, ct);
-        SetRefreshCookie(http, refresh, refreshTokens.ExpiresFrom(clock.UtcNow));
+        SetRefreshCookie(http, refresh, refreshTokens.ExpiresFrom(clock.UtcNow), flavor);
         await audit.WriteAsync(user.Id, user.Id, UserAuditWriter.Login, new { address = ip }, CancellationToken.None);
         log.LogInformation("User {UserId} signed in", user.Id);
         return await SignedInAsync(http, users, user, tokens);
     }
 
     private static async Task<IResult> RefreshAsync(
-        HttpContext http, TokenService tokens, AuthBrake brake, IClock clock, IOptions<AppSettings> settings, ILoggerFactory loggers, CancellationToken ct)
+        HttpContext http, TokenService tokens, AuthBrake brake, IClock clock, IOptions<AppSettings> settings, ILoggerFactory loggers, ApiFlavor flavor,
+        CancellationToken ct)
     {
         var log = loggers.CreateLogger(typeof(AuthEndpoints));
         if (SignInOff(settings, log, http) is { } off)
@@ -202,20 +228,31 @@ public static class AuthEndpoints
         if (string.IsNullOrEmpty(presented))
         {
             log.LogWarning("Refresh refused: no refresh cookie");
-            return InvalidRefresh(http);
+            return InvalidRefresh(http, flavor);
         }
 
         var refreshTokens = http.RequestServices.GetRequiredService<RefreshTokenService>();
-        var result = await refreshTokens.RotateAsync(presented, address?.ToString(), ct);
+        // T-1115 (dashboard v2 spec 11): only the v2 refresh has the reuse grace; v1 keeps RotateAsync exactly.
+        var result = flavor == ApiFlavor.V2
+            ? await refreshTokens.RotateWithGraceAsync(
+                presented, address?.ToString(), TimeSpan.FromSeconds(Math.Max(0, settings.Value.Auth.Jwt.RefreshReuseGraceSeconds)), ct)
+            : await refreshTokens.RotateAsync(presented, address?.ToString(), ct);
         switch (result.Outcome)
         {
             case RefreshOutcome.Invalid:
                 brake.RecordFailure(address);
                 log.LogWarning("Refresh refused: unknown or expired refresh token");
-                return InvalidRefresh(http);
+                return InvalidRefresh(http, flavor);
             case RefreshOutcome.ReuseDetected:
+                if (flavor == ApiFlavor.V2)
+                {
+                    // An insert, so user_audit stays append-only. The family id names the revoked sessions; no token.
+                    await http.RequestServices.GetRequiredService<UserAuditWriter>().WriteAsync(
+                        result.UserId, UserAuditWriter.Anonymous, UserAuditWriter.RefreshReuse, new { familyId = result.FamilyId }, CancellationToken.None);
+                }
+
                 log.LogWarning("Refresh refused: a revoked refresh token of user {UserId} was presented again; its whole family is revoked", result.UserId);
-                return InvalidRefresh(http);
+                return InvalidRefresh(http, flavor);
         }
 
         var users = http.RequestServices.GetRequiredService<UserManager<AppUser>>();
@@ -225,15 +262,15 @@ public static class AuthEndpoints
             // Disabling revokes every token (spec 10.11); this is the belt to that braces.
             await refreshTokens.RevokeAllAsync(result.UserId!, CancellationToken.None);
             log.LogWarning("Refresh refused: user {UserId} is unknown or disabled", result.UserId);
-            return InvalidRefresh(http);
+            return InvalidRefresh(http, flavor);
         }
 
-        SetRefreshCookie(http, result.NewToken!, refreshTokens.ExpiresFrom(clock.UtcNow));
+        SetRefreshCookie(http, result.NewToken!, refreshTokens.ExpiresFrom(clock.UtcNow), flavor);
         log.LogInformation("User {UserId} refreshed their access token", user.Id);
         return await SignedInAsync(http, users, user, tokens);
     }
 
-    private static async Task<IResult> LogoutAsync(HttpContext http, ILoggerFactory loggers, CancellationToken ct)
+    private static async Task<IResult> LogoutAsync(HttpContext http, ILoggerFactory loggers, ApiFlavor flavor, CancellationToken ct)
     {
         var caller = CallerMiddleware.CallerOf(http)!;
         var presented = http.Request.Cookies[RefreshCookie];
@@ -245,7 +282,7 @@ public static class AuthEndpoints
             revoked = await http.RequestServices.GetRequiredService<RefreshTokenService>().RevokeAsync(presented, CancellationToken.None);
         }
 
-        ClearRefreshCookie(http);
+        ClearRefreshCookie(http, flavor);
         loggers.CreateLogger(typeof(AuthEndpoints))
             .LogInformation("User {UserId} signed out ({Revoked} refresh token revoked)", caller.Id, revoked ? 1 : 0);
         return Results.Ok(new SignedOutResponse(true));
@@ -412,9 +449,9 @@ public static class AuthEndpoints
     private static IResult InvalidCredentials() =>
         Problem(StatusCodes.Status401Unauthorized, "Invalid credentials", "The email or the password is wrong.", InvalidCredentialsType);
 
-    private static IResult InvalidRefresh(HttpContext http)
+    private static IResult InvalidRefresh(HttpContext http, ApiFlavor flavor)
     {
-        ClearRefreshCookie(http);
+        ClearRefreshCookie(http, flavor);
         return Problem(StatusCodes.Status401Unauthorized, "Sign in again", "The refresh token is missing, expired or revoked.", "invalid-refresh-token");
     }
 
@@ -436,17 +473,18 @@ public static class AuthEndpoints
             $"Too many wrong passwords. Try again in {seconds} seconds.", "locked-out");
     }
 
-    private static void SetRefreshCookie(HttpContext http, string token, DateTime expiresUtc) =>
-        http.Response.Cookies.Append(RefreshCookie, token, CookieOptions(expiresUtc));
+    private static void SetRefreshCookie(HttpContext http, string token, DateTime expiresUtc, ApiFlavor flavor) =>
+        http.Response.Cookies.Append(RefreshCookie, token, CookieOptions(expiresUtc, flavor));
 
-    private static void ClearRefreshCookie(HttpContext http) => http.Response.Cookies.Delete(RefreshCookie, CookieOptions(null));
+    private static void ClearRefreshCookie(HttpContext http, ApiFlavor flavor) =>
+        http.Response.Cookies.Delete(RefreshCookie, CookieOptions(null, flavor));
 
-    private static CookieOptions CookieOptions(DateTime? expiresUtc) => new()
+    private static CookieOptions CookieOptions(DateTime? expiresUtc, ApiFlavor flavor) => new()
     {
         HttpOnly = true,
         Secure = true,
         SameSite = SameSiteMode.Strict,
-        Path = CookiePath,
+        Path = CookiePathFor(flavor),
         Expires = expiresUtc is { } at ? new DateTimeOffset(at, TimeSpan.Zero) : null,
         IsEssential = true,
     };

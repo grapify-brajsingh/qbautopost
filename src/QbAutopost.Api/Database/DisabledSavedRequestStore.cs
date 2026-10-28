@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using QbAutopost.Core.SavedRequests;
+using QbAutopost.Core.SavedRequests.Audit;
 
 namespace QbAutopost.Api.Database;
 
@@ -8,7 +9,7 @@ namespace QbAutopost.Api.Database;
 /// <c>RequireDatabase</c> filter answers 503 before any store call, so nothing reaches this; a route that forgot the
 /// filter fails loudly rather than pretending to save.
 /// </summary>
-public sealed class DisabledSavedRequestStore : ISavedRequestStore
+public sealed class DisabledSavedRequestStore : ISavedRequestStore, ISavedRequestAuditStore, ISavedRequestV2Store
 {
     private static InvalidOperationException Off() =>
         new("The saved-requests database is not configured (Database:ConnectionString is empty).");
@@ -36,7 +37,8 @@ public sealed class DisabledSavedRequestStore : ISavedRequestStore
     public Task<MutationResult> AppendVersionAsync(long id, int expectedRowVersion, NewVersion version, CancellationToken ct) => throw Off();
 
     public Task<MutationResult> SetValidationAsync(
-        long id, ValidationSnapshot snapshot, DuplicateMatch duplicate, string actor, DateTime nowUtc, CancellationToken ct) => throw Off();
+        long id, ValidationSnapshot snapshot, ValidationSnapshot snapshotV2, DuplicateMatch duplicate, string actor,
+        DateTime nowUtc, CancellationToken ct) => throw Off();
 
     public Task<MutationResult> ChangeStatusAsync(
         long id, int? expectedRowVersion, SavedRequestStatus from, SavedRequestStatus to, string actor,
@@ -51,4 +53,16 @@ public sealed class DisabledSavedRequestStore : ISavedRequestStore
         long id, ResolveOutcome outcome, string note, string actor, DateTime nowUtc, CancellationToken ct) => throw Off();
 
     public Task<int> RecoverInFlightAsync(DateTime nowUtc, CancellationToken ct) => throw Off();
+
+    public Task<PagedResult<AuditEvent>> AuditEventsAsync(AuditQuery query, CancellationToken ct) => throw Off();
+
+    public Task<int> AuditEventCountAsync(AuditQuery query, CancellationToken ct) => throw Off();
+
+    public Task<SavedRequest?> GetV2Async(long id, CancellationToken ct) => throw Off();
+
+    public Task<PagedResult<SavedRequestSummary>> ListV2Async(SavedRequestQueryV2 query, CancellationToken ct) => throw Off();
+
+    public Task<SavedRequestStatsV2> StatsV2Async(CancellationToken ct) => throw Off();
+
+    public Task<IReadOnlyList<OtherPush>> OtherUnpostedPushesAsync(long id, CancellationToken ct) => throw Off();
 }
