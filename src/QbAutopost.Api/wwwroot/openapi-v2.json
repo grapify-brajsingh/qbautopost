@@ -2038,7 +2038,7 @@
         ],
         "operationId": "postSavedRequest",
         "summary": "Post the current version through validate-and-post, and record the attempt.",
-        "description": "Saved-requests §7.2, §9, §10.2-§10.6. The request is claimed (pending to posting, with an `in-progress` attempt) and the claim is committed before anything is sent, so of two people pressing Post exactly one posts and the other is answered `409 already-posting`. The current version is then posted by validate-and-post's own engine and the answer is **validate-and-post's status code and body**, unchanged, plus `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt). Every ending is recorded on the attempt with its HTTP status, post id, counts and the body returned. Nothing is retried automatically. The post runs to the end even if the caller disconnects: read `GET /saved-requests/{id}` until it is no longer `posting`. A request flagged as a possible duplicate needs `{ \"confirmDuplicate\": true }`; the confirming user and time are stored. Only `pending` requests can be posted.",
+        "description": "Saved-requests §7.2, §9, §10.2-§10.6. The request is claimed (pending to posting, with an `in-progress` attempt) and the claim is committed before anything is sent, so of two people pressing Post exactly one posts and the other is answered `409 already-posting`. The current version is then posted by validate-and-post's own engine and the answer is **validate-and-post's status code and body**, unchanged, plus `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt). Every ending is recorded on the attempt with its HTTP status, post id, counts and the body returned. Nothing is retried automatically. The post runs to the end even if the caller disconnects: read `GET /saved-requests/{id}` until it is no longer `posting`. A request flagged as a possible duplicate needs `{ \"confirmDuplicate\": true }`; the confirming user and time are stored. Only `pending` requests can be posted. v2 (dashboard v2 §6.2): a row marked `post: false` is never sent to QuickBooks; it still counts toward `controlTotal` (which is never recalculated), is listed under `skipped` with `reason: \"not-to-post\"` and counted in `counts.skipped`, and never makes a post `partial` or `failed`. When every row is `post: false` the answer is `400 nothing-to-post` and nothing is claimed.",
         "x-required-scope": "requests:post",
         "security": [
           {
@@ -2103,7 +2103,7 @@
             }
           },
           "400": {
-            "description": "validate-and-post's `400` (control total, too many rows, `dryRun`, `allowModelAccounts`, ...), or the current version could not be bound: then `errors` names each JSON path. Recorded as `refused`; the request is `pending` again. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case).",
+            "description": "validate-and-post's `400` (control total, too many rows, `dryRun`, `allowModelAccounts`, ...), or the current version could not be bound, including a row whose `post` is not `true` or `false` (`$.transactions[i].post: must be true or false`): then `errors` names each JSON path. Recorded as `refused`; the request is `pending` again. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case). Or `nothing-to-post` (problem `type`): every row is marked `post: false`, so nothing would be sent; this is checked before the claim, so no attempt is made, the request stays `pending` and the body has none of the saved route's fields.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2129,7 +2129,7 @@
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
-            "description": "`already-posting` (with the running `attemptId`), `already-posted` (with the `postId`), `not-postable` (partial, unknown or discarded; `savedRequestStatus` names it) or `duplicate-unconfirmed` (`duplicate: { of, status, reasons }`): nothing was claimed or sent. Or validate-and-post's busy `409` with `Retry-After`: recorded as `busy`, the request is `pending` again. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case).",
+            "description": "`already-posting` (with the running `attemptId`, `startedBy` and `startedUtc`), `already-posted` (with the `postId`, and the `attemptId`, `startedBy` and `startedUtc` of the attempt that posted it; all three are null when an admin settled the request by resolve), `not-postable` (partial, unknown or discarded; `savedRequestStatus` names it) or `duplicate-unconfirmed` (`duplicate: { of, status, reasons }`): nothing was claimed or sent. Or validate-and-post's busy `409` with `Retry-After`: recorded as `busy`, the request is `pending` again. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2139,6 +2139,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/SavedPostFields"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SavedPostConflictFields"
                     }
                   ]
                 }
@@ -3147,7 +3150,7 @@
               "skipped": {
                 "type": "integer",
                 "format": "int32",
-                "description": "Rows a skip rule or G4 excluded; why `posted` can be below `submitted` on a clean post."
+                "description": "Rows a skip rule or G4 excluded, plus (post by id in v2) rows marked `post: false`; why `posted` can be below `submitted` on a clean post."
               }
             }
           },
@@ -3226,7 +3229,8 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/PlanRow"
-            }
+            },
+            "description": "Rows a skip rule or G4 excluded, and (post by id in v2) every row marked `post: false`, with `reason: \"not-to-post\"`."
           },
           "error": {
             "type": "string",
@@ -3245,7 +3249,7 @@
       },
       "SavedPostFields": {
         "type": "object",
-        "description": "What post by id adds to validate-and-post's body or problem (saved-requests §7.2). All three are present whenever an attempt was made. They are absent on 404, 412 and `database-unavailable`; of the 409s that claim nothing, `already-posting` carries only `attemptId` (the running attempt) and `not-postable` only `savedRequestStatus`.",
+        "description": "What post by id adds to validate-and-post's body or problem (saved-requests §7.2). All three are present whenever an attempt was made. They are absent on 404, 412 and `database-unavailable`; of the 409s that claim nothing, `already-posting` carries `attemptId` (the running attempt) with `SavedPostConflictFields`, and `not-postable` only `savedRequestStatus`. `400 nothing-to-post` carries none of them.",
         "properties": {
           "savedRequestId": {
             "type": "integer",
@@ -3268,6 +3272,37 @@
               "discarded"
             ],
             "description": "The request's status after the attempt. Named apart from `status`, which stays validate-and-post's (Q-90). `posting` means the result could not be recorded and is in the evidence file."
+          }
+        }
+      },
+      "SavedPostConflictFields": {
+        "type": "object",
+        "description": "Dashboard v2 §10 item 4.4: what the v2 `already-posting` and `already-posted` add. On `already-posted` the attempt fields are null when the request was settled by resolve.",
+        "properties": {
+          "attemptId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true,
+            "description": "The running attempt (`already-posting`) or the attempt that posted the request (`already-posted`)."
+          },
+          "startedBy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestActor"
+              }
+            ],
+            "nullable": true,
+            "description": "Who started that attempt: `{ id, name }`."
+          },
+          "startedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "postId": {
+            "type": "string",
+            "nullable": true,
+            "description": "`already-posted` only: the post that is in QuickBooks."
           }
         }
       },
@@ -3517,7 +3552,7 @@
           "reason": {
             "type": "string",
             "nullable": true,
-            "description": "The hold or skip code, e.g. `no-account-rule`, `already-in-quickbooks`."
+            "description": "The hold or skip code, e.g. `no-account-rule`, `already-in-quickbooks`, or `not-to-post` for a row marked `post: false` (v2)."
           },
           "note": {
             "type": "string",

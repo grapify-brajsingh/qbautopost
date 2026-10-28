@@ -51,7 +51,12 @@ public sealed class SyncPostRunner(JobQueue queue, DirectPostRunner runner, ILog
     /// sees an exception can then tell "nothing was started" (never called) from "QuickBooks may have it" (called).
     /// A busy ending never calls it.
     /// </param>
-    public async Task<SyncPost> RunAsync(SyncPostRequest request, CancellationToken ct, Action? onSending = null)
+    /// <param name="notPosted">
+    /// T-1113 (dashboard v2 6.1): the row indexes the caller marked <c>post: false</c>, set aside by the engine as
+    /// <c>not-to-post</c>. Only the v2 post by id passes it; null (every v1 caller) builds the request exactly as before.
+    /// </param>
+    public async Task<SyncPost> RunAsync(
+        SyncPostRequest request, CancellationToken ct, Action? onSending = null, IReadOnlySet<int>? notPosted = null)
     {
         if (UnsupportedFields(request) is { Count: > 0 } unsupported)
         {
@@ -60,7 +65,7 @@ public sealed class SyncPostRunner(JobQueue queue, DirectPostRunner runner, ILog
             return Ending(SyncPostOutcome.Refused, unsupported);
         }
 
-        var direct = request.ToDirectRequest();
+        var direct = notPosted is null ? request.ToDirectRequest() : request.ToDirectRequest(notPosted);
         var plan = runner.Plan(direct);
         if (plan.Errors.Count > 0)
         {

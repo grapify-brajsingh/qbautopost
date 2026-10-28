@@ -65,8 +65,15 @@ public sealed class SavedRequestPoster(
     /// <summary>Waits after the first and second failed tries to record a result; the third failure falls back to the evidence file.</summary>
     private static readonly TimeSpan[] CompleteBackoff = [TimeSpan.FromSeconds(0.5), TimeSpan.FromSeconds(1)];
 
+    /// <param name="flavor">
+    /// T-1113 (dashboard v2 6.2): v2 honours each row's <c>post: false</c>. A request whose every row is off is refused
+    /// before the claim (<see cref="SavedPostKind.NothingToPost"/>, no attempt); a <c>post</c> that is not a boolean is
+    /// refused like an unbindable payload (claimed, a <c>refused</c> attempt, pending again). v1 (the default) reads
+    /// no <c>post</c> flag at all and runs exactly as before.
+    /// </param>
     public async Task<SavedPostOutcome> PostAsync(
-        long id, int? expectedRowVersion, bool confirmDuplicate, Caller caller, CancellationToken ct)
+        long id, int? expectedRowVersion, bool confirmDuplicate, Caller caller, CancellationToken ct,
+        ApiFlavor flavor = ApiFlavor.V1)
     {
         // Spec 12: every line from here on, the engine's included, names the saved request.
         using var requestScope = LogContext.PushProperty(SavedRequestIdField, id);
@@ -76,6 +83,15 @@ public sealed class SavedRequestPoster(
         if (current is null)
         {
             return new SavedPostOutcome(SavedPostKind.NotFound, null, null, null, null);
+        }
+
+        // Dashboard v2 6.2 item 5: a request with nothing to send is refused before the claim, so no attempt is made.
+        // Checked before the duplicate question: confirming a duplicate that could never post would be asked in vain.
+        if (flavor == ApiFlavor.V2 && current.Status == SavedRequestStatus.Pending && EveryRowNotPosted(current.CurrentPayload))
+        {
+            log.LogInformation(
+                "Saved request {SavedRequestId}: post refused, every row is marked post: false; nothing was claimed or sent", id);
+            return new SavedPostOutcome(SavedPostKind.NothingToPost, null, null, current, StatusCodes.Status400BadRequest);
         }
 
         if (current.Status == SavedRequestStatus.Pending && IsFlagged(current) && !confirmDuplicate)
@@ -116,10 +132,14 @@ public sealed class SavedRequestPoster(
             id, attemptId, claim.VersionNumber, caller.Actor);
 
         // 3. Spec 7.2: the route binds the stored payload itself, so an unbindable version is a 400 naming each path.
+        // Dashboard v2 6.2 item 8: in v2 a `post` that is not a boolean makes the version unreadable, answered the same way.
+        // Read from the claimed version, so what is set aside is exactly what is sent around.
         var read = SavedPayloadReader.Read(record.CurrentPayload);
-        if (!read.Readable)
+        var notPosted = flavor == ApiFlavor.V2 ? NotPostedRows.Read(record.CurrentPayload) : null;
+        if (!read.Readable || notPosted is { Errors.Count: > 0 })
         {
-            var refused = new SyncPost(SyncPostOutcome.Refused, read.Errors, null, null, false);
+            IReadOnlyList<string> errors = notPosted is null ? read.Errors : [.. read.Errors, .. notPosted.Errors];
+            var refused = new SyncPost(SyncPostOutcome.Refused, errors, null, null, false);
             var (status, unreadableProblem) = await FinishAsync(
                 record, attemptId, refused, new PostEnding(PostEndingKind.Unreadable, null, []));
             return unreadableProblem is null
@@ -133,7 +153,7 @@ public sealed class SavedRequestPoster(
         SyncPost post;
         try
         {
-            post = await runner.RunAsync(read.Request!, CancellationToken.None, () => sending = true);
+            post = await runner.RunAsync(read.Request!, CancellationToken.None, () => sending = true, notPosted?.Indexes);
         }
         catch (Exception ex)
         {
@@ -157,6 +177,24 @@ public sealed class SavedRequestPoster(
     };
 
     private static bool IsFlagged(SavedRequest record) => record.DuplicateOfId is not null || record.DuplicateReasons.Count > 0;
+
+    /// <summary>
+    /// Dashboard v2 6.2 item 5, the engine's own rule (<c>DirectRequestReader</c>) asked early: a bindable payload with
+    /// at least one row, no unreadable <c>post</c>, and every row marked <c>post: false</c>. Anything unreadable is left
+    /// to the claimed path, which names each path on a <c>refused</c> attempt.
+    /// </summary>
+    private static bool EveryRowNotPosted(JsonElement payload)
+    {
+        var read = SavedPayloadReader.Read(payload);
+        var notPosted = NotPostedRows.Read(payload);
+        if (!read.Readable || notPosted.Errors.Count > 0)
+        {
+            return false;
+        }
+
+        var rows = read.Request!.Transactions.Count;
+        return rows > 0 && Enumerable.Range(0, rows).All(notPosted.Indexes.Contains);
+    }
 
     /// <summary>The engine's ending in the terms of spec 7.2's table.</summary>
     private static PostEnding EndingOf(SyncPost post) => post.Outcome switch

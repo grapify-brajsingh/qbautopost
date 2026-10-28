@@ -711,6 +711,11 @@ public static class SavedRequestEndpoints
     /// <c>not-postable</c> or <c>duplicate-unconfirmed</c> (naming the other request and its status), and nothing was
     /// claimed or sent.
     /// </para>
+    /// <para>
+    /// Dashboard v2 (spec 6.2, 10 item 4.4): v2 honours <c>post: false</c> (the row is listed under <c>skipped</c> as
+    /// <c>not-to-post</c> and never sent), answers <c>400 nothing-to-post</c> with no attempt when every row is off, and
+    /// its two 409s also carry <c>attemptId</c>, <c>startedBy {id,name}</c> and <c>startedUtc</c>.
+    /// </para>
     /// </summary>
     private static async Task<IResult> PostAsync(
         HttpContext http, string id, SavedRequestPoster poster, ISavedRequestStore store, ActorDirectory actors,
@@ -733,12 +738,19 @@ public static class SavedRequestEndpoints
             return NotFound();
         }
 
-        var outcome = await poster.PostAsync(requestId, IfMatchOf(http), confirmDuplicate, CallerMiddleware.CallerOf(http)!, ct);
+        var outcome = await poster.PostAsync(
+            requestId, IfMatchOf(http), confirmDuplicate, CallerMiddleware.CallerOf(http)!, ct, flavor);
         var record = outcome.Record;
         switch (outcome.Kind)
         {
             case SavedPostKind.NotFound:
                 return NotFound();
+            case SavedPostKind.NothingToPost:
+                return Problem(
+                    StatusCodes.Status400BadRequest, "Nothing to post",
+                    $"nothing-to-post: every row is marked post: false; nothing would be sent. {record!.PublicRef} is "
+                    + "still pending; nothing was claimed or sent.",
+                    SkipReasons.NothingToPost);
             case SavedPostKind.Stale:
                 return await MutationAnswerAsync(
                     http, new MutationResult(MutationKind.Stale, record), "not-postable", "Not postable", "posted", store, actors, flavor, ct);
@@ -749,7 +761,9 @@ public static class SavedRequestEndpoints
                     type: "already-posting",
                     detail: $"{record!.PublicRef} is being posted by attempt {outcome.AttemptId}. Nothing was sent by this "
                             + "request. Read the request until it is no longer posting.",
-                    extensions: new Dictionary<string, object?> { [SavedRequestPoster.AttemptIdField] = outcome.AttemptId });
+                    extensions: flavor == ApiFlavor.V2
+                        ? await PostingByAsync(record, outcome.AttemptId, store, actors, ct)
+                        : new Dictionary<string, object?> { [SavedRequestPoster.AttemptIdField] = outcome.AttemptId });
             case SavedPostKind.AlreadyPosted:
                 return Results.Problem(
                     statusCode: StatusCodes.Status409Conflict,
@@ -757,7 +771,9 @@ public static class SavedRequestEndpoints
                     type: "already-posted",
                     detail: $"{record!.PublicRef} is already in QuickBooks as post {record.PostId}. Nothing was sent. "
                             + "A correction is an undo of that post and a new saved request.",
-                    extensions: new Dictionary<string, object?> { ["postId"] = record.PostId });
+                    extensions: flavor == ApiFlavor.V2
+                        ? await PostedByAsync(record, store, actors, ct)
+                        : new Dictionary<string, object?> { ["postId"] = record.PostId });
             case SavedPostKind.NotPostable:
                 return Results.Problem(
                     statusCode: StatusCodes.Status409Conflict,
@@ -796,6 +812,54 @@ public static class SavedRequestEndpoints
 
         return SyncPostResponses.ToResult(
             outcome.Post!, http, SavedRequestPoster.ExtraFields(record!.Id, outcome.AttemptId!.Value, outcome.Status!.Value));
+    }
+
+    /// <summary>Dashboard v2 10 item 4.4: the v2 <c>already-posting</c> names the running attempt, who started it and when.</summary>
+    private static async Task<Dictionary<string, object?>> PostingByAsync(
+        SavedRequest record, long? attemptId, ISavedRequestStore store, ActorDirectory actors, CancellationToken ct)
+    {
+        var running = attemptId is { } value ? await store.AttemptAsync(record.Id, value, ct) : null;
+        var extras = await StartedByAsync(running, actors, ct);
+        extras[SavedRequestPoster.AttemptIdField] = attemptId;
+        return extras;
+    }
+
+    /// <summary>
+    /// Dashboard v2 10 item 4.4: the v2 <c>already-posted</c> names the post and the attempt that posted it. A request
+    /// settled by resolve has no posted attempt, so <c>attemptId</c>, <c>startedBy</c> and <c>startedUtc</c> are null.
+    /// </summary>
+    private static async Task<Dictionary<string, object?>> PostedByAsync(
+        SavedRequest record, ISavedRequestStore store, ActorDirectory actors, CancellationToken ct)
+    {
+        var posted = (await store.AttemptsAsync(record.Id, ct))
+            .Where(a => a.Outcome == AttemptOutcome.Posted)
+            .MaxBy(a => a.Id);
+        var extras = await StartedByAsync(posted, actors, ct);
+        extras["postId"] = record.PostId;
+        return extras;
+    }
+
+    /// <summary>Dashboard v2 10 item 4.4: <c>attemptId</c>, <c>startedBy {id,name}</c> and <c>startedUtc</c> of an attempt, or nulls.</summary>
+    private static async Task<Dictionary<string, object?>> StartedByAsync(
+        PostAttempt? attempt, ActorDirectory actors, CancellationToken ct)
+    {
+        if (attempt is null)
+        {
+            return new Dictionary<string, object?>
+            {
+                [SavedRequestPoster.AttemptIdField] = null,
+                ["startedBy"] = null,
+                ["startedUtc"] = null,
+            };
+        }
+
+        var by = (await actors.ResolveAsync([attempt.StartedBy], ct)).Of(attempt.StartedBy);
+        return new Dictionary<string, object?>
+        {
+            [SavedRequestPoster.AttemptIdField] = attempt.Id,
+            ["startedBy"] = new { id = by.Id, name = by.Name },
+            ["startedUtc"] = attempt.StartedUtc,
+        };
     }
 
     /// <summary>The post body's <c>confirmDuplicate</c>: false when there is no body, null when the body is anything else.</summary>
