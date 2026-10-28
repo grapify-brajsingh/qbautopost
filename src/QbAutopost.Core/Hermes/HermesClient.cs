@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Text;
@@ -11,7 +12,7 @@ using QbAutopost.Core.Text;
 namespace QbAutopost.Core.Hermes;
 
 /// <summary>
-/// OpenAI-compatible chat-completions client for Hermes (spec §9, ADR-0005): <c>temperature: 0</c>, bearer key,
+/// OpenAI-compatible chat-completions client, pointed at OpenRouter since M12 (spec §9, ADR-0005; the name is kept, Q-109): <c>temperature: 0</c>, bearer key,
 /// timeout, code-fence stripping, one retry with the validation errors appended, audit copies (FR-17).
 /// The <see cref="HttpClient"/> should have an infinite timeout; <see cref="HermesOptions.Timeout"/> applies per call.
 /// </summary>
@@ -80,9 +81,10 @@ public sealed class HermesClient(HttpClient http, HermesOptions options) : IHerm
             ? request.SystemPrompt
             : request.SystemPrompt + "\n\n" + request.SchemaHint;
         var body = Serialize(new ChatRequest(
-            options.Model,
+            request.Model ?? options.Model,
             0,
-            [new ChatMessage("system", systemPrompt), new ChatMessage("user", userContent)]));
+            [new ChatMessage("system", systemPrompt), new ChatMessage("user", userContent)],
+            ResponseFormat: request.Format is null ? null : ToWire(request.Format)));
         var n = audit.WriteRequest(body);
 
         try
@@ -112,6 +114,16 @@ public sealed class HermesClient(HttpClient http, HermesOptions options) : IHerm
         {
             using var message = new HttpRequestMessage(HttpMethod.Post, options.CompletionsUri);
             message.Content = new StringContent(body, Encoding.UTF8, "application/json");
+            if (!string.IsNullOrWhiteSpace(options.Referer))
+            {
+                message.Headers.TryAddWithoutValidation("HTTP-Referer", options.Referer);
+            }
+
+            if (!string.IsNullOrWhiteSpace(options.Title))
+            {
+                message.Headers.TryAddWithoutValidation("X-Title", options.Title);
+            }
+
             // SPEC-GAP T-201: an empty key sends no Authorization header (a local Hermes may not need one).
             if (options.ApiKey.Length > 0)
             {
@@ -160,13 +172,23 @@ public sealed class HermesClient(HttpClient http, HermesOptions options) : IHerm
 
     private static string Serialize<TValue>(TValue value) => JsonSerializer.Serialize(value, JsonOptions.Default);
 
+    private static WireResponseFormat ToWire(ResponseFormat f) =>
+        new("json_schema", new WireJsonSchema(f.Name, f.Strict, f.Schema));
+
     private sealed record ChatRequest(
         string Model,
         decimal Temperature,
         IReadOnlyList<ChatMessage> Messages,
         [property: JsonPropertyName("max_tokens")]
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        int? MaxTokens = null);
+        int? MaxTokens = null,
+        [property: JsonPropertyName("response_format")]
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        WireResponseFormat? ResponseFormat = null);
+
+    private sealed record WireResponseFormat(string Type, [property: JsonPropertyName("json_schema")] WireJsonSchema JsonSchema);
+
+    private sealed record WireJsonSchema(string Name, bool Strict, JsonObject Schema);
 
     private sealed record ChatMessage(string Role, string Content);
 }

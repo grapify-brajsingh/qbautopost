@@ -168,10 +168,10 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             // The shipped appsettings.json now ships Hermes OFF (T-806 POC mode), and the test host inherits it
             // (trap 4). Most of this suite exercises the Hermes path against FakeHermesClient, so the flag is pinned
             // on here, and PocModeApiTests turns it back off for the one host that tests the disabled mode.
-            ["Hermes:Enabled"] = "true",
+            ["OpenRouter:Enabled"] = "true",
             // Rule 1: even a real HermesClient built by mistake cannot reach a Hermes on this machine (.invalid never resolves).
-            ["Hermes:BaseUrl"] = "http://hermes.invalid:8642",
-            ["Hermes:ApiKey"] = "",
+            ["OpenRouter:BaseUrl"] = "https://hermes.invalid:8642",
+            ["OpenRouter:ApiKey"] = "",
             ["QuickBooks:RetryDelaySeconds"] = "0.01",
         }));
         builder.ConfigureTestServices(services =>

@@ -64,7 +64,10 @@ builder.WebHost.ConfigureKestrel((context, kestrel) =>
 var contentRoot = builder.Environment.ContentRootPath;
 builder.Services.AddOptions<AppSettings>()
     .Bind(builder.Configuration)
-    .PostConfigure(s => s.ResolvePaths(contentRoot));
+    .PostConfigure(s => s.ResolvePaths(contentRoot))
+    .ValidateOnStart();
+// M12 §14.2: an https-only BaseUrl (loopback excepted) is checked at startup, so the key is never sent in clear text.
+builder.Services.AddSingleton<IValidateOptions<AppSettings>, OpenRouterOptionsValidator>();
 
 const string CorsPolicyName = "QbAutopostCallers";
 
@@ -114,21 +117,23 @@ builder.Services.AddSingleton<IJobStore, JobStore>();
 builder.Services.AddSingleton<JobQueue>();
 builder.Services.AddSingleton(sp =>
 {
-    var h = sp.GetRequiredService<IOptions<AppSettings>>().Value.Hermes;
+    var h = sp.GetRequiredService<IOptions<AppSettings>>().Value.OpenRouter;
     return new HermesOptions
     {
         BaseUrl = h.BaseUrl,
         ApiKey = h.ApiKey,
         Model = h.Model,
         Timeout = TimeSpan.FromSeconds(h.TimeoutSeconds),
+        Referer = h.Referer,
+        Title = h.Title,
     };
 });
 // HermesOptions.Timeout bounds each call; the HttpClient's own 100 s default would cut the 120 s budget short.
 // A singleton reader holds its HermesClient, so the handler is never rotated (Hermes is a fixed loopback address).
 builder.Services.AddHttpClient<HermesClient>(http => http.Timeout = Timeout.InfiniteTimeSpan)
     .SetHandlerLifetime(Timeout.InfiniteTimeSpan);
-// T-806: Hermes:Enabled=false runs without any AI (POC): nothing is sent to a model, the requirement is read by regex.
-static bool HermesEnabled(IServiceProvider sp) => sp.GetRequiredService<IOptions<AppSettings>>().Value.Hermes.Enabled;
+// T-806 / M12: OpenRouter:Enabled=false runs without any AI (POC): nothing is sent to a model, the requirement is read by regex.
+static bool HermesEnabled(IServiceProvider sp) => sp.GetRequiredService<IOptions<AppSettings>>().Value.OpenRouter.Enabled;
 builder.Services.AddSingleton<IHermesClient>(sp => new LoggingHermesClient(
     HermesEnabled(sp) ? sp.GetRequiredService<HermesClient>() : new DisabledHermesClient(),
     sp.GetRequiredService<ILogger<LoggingHermesClient>>()));
@@ -378,6 +383,7 @@ try
 
     // Saved-requests spec 4.2: names the key, never the value, of a secret read from a settings file.
     SecretWarnings.Warn(app.Configuration, app.Logger);
+    LegacyHermesSection.Warn(app.Configuration, app.Logger);
 
     app.Services.GetRequiredService<PromptLibrary>();
     app.Logger.LogInformation("Hermes prompts loaded from {PromptFolder}", Path.Combine(AppContext.BaseDirectory, PromptLibrary.DefaultFolder));

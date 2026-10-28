@@ -143,7 +143,7 @@ public sealed class LoggingApiTests : IDisposable
     [Fact]
     public void Should_MaskHermesKey_When_ItComesFromConfiguration()
     {
-        using var host = _factory.WithSetting("Hermes:ApiKey", "sk-provider-0042");
+        using var host = _factory.WithSetting("OpenRouter:ApiKey", "sk-provider-0042");
         var log = host.Services.GetRequiredService<ILogger<LoggingApiTests>>();
 
         log.LogError(new HttpRequestException("401 for key sk-provider-0042"), "Hermes call failed");

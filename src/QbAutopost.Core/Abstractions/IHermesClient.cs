@@ -1,12 +1,15 @@
+using QbAutopost.Core.Hermes;
+
 namespace QbAutopost.Core.Abstractions;
 
-/// <summary>Hermes prompt tasks (spec §9.1–9.4).</summary>
+/// <summary>Model prompt tasks (spec §9.1–9.4; <see cref="Extraction"/> is M12 upload extraction).</summary>
 public enum HermesTask
 {
     Spec,
     Statement,
     Invoice,
     Account,
+    Extraction,
 }
 
 /// <summary>A model answer that can check itself; an empty list means valid (spec §9).</summary>
@@ -20,6 +23,8 @@ public interface IValidatable
 /// <c>output/hermes/</c> folder; every request and response is copied there (FR-17). Null means no audit copy.
 /// <paramref name="Check"/> adds validation that needs the caller's data (e.g. T4's allowed accounts, §9.4); it runs
 /// after <see cref="IValidatable.Validate"/> passes, and its errors count as a failed answer (retried once).
+/// <paramref name="Format"/> (M12) asks the provider for schema-constrained output (<c>response_format</c>);
+/// <paramref name="Model"/> overrides <c>HermesOptions.Model</c> for this call. Null means today's behaviour.
 /// </summary>
 public sealed record HermesRequest(
     HermesTask Task,
@@ -27,9 +32,14 @@ public sealed record HermesRequest(
     string UserContent,
     string? AuditDir = null,
     string? SchemaHint = null,
-    Func<IValidatable, IReadOnlyList<string>>? Check = null);
+    Func<IValidatable, IReadOnlyList<string>>? Check = null,
+    ResponseFormat? Format = null,
+    string? Model = null);
 
-/// <summary>Hermes (OpenAI-compatible) client (spec §9, ADR-0005); tests use <c>FakeHermesClient</c>.</summary>
+/// <summary>
+/// The OpenRouter (OpenAI-compatible) model client (spec §9, ADR-0005; M12 moved it from Hermes). The name is kept
+/// (Q-109); tests use <c>FakeHermesClient</c>.
+/// </summary>
 public interface IHermesClient
 {
     /// <summary>

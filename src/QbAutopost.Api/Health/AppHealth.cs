@@ -56,7 +56,7 @@ public sealed class AppHealth(
             (long)(DateTime.UtcNow - ProcessStartedUtc).TotalSeconds,
             WindowsSession),
         QuickBooksGateway: connection.Mode.ToString().ToLowerInvariant(),
-        Hermes: settings.Value.Hermes.Enabled ? "enabled" : "disabled",
+        Hermes: settings.Value.OpenRouter.Enabled ? "enabled" : "disabled",
         Worker: new WorkerView(
             lifetime.ApplicationStarted.IsCancellationRequested,
             store.All().FirstOrDefault(j => JobStatusRules.IsActive(j.Status))?.JobId,

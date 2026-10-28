@@ -63,7 +63,7 @@ public sealed class HealthApiTests : IDisposable
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("configured-model", body.GetProperty("model").GetString());
         var sent = Assert.Single(handler.Requests);
-        Assert.Equal("http://hermes.configured:9999/v1/chat/completions", sent.Uri);
+        Assert.Equal("https://hermes.configured:9999/v1/chat/completions", sent.Uri);
         Assert.Equal("Bearer sk-configured-key-0001", sent.Authorization);
         Assert.Equal(HermesClient.PingMaxTokens, JsonDocument.Parse(sent.Body).RootElement.GetProperty("max_tokens").GetInt32());
     }
@@ -101,9 +101,9 @@ public sealed class HealthApiTests : IDisposable
         {
             b.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Hermes:BaseUrl"] = "http://hermes.configured:9999",
-                ["Hermes:ApiKey"] = "sk-configured-key-0001",
-                ["Hermes:Model"] = "configured-model",
+                ["OpenRouter:BaseUrl"] = "https://hermes.configured:9999",
+                ["OpenRouter:ApiKey"] = "sk-configured-key-0001",
+                ["OpenRouter:Model"] = "configured-model",
             }));
             b.ConfigureTestServices(services =>
             {

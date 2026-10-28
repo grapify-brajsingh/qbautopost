@@ -1,7 +1,7 @@
 namespace QbAutopost.Api.Configuration;
 
 /// <summary>
-/// <c>appsettings.json</c> (spec §12). Secrets (<see cref="ApiSettings.ApiKey"/>, <see cref="HermesSettings.ApiKey"/>)
+/// <c>appsettings.json</c> (spec §12). Secrets (<see cref="ApiSettings.ApiKey"/>, <see cref="OpenRouterSettings.ApiKey"/>)
 /// may come from <c>QBAUTOPOST__*</c> environment variables and are never logged or written to output.
 /// </summary>
 public sealed class AppSettings
@@ -10,7 +10,7 @@ public sealed class AppSettings
     public bool DryRunDefault { get; set; } = true;
     public CompanySettings Company { get; set; } = new();
     public QuickBooksSettings QuickBooks { get; set; } = new();
-    public HermesSettings Hermes { get; set; } = new();
+    public OpenRouterSettings OpenRouter { get; set; } = new();
     public OcrSettings Ocr { get; set; } = new();
     public PathsSettings Paths { get; set; } = new();
     public DatabaseSettings Database { get; set; } = new();
@@ -244,20 +244,6 @@ public sealed class DateWindowSettings
 
     /// <summary>Tomorrow is allowed, because a caller's clock may be a time zone ahead of the server's.</summary>
     public int MaxFutureDays { get; set; } = 1;
-}
-
-public sealed class HermesSettings
-{
-    /// <summary>
-    /// SPEC-GAP T-806: false = no AI at all (POC). The requirement is read by the regex parser; anything that needs a
-    /// model (PDF statements, invoices, lines no rule resolves) is held as if Hermes were down.
-    /// </summary>
-    public bool Enabled { get; set; } = true;
-
-    public string BaseUrl { get; set; } = "http://127.0.0.1:8642";
-    public string ApiKey { get; set; } = "";
-    public string Model { get; set; } = "default";
-    public int TimeoutSeconds { get; set; } = 120;
 }
 
 public sealed class OcrSettings
