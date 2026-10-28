@@ -62,6 +62,16 @@ public sealed class SavedRequestEntity
     public bool NeedsAttentionV2 { get; set; }
     public int ProblemCount { get; set; }
 
+    // ---- upload (dashboard-api-m12 7.1): filled once from the extraction record at save, never from the client ----
+
+    public Guid? UploadExtractionId { get; set; }
+    public string? UploadFileName { get; set; }
+    public long? UploadSizeBytes { get; set; }
+    public string? UploadSha256 { get; set; }
+    public string? UploadModel { get; set; }
+    public string? UploadPromptVersion { get; set; }
+    public DateTime? UploadExtractedUtc { get; set; }
+
     /// <summary>Application-managed concurrency token, incremented on every update (§5.1).</summary>
     public int RowVersion { get; set; }
 

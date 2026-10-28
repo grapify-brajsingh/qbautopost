@@ -16,6 +16,8 @@ public sealed class QbAutopostDbContext(DbContextOptions<QbAutopostDbContext> op
     public DbSet<RefreshTokenEntity> RefreshTokens => Set<RefreshTokenEntity>();
     public DbSet<UserAuditEntity> UserAudit => Set<UserAuditEntity>();
 
+    public DbSet<StatementExtractionEntity> StatementExtractions => Set<StatementExtractionEntity>();
+
     /// <summary>The read-only view <c>audit_events</c> (T-1106).</summary>
     public DbSet<AuditEventRow> AuditEvents => Set<AuditEventRow>();
 

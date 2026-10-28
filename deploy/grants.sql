@@ -3,7 +3,8 @@
 -- Shared by deploy/install-postgres.ps1, deploy/apply-migrations.ps1 and tests/QbAutopost.Data.Tests/MigrationScriptTests.cs.
 -- Safe to run again. Role qbautopost_app must exist. (CONNECT on the database is granted by install-postgres.ps1.)
 --
---   * No DDL, no TRUNCATE, no DELETE ... except user_roles (see the end: changing a user's role replaces the row).
+--   * No DDL, no TRUNCATE, no DELETE ... except user_roles (see the end: changing a user's role replaces the row)
+--     and statement_extractions (expired uploads are removed).
 --   * saved_request_versions, saved_request_events and user_audit are append-only: SELECT and INSERT, nothing else.
 --   * __EFMigrationsHistory is read-only (the app only compares it, spec 5.5).
 --   * The view audit_events is read-only (SELECT).
@@ -34,6 +35,10 @@ GRANT SELECT, INSERT ON
     saved_request_events,
     user_audit
 TO qbautopost_app;
+
+-- T-1209: extraction records (dashboard-api-m12 6.6). The only table the app may DELETE from besides user_roles:
+-- unsaved, expired records are removed in-line; saved ones are kept (the statement's same-file check needs them).
+GRANT SELECT, INSERT, UPDATE, DELETE ON statement_extractions TO qbautopost_app;
 
 -- Migration history: read only.
 GRANT SELECT ON "__EFMigrationsHistory" TO qbautopost_app;

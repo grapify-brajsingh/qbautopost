@@ -194,8 +194,10 @@ public sealed class DeployScriptsTests
             .Where(l => !l.TrimStart().StartsWith("--", StringComparison.Ordinal));
         var text = string.Join(' ', statements);
 
-        Assert.Single(System.Text.RegularExpressions.Regex.Matches(text, "DELETE", System.Text.RegularExpressions.RegexOptions.IgnoreCase));
+        // T-1209 (dashboard-api-m12 6.6): the second DELETE is on statement_extractions, which holds no history.
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(text, "DELETE", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count);
         Assert.Contains("GRANT DELETE ON user_roles TO qbautopost_app;", text, StringComparison.Ordinal);
+        Assert.Contains("GRANT SELECT, INSERT, UPDATE, DELETE ON statement_extractions TO qbautopost_app;", text, StringComparison.Ordinal);
         Assert.DoesNotContain("password", text, StringComparison.OrdinalIgnoreCase);
     }
 

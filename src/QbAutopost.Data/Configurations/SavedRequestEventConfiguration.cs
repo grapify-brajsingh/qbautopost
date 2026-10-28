@@ -17,5 +17,8 @@ public sealed class SavedRequestEventConfiguration : IEntityTypeConfiguration<Sa
 
         // Dashboard v2 audit feed, newest first (T-1105, spec saved-requests-dashboard-v2 4.2).
         builder.HasIndex(e => e.AtUtc).IsDescending();
+
+        // M12 Home counts of received / posted / post-failed / discarded (dashboard-api-m12 3.4).
+        builder.HasIndex(e => new { e.Kind, e.AtUtc }).IsDescending(false, true).HasDatabaseName("ix_saved_request_events_kind_at");
     }
 }
