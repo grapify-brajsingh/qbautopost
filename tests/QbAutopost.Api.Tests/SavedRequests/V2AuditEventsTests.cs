@@ -236,6 +236,21 @@ public sealed class V2AuditEventsTests : IDisposable
     }
 
     [Fact]
+    public async Task Should_NameSystemAndAnonymousActors_When_FeedRead()
+    {
+        Store.AddUserAudit(new UserAuditEntry(0, null, "system", "login", null, DateTime.UtcNow.AddMinutes(-2)));
+        Store.AddUserAudit(new UserAuditEntry(0, null, "anonymous", "login-failed", null, DateTime.UtcNow.AddMinutes(-1)));
+
+        var body = await GetAsync(DashboardRoles.Admin, Feed);
+
+        var actors = body.GetProperty("items").EnumerateArray().Select(e => e.GetProperty("actor")).ToList();
+        Assert.Contains(actors, a => a.GetProperty("id").GetString() == "system"
+            && a.GetProperty("name").GetString() == "system" && a.GetProperty("kind").GetString() == "system");
+        Assert.Contains(actors, a => a.GetProperty("id").GetString() == "anonymous"
+            && a.GetProperty("name").GetString() == "anonymous" && a.GetProperty("kind").GetString() == "anonymous");
+    }
+
+    [Fact]
     public async Task Should_RequireRequestsRead_When_FeedCalledWithoutIt()
     {
         using var anonymous = _host.Factory.CreateClient();

@@ -34,6 +34,14 @@ public sealed class V2ScopeMatrixTests(Host host) : IClassFixture<Host>
     [MemberData(nameof(V2Routes))]
     public void Should_RequireSameScope_When_V2RouteCalled(string method, string relative)
     {
+        // Routes that exist under /api/v2 only (the audit feed, T-1114) have no v1 twin: theirs is closed to admin.
+        if (relative.StartsWith("/audit-events", StringComparison.Ordinal))
+        {
+            Assert.Equal(ApiScopes.Admin, ApiRoutes.ScopeFor(method, V1 + relative));
+            Assert.Equal(ApiScopes.RequestsRead, ApiRoutes.ScopeFor(method, V2 + relative));
+            return;
+        }
+
         Assert.Equal(ApiRoutes.ScopeFor(method, V1 + relative), ApiRoutes.ScopeFor(method, V2 + relative));
         Assert.Equal(
             ApiRoutes.ScopeFor(method, V1 + relative, isDevelopment: true),
