@@ -407,44 +407,55 @@ public static class SavedRequestEndpoints
     {
         var log = loggers.CreateLogger(typeof(SavedRequestEndpoints));
         using var scope = LogContext.PushProperty("postId", postId);
-        try
-        {
-            var batch = batches.Load(postId);
-            if (batch is null)
-            {
-                log.LogWarning("Saved request {SavedRequestId}: ledger batch {PostId} is missing or unreadable; left out of the detail", requestId, postId);
-            }
-
-            return batch;
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        var batch = TryLoadBatch(batches, postId, out var error);
+        if (error is not null)
         {
             log.LogWarning(
                 "Saved request {SavedRequestId}: ledger batch {PostId} could not be read ({Error}); left out of the detail",
-                requestId, postId, ex.GetType().Name);
-            return null;
+                requestId, postId, error.GetType().Name);
         }
+        else if (batch is null)
+        {
+            log.LogWarning("Saved request {SavedRequestId}: ledger batch {PostId} is missing or unreadable; left out of the detail", requestId, postId);
+        }
+
+        return batch;
     }
 
     private static DirectPostResult? LoadLedgerBatch(ApiBatchStore batches, string postId, long requestId, ILoggerFactory loggers)
     {
         var log = loggers.CreateLogger(typeof(SavedRequestEndpoints));
         using var scope = LogContext.PushProperty("postId", postId);
-        try
-        {
-            var batch = batches.Load(postId);
-            if (batch is null)
-            {
-                log.LogWarning("Saved request {SavedRequestId}: ledger batch {PostId} is missing or unreadable; left out of the attempt", requestId, postId);
-            }
-
-            return batch;
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        var batch = TryLoadBatch(batches, postId, out var error);
+        if (error is not null)
         {
             log.LogWarning(
                 "Saved request {SavedRequestId}: ledger batch {PostId} could not be read ({Error}); left out of the attempt",
-                requestId, postId, ex.GetType().Name);
+                requestId, postId, error.GetType().Name);
+        }
+        else if (batch is null)
+        {
+            log.LogWarning("Saved request {SavedRequestId}: ledger batch {PostId} is missing or unreadable; left out of the attempt", requestId, postId);
+        }
+
+        return batch;
+    }
+
+    /// <summary>
+    /// The batch behind <paramref name="postId"/>, or null when it is missing or unreadable. A failure to read it that
+    /// a caller must survive (a bad id, I/O, access) is returned in <paramref name="error"/>, never thrown; each caller
+    /// logs it in its own words.
+    /// </summary>
+    private static DirectPostResult? TryLoadBatch(ApiBatchStore batches, string postId, out Exception? error)
+    {
+        error = null;
+        try
+        {
+            return batches.Load(postId);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            error = ex;
             return null;
         }
     }
