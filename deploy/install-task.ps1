@@ -8,11 +8,12 @@
   session. It is never a Windows service, never "run whether the user is logged on or not", and stores no password.
   Run it once, as that account, from an elevated PowerShell (registering a logon trigger needs administrator rights).
   Use -WhatIf for a dry run: it prints the task it would register and changes nothing.
+  Exit codes: 0 registered, removed or dry run; 1 start-all.ps1 not found or StartAllArguments contains -WhatIf.
 
 .EXAMPLE
   .\deploy\install-task.ps1 -WhatIf
   .\deploy\install-task.ps1
-  .\deploy\install-task.ps1 -StartAllArguments '-DockerMode Desktop'
+  .\deploy\install-task.ps1 -StartAllArguments '-SkipPostgres'
   .\deploy\install-task.ps1 -Unregister
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
@@ -77,7 +78,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew `
     -ExecutionTimeLimit ([TimeSpan]::Zero)
 
-$description = 'QbAutopost: starts Hermes (Docker) and the QbAutopost API at logon in the interactive session. See docs/runbook.md section 2.4.'
+$description = 'QbAutopost: starts the QbAutopost API at logon in the interactive session. See docs/runbook.md section 2.4.'
 
 Write-Host "Task      : $TaskName"
 Write-Host "User      : $UserId (interactive logon, limited rights)"

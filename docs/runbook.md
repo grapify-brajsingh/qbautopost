@@ -1,7 +1,7 @@
 # QbAutopost — Operator Runbook
 
 Version 1.0 · 2026-09-17 · Audience: the person who installs, runs and supports QbAutopost on the QuickBooks server.
-Related: `spec.md` (the contract), `tracker.md` (open questions Q-1…Q-41 and the T-609 server checklist), `deploy/README-hermes.md` (Hermes container).
+Related: `spec.md` (the contract), `tracker.md` (open questions Q-1…Q-41 and the T-609 server checklist), `docs/adr/0011-openrouter-for-model-calls.md` (model provider). `deploy/README-hermes.md` is obsolete.
 
 > **Status.** The QuickBooks (COM) path has only run against a simulated company so far. Do the T-609 checklist
 > in `tracker.md` on a **copy** of the company file before the first real post.
@@ -24,7 +24,7 @@ C:\qb-jobs\2026-08-tropicana\
 
 It reads the files, decides every line, and either stops at **ready** (dry run, the default) so you can review, or posts
 Checks, Credit Card Charges/Credits and Deposits to QuickBooks Desktop. Everything it produced is in the job's
-`output\` folder. Hermes (a local AI service) reads the requirement, PDF statements and invoices, and suggests accounts;
+`output\` folder. A model at OpenRouter (an online AI service; statement and invoice text is sent to it) reads the requirement, PDF statements and invoices, and suggests accounts;
 it never decides an amount. Anything uncertain is **held**, never guessed.
 
 Job states: `queued → analysing → ready → posting → posted | partial`, or `failed`. An undone batch makes the job `undone`.
@@ -39,7 +39,7 @@ Job states: `queued → analysing → ready → posting → posted | partial`, o
 | QuickBooks | Desktop Pro/Premier/Accountant with the company file; SDK support (qbXML 13.0) |
 | Bitness | The app **must** run with the same bitness as QuickBooks: **x64 for QuickBooks 2022 and later, x86 for older**. A mismatch shows as "QBXMLRP2.RequestProcessor is not registered for this x64 process" |
 | .NET | .NET 8 ASP.NET Core Runtime of that bitness (x64 or x86) |
-| Hermes | Docker (WSL 2 + Docker Engine on Windows Server; Docker Desktop on Windows 10/11), see `deploy/README-hermes.md` |
+| Model | OpenRouter over outbound HTTPS (`openrouter.ai`, port 443) with the `OpenRouter__ApiKey` machine variable, see 2.4. Docker is no longer needed |
 | Account | A Windows account with auto-logon. The app runs **in that interactive session** (Task Scheduler at logon), never as a Windows service, because QuickBooks' SDK needs a desktop session |
 
 ### 2.2 Folders
@@ -70,9 +70,14 @@ Copy `rules.json` (start from `samples/rules.json`) to `C:\qb-autopost\rules.jso
 
 ### 2.4 Start at logon
 
-1. Start Hermes and check it: `deploy/README-hermes.md`.
-2. `deploy/start-all.ps1` starts Docker (`-DockerMode Wsl` on Windows Server, the default, with `-WslDistro Ubuntu`; `-DockerMode Desktop` on Windows 10/11), runs `docker compose up -d` in `deploy\hermes`, waits until Hermes accepts connections on `127.0.0.1:8642`, starts `C:\qb-autopost\app\QbAutopost.Api.exe` (`-AppExe`) unless it already runs, then waits for `GET /api/v1/health/ready` = 200. The script holds no key, so it can only call the two key-free routes; Hermes is proved by its own port, not through the API (`/api/v1/health/hermes` needs `health:read` — use `scripts\qb-server-check.ps1 -Step health` for the dependency checks). If Hermes stays down, the API is still started (undo and `/api/v1/health/quickbooks` work; new jobs fail at T1) and the script exits 2. Exit 1 = Docker, compose or the API could not be started, or it never became ready. It writes `C:\qb-autopost\logs\start-all-yyyyMMdd.log` and never reads a key.
-3. `deploy/install-task.ps1` (run once as the auto-logon account, in an elevated PowerShell) registers the task `QbAutopost`: at logon of that account, 60 s delay, **interactive** session, limited rights, no password stored, no time limit, a second start ignored. Pass start-all options with `-StartAllArguments '-DockerMode Desktop'`; remove it with `-Unregister`.
+1. Set up the model provider (OpenRouter), once, as an administrator:
+   - Set `OpenRouter__ApiKey` as a **machine** environment variable the service account can read, and `OpenRouter__Enabled=true`
+     (`[Environment]::SetEnvironmentVariable('OpenRouter__ApiKey', '<key>', 'Machine')`). Never put the key in `appsettings*.json`.
+   - Allow outbound HTTPS (port 443) from this server to `openrouter.ai`.
+   - If a Hermes container still exists from before, stop and disable it (`docker compose down` in `deploy\hermes`, then disable the Docker service or the WSL distribution's autostart). **Docker is no longer needed** on this server.
+   - Restart the API afterwards so it reads the variables, then check `GET /api/v1/health/hermes` (it now pings OpenRouter; section 8.1).
+2. `deploy/start-all.ps1` starts or verifies the PostgreSQL service, starts `C:\qb-autopostpp\QbAutopost.Api.exe` (`-AppExe`) unless it already runs, then waits for `GET /api/v1/health/ready` = 200. It no longer starts Docker or a model container. The script holds no key, so it can only call the two key-free routes (`/api/v1/health/hermes` needs `health:read` - use `scripts\qb-server-check.ps1 -Step health` for the dependency checks). Exit 0 = the API is ready; exit 1 = the API could not be started or never became ready. It writes `C:\qb-autopost\logs\start-all-yyyyMMdd.log` and never reads a key.
+3. `deploy/install-task.ps1` (run once as the auto-logon account, in an elevated PowerShell) registers the task `QbAutopost`: at logon of that account, 60 s delay, **interactive** session, limited rights, no password stored, no time limit, a second start ignored. Pass start-all options with `-StartAllArguments '-SkipPostgres'`; remove it with `-Unregister`.
 4. Both scripts accept `-WhatIf` (prints what would happen, changes nothing). Test the task with `Start-ScheduledTask -TaskName QbAutopost`, then sign out and in once.
 
 ### 2.5 Going live and more than one company
@@ -111,9 +116,9 @@ Copy `rules.json` (start from `samples/rules.json`) to `C:\qb-autopost\rules.jso
 | `QuickBooks:BackupFolder` | empty | When set, posting is refused unless the newest `*.QBB` there is recent |
 | `QuickBooks:BackupMaxAgeHours` | `36` | Age limit for that backup |
 | `QuickBooks:Fake` | `false` | Test only: simulated company. Refused outside Development/Testing |
-| `Hermes:Enabled` | `true` | `false` = no AI at all (POC, `samples/poc/README-POC.md`): the requirement is read by the regex parser; PDF statements, invoices and lines no rule resolves are held |
-| `Hermes:BaseUrl` / `Model` / `TimeoutSeconds` | `http://127.0.0.1:8642` / `default` / `120` | |
-| `Hermes:ApiKey` | empty | Hermes' `API_SERVER_KEY` |
+| `OpenRouter:Enabled` | `false` | `true` turns the model on. `false` = no AI at all (POC, `samples/poc/README-POC.md`): the requirement is read by the regex parser; PDF statements, invoices and lines no rule resolves are held |
+| `OpenRouter:BaseUrl` / `Model` / `TimeoutSeconds` | `https://openrouter.ai/api/v1` / `~google/gemini-pro-latest` / `120` | `BaseUrl` must be `https://` unless the host is loopback, otherwise startup fails. Optional `Referer` and `Title` are sent as attribution headers |
+| `OpenRouter:ApiKey` | empty | The OpenRouter key. Environment only (`OpenRouter__ApiKey`); never in the file. A leftover `Hermes` section is ignored with one startup warning |
 | `Ocr:Enabled` / `TessDataPath` | `false` / empty | Scanned PDFs and invoice images need OCR (`eng.traineddata`) |
 | `QuickBooks:MaxLineAmount` | `100000.00` | A bigger line on the direct path is **held**, not refused |
 | `QuickBooks:AllowedDateWindow:MaxAgeDays` / `MaxFutureDays` | `730` / `1` | A direct line dated outside this is held |
@@ -129,7 +134,7 @@ Put keys in environment variables of the auto-logon account instead of the file:
 
 ```powershell
 [Environment]::SetEnvironmentVariable('QBAUTOPOST__Api__ApiKey', '<long random key>', 'User')
-[Environment]::SetEnvironmentVariable('QBAUTOPOST__Hermes__ApiKey', '<API_SERVER_KEY>', 'User')
+[Environment]::SetEnvironmentVariable('OpenRouter__ApiKey', '<OpenRouter key>', 'Machine')   # administrator; readable by the service account
 ```
 
 Keys are masked (`***`) in logs and are never written to `output\`. Do not add log sinks in configuration; only levels are read from it.
@@ -321,7 +326,7 @@ Only one job or QuickBooks operation runs at a time; others wait in the queue.
 | `unknown-payee` | No vendor/customer found; `candidates` lists the closest names | Teach an alias (below), re-run |
 | `no-account-rule`, `low-confidence`, `no-prior-posting` | No rule for the expense account, or the AI suggestion is not trusted yet; `candidates` has suggestions | Teach a vendor account (below) |
 | `no-accounts` | `qb-lists.json` empty | Sync lists |
-| `hermes-failed` | Hermes did not give a valid answer | Check `/api/v1/health/hermes`, re-run |
+| `hermes-failed` | Hermes did not give a valid answer | Check `/api/v1/health/hermes` (pings OpenRouter), re-run |
 | `unknown-account` | No `BankAccounts`/`CardAccounts` entry for the last four, or none detected | Add it to `rules.json`, or put the last four in the file name |
 | `unknown-csv-layout`, `ambiguous-csv-layout`, `unparsable-rows` | The CSV/XLSX export does not match exactly one layout, or a row cannot be read | Fix `CsvLayouts` or the export |
 | `reconcile-failed` | The statement's balances do not add up (G1) | Check the file is complete; the whole statement is held |
@@ -424,7 +429,7 @@ A job found `posting` after a crash or restart becomes `partial` with
 
 | Symptom | Fix |
 |---|---|
-| Job `failed`: `analysis failed: Hermes Spec call failed` | Hermes is down; start it (`deploy/README-hermes.md`), submit again |
+| Job `failed`: `analysis failed: Hermes Spec call failed` | OpenRouter is not reachable or the key is missing; check `OpenRouter__ApiKey`, outbound HTTPS to `openrouter.ai` and `/api/v1/health/hermes`, submit again |
 | Job `failed`: company name / last four (G2) | `requirement.txt` names another company, lists a last four with no statement, or a statement's last four is not listed and not in `rules.json` |
 | Job `failed`: `backup-too-old` | Make a QuickBooks backup (`.QBB`) into `QuickBooks:BackupFolder`, submit again |
 | Job `failed`: rules | `rules.json` is not valid JSON or has a bad value (see the error); teaching returns 500 in that case and does not touch the file |

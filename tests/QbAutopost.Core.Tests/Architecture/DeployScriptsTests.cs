@@ -75,14 +75,14 @@ public sealed class DeployScriptsTests
     [Fact]
     public void Should_CheckHermesBeforeStartingApi_When_ReadingStartAll()
     {
+        // T-1203 / ADR-0011: no Hermes or Docker step is left; the model provider is checked through the API
+        // (health:read route), not by the script.
         var script = Script("start-all.ps1");
-        var waitHermes = script.IndexOf("Wait-HermesPort -", StringComparison.Ordinal);
         var startApi = script.IndexOf("Start-Api -", StringComparison.Ordinal);
 
-        Assert.True(waitHermes > 0, "start-all.ps1 must call Wait-HermesPort");
-        Assert.True(startApi > waitHermes, "start-all.ps1 must wait for Hermes before it starts the API");
-        Assert.Contains("/health/hermes", script, StringComparison.Ordinal);
-        Assert.Contains("docker compose", script, StringComparison.Ordinal);
+        Assert.True(startApi > 0, "start-all.ps1 must start the API");
+        Assert.DoesNotContain("Wait-HermesPort", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("docker compose", script, StringComparison.Ordinal);
     }
 
     [Fact]
