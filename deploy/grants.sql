@@ -12,7 +12,8 @@ REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM qbautopost_app;
 
 GRANT USAGE ON SCHEMA public TO qbautopost_app;
 
--- Mutable tables.
+-- Mutable tables. T-1105: the DashboardV2 columns on saved_requests and refresh_tokens.grace_successor_id
+-- are covered by these table grants (the migration adds no table, so nothing new to grant).
 GRANT SELECT, INSERT, UPDATE ON
     saved_requests,
     post_attempts,

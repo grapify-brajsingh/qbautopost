@@ -14,5 +14,8 @@ public sealed class SavedRequestEventConfiguration : IEntityTypeConfiguration<Sa
         builder.Property(e => e.Id).UseIdentityAlwaysColumn();
 
         builder.Property(e => e.Detail).HasColumnType("jsonb");
+
+        // Dashboard v2 audit feed, newest first (T-1105, spec saved-requests-dashboard-v2 4.2).
+        builder.HasIndex(e => e.AtUtc).IsDescending();
     }
 }

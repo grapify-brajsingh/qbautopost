@@ -85,7 +85,15 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
             UpdatedUtc = request.NowUtc,
             UpdatedBy = request.CreatedBy,
             RowVersion = 1,
+            EmailSubject = request.Metadata.EmailSubject,
+            EmailReceivedUtc = request.Metadata.EmailReceivedUtc,
+            EmailFrom = request.Metadata.EmailFrom,
+            EmailMessageId = request.Metadata.EmailMessageId,
+            PushId = request.Metadata.PushId,
+            MetadataErrors = request.Metadata.MetadataErrors.ToList(),
+            SkipCount = SavedRequestColumns.SkipCountOf(request.Payload),
         };
+        SetSnapshotV2(entity, request.Read.Readable, request.SnapshotV2 ?? request.Snapshot);
         entity.Versions.Add(new SavedRequestVersionEntity
         {
             Number = 1,
@@ -296,6 +304,8 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
             r.Validation = JsonSerializer.Serialize(version.Snapshot, Json);
             r.ValidatedUtc = version.Snapshot.ValidatedUtc;
             r.RowFingerprints = version.RowFingerprints.ToList();
+            r.SkipCount = SavedRequestColumns.SkipCountOf(version.Payload);
+            SetSnapshotV2(r, version.Read.Readable, version.SnapshotV2 ?? version.Snapshot);
             Touch(r, version.Actor, version.NowUtc);
             AddEvent(
                 db, id, SavedRequestEvents.Edited,
@@ -314,7 +324,8 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
         });
 
     public Task<MutationResult> SetValidationAsync(
-        long id, ValidationSnapshot snapshot, DuplicateMatch duplicate, string actor, DateTime nowUtc, CancellationToken ct) =>
+        long id, ValidationSnapshot snapshot, ValidationSnapshot snapshotV2, DuplicateMatch duplicate, string actor,
+        DateTime nowUtc, CancellationToken ct) =>
         MutateAsync(id, ct, async (db, r) =>
         {
             if (r.Status != SavedRequestStatus.Pending) return MutationKind.WrongStatus;
@@ -327,6 +338,7 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
             r.Validation = JsonSerializer.Serialize(snapshot, Json);
             r.ValidatedUtc = snapshot.ValidatedUtc;
             r.NeedsAttention = !readable || snapshot.NeedsAttention;
+            SetSnapshotV2(r, readable, snapshotV2);
             r.DuplicateOfId = duplicate.Of;
             r.DuplicateReasons = duplicate.Reasons.ToList();
             Touch(r, actor, nowUtc);
@@ -599,7 +611,15 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
             r.DuplicateOfId, r.DuplicateReasons.ToList(), r.DuplicateAcknowledgedBy, r.DuplicateAcknowledgedUtc,
             ReadSnapshot(r.Validation), r.ValidatedUtc, r.PostId, r.DiscardReason,
             r.CreatedUtc, r.CreatedBy, r.UpdatedUtc, r.UpdatedBy, r.RowVersion,
-            ParseElement(payload), last is null ? null : ToModel(last));
+            ParseElement(payload), last is null ? null : ToModel(last))
+        {
+            Metadata = new SaveMetadata(
+                r.EmailSubject, r.EmailReceivedUtc, r.EmailFrom, r.EmailMessageId, r.PushId, r.MetadataErrors.ToList()),
+            SkipCount = r.SkipCount,
+            ValidationV2 = ReadSnapshot(r.ValidationV2),
+            NeedsAttentionV2 = r.NeedsAttentionV2,
+            ProblemCount = r.ProblemCount,
+        };
     }
 
     /// <summary>Ids of requests whose current payload has a <c>payee</c> or <c>memo</c> string containing <paramref name="q"/>, ignoring case.</summary>
@@ -696,6 +716,15 @@ public sealed class EfSavedRequestStore(IDbContextFactory<QbAutopostDbContext> f
     private static JsonNode? ParseNode(string? json) => json is null ? null : JsonNode.Parse(json);
 
     private static JsonArray ToArray(IEnumerable<string> items) => new(items.Select(i => (JsonNode)JsonValue.Create(i)!).ToArray());
+
+    /// <summary>T-1105: the v2 snapshot and the two columns written with it. Metadata must already be on the row.</summary>
+    private static void SetSnapshotV2(SavedRequestEntity r, bool readable, ValidationSnapshot snapshotV2)
+    {
+        r.ValidationV2 = JsonSerializer.Serialize(snapshotV2, Json);
+        r.NeedsAttentionV2 = SavedRequestColumns.NeedsAttentionV2(
+            readable, snapshotV2, SaveMetadata.None with { MetadataErrors = r.MetadataErrors });
+        r.ProblemCount = snapshotV2.ProblemCount;
+    }
 
     private static bool NeedsAttention(PayloadRead read, ValidationSnapshot snapshot) => !read.Readable || snapshot.NeedsAttention;
 

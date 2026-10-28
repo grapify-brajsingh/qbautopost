@@ -12,4 +12,7 @@ public sealed class RefreshTokenEntity
     public DateTime? RevokedUtc { get; set; }
     public long? ReplacedById { get; set; }
     public string? CreatedIp { get; set; }
+
+    /// <summary>The second successor issued by a v2 grace refresh (dashboard v2 spec 11); null until one is.</summary>
+    public long? GraceSuccessorId { get; set; }
 }

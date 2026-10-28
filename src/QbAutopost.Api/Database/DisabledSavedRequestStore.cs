@@ -36,7 +36,8 @@ public sealed class DisabledSavedRequestStore : ISavedRequestStore
     public Task<MutationResult> AppendVersionAsync(long id, int expectedRowVersion, NewVersion version, CancellationToken ct) => throw Off();
 
     public Task<MutationResult> SetValidationAsync(
-        long id, ValidationSnapshot snapshot, DuplicateMatch duplicate, string actor, DateTime nowUtc, CancellationToken ct) => throw Off();
+        long id, ValidationSnapshot snapshot, ValidationSnapshot snapshotV2, DuplicateMatch duplicate, string actor,
+        DateTime nowUtc, CancellationToken ct) => throw Off();
 
     public Task<MutationResult> ChangeStatusAsync(
         long id, int? expectedRowVersion, SavedRequestStatus from, SavedRequestStatus to, string actor,

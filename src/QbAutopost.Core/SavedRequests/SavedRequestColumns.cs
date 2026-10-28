@@ -46,4 +46,12 @@ public static class SavedRequestColumns
 
         return count;
     }
+
+    /// <summary>
+    /// The <c>needs_attention_v2</c> column (spec 5.3): the version is unreadable, or the v2 snapshot is held, refused
+    /// or unreadable, or the save carried a metadata error. The v1 read is part of it because a version v1 cannot
+    /// read is unreadable under v2 too, and it keeps the column equal to the backfilled copy of <c>needs_attention</c>.
+    /// </summary>
+    public static bool NeedsAttentionV2(bool readable, ValidationSnapshot snapshotV2, SaveMetadata metadata) =>
+        !readable || snapshotV2.NeedsAttention || metadata.MetadataErrors.Count > 0;
 }

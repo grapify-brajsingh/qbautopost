@@ -170,7 +170,8 @@ public sealed class SavedRequestIntake(
         var fingerprints = Fingerprints(read, now);
         var duplicate = await DetectAsync(current.CanonicalSha256, read, fingerprints, id, now, ct);
 
-        return await store.SetValidationAsync(id, snapshot, duplicate, caller.Actor, now, ct);
+        // T-1105: the v1 snapshot stands in for the v2 one until T-1112 computes the real v2 judgement.
+        return await store.SetValidationAsync(id, snapshot, snapshot, duplicate, caller.Actor, now, ct);
     }
 
     /// <summary>The routes answer <c>400 payload-not-storable</c> before this; reaching the store with such a payload is a bug.</summary>

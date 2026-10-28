@@ -42,7 +42,14 @@ public sealed record NewSavedRequest(
     string? IdempotencyKey,
     ValidationSnapshot Snapshot,
     DuplicateMatch Duplicate,
-    DateTime NowUtc);
+    DateTime NowUtc)
+{
+    /// <summary>Email and pushId read from the original body of a v2 save; never changed afterwards (T-1105).</summary>
+    public SaveMetadata Metadata { get; init; } = SaveMetadata.None;
+
+    /// <summary>The v2 judgement of version 1. Null: the store copies <see cref="Snapshot"/> into it.</summary>
+    public ValidationSnapshot? SnapshotV2 { get; init; }
+}
 
 public sealed record NewVersion(
     JsonElement Payload,
@@ -54,7 +61,11 @@ public sealed record NewVersion(
     ValidationSnapshot Snapshot,
     DuplicateMatch Duplicate,
     string Actor,
-    DateTime NowUtc);
+    DateTime NowUtc)
+{
+    /// <summary>The v2 judgement of the new version. Null: the store copies <see cref="Snapshot"/> into it.</summary>
+    public ValidationSnapshot? SnapshotV2 { get; init; }
+}
 
 public sealed record AttemptCompletion(
     AttemptOutcome Outcome,
@@ -118,7 +129,33 @@ public sealed record SavedRequest(
     PostAttempt? LastAttempt)
 {
     public string PublicRef => $"SR-{Id:000000}";
+
+    // ---- dashboard v2 (T-1105). Init-only with defaults, so v1 call sites and v1 views are unchanged. ----
+
+    /// <summary>Email and pushId kept from the first save; never changed by an edit.</summary>
+    public SaveMetadata Metadata { get; init; } = SaveMetadata.None;
+
+    /// <summary>Rows of the current version whose <c>post</c> is the JSON literal <c>false</c>.</summary>
+    public int SkipCount { get; init; }
+
+    /// <summary>The v2 snapshot of the latest version (spec 6.4).</summary>
+    public ValidationSnapshot? ValidationV2 { get; init; }
+
+    /// <summary>The v2 attention rule (spec 5.3): what v2 responses, filters and stats use.</summary>
+    public bool NeedsAttentionV2 { get; init; }
+
+    /// <summary>Findings plus errors of <see cref="ValidationV2"/>.</summary>
+    public int ProblemCount { get; init; }
+
+    /// <summary>The latest post's outcome for v2 list rows. Filled by the store from T-1107; null until then.</summary>
+    public PostSummary? PostSummary { get; init; }
+
+    /// <summary>Timeline length for v2 responses. Filled by the store from T-1107; 0 until then.</summary>
+    public int HistoryCount { get; init; }
 }
+
+/// <summary>What a v2 list row and detail show of the last post (T-1107 fills it).</summary>
+public sealed record PostSummary(string? PostId, int? PostedCount, DateTime? PostedUtc, string? PostedBy);
 
 /// <summary>A list row: everything except the payload, the validation detail and the read errors (spec §6.5).</summary>
 public sealed record SavedRequestSummary(

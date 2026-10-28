@@ -53,7 +53,12 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
                 NeedsAttention(request.Read, request.Snapshot),
                 request.Duplicate.Of, request.Duplicate.Reasons.ToList(), null, null,
                 request.Snapshot, request.Snapshot.ValidatedUtc, null, null,
-                request.NowUtc, request.CreatedBy, request.NowUtc, request.CreatedBy, 1, payload, null);
+                request.NowUtc, request.CreatedBy, request.NowUtc, request.CreatedBy, 1, payload, null)
+            {
+                Metadata = Copy(request.Metadata),
+                SkipCount = SavedRequestColumns.SkipCountOf(payload),
+            };
+            record = WithSnapshotV2(record, request.Read.Readable, request.SnapshotV2 ?? request.Snapshot);
             _requests[id] = record;
             _versions[id] =
             [
@@ -213,7 +218,9 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
                 UpdatedUtc = version.NowUtc,
                 UpdatedBy = version.Actor,
                 RowVersion = r.RowVersion + 1,
+                SkipCount = SavedRequestColumns.SkipCountOf(payload),
             };
+            updated = WithSnapshotV2(updated, version.Read.Readable, version.SnapshotV2 ?? version.Snapshot);
             _requests[id] = updated;
             AddEvent(
                 id, SavedRequestEvents.Edited,
@@ -232,7 +239,8 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
     }
 
     public Task<MutationResult> SetValidationAsync(
-        long id, ValidationSnapshot snapshot, DuplicateMatch duplicate, string actor, DateTime nowUtc, CancellationToken ct)
+        long id, ValidationSnapshot snapshot, ValidationSnapshot snapshotV2, DuplicateMatch duplicate, string actor,
+        DateTime nowUtc, CancellationToken ct)
     {
         lock (_gate)
         {
@@ -252,6 +260,7 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
                 UpdatedUtc = nowUtc,
                 UpdatedBy = actor,
             };
+            updated = WithSnapshotV2(updated, readable, snapshotV2);
             _requests[id] = updated;
             AddEvent(
                 id, SavedRequestEvents.Validated,
@@ -507,8 +516,23 @@ public sealed class FakeSavedRequestStore : ISavedRequestStore
     private SavedRequest View(SavedRequest r)
     {
         var last = _attempts[r.Id].MaxBy(a => a.Id);
-        return r with { LastAttempt = last is null ? null : Copy(last), DuplicateReasons = r.DuplicateReasons.ToList() };
+        return r with
+        {
+            LastAttempt = last is null ? null : Copy(last),
+            DuplicateReasons = r.DuplicateReasons.ToList(),
+            Metadata = Copy(r.Metadata),
+        };
     }
+
+    // T-1105: the v2 snapshot and the two columns written with it.
+    private static SavedRequest WithSnapshotV2(SavedRequest r, bool readable, ValidationSnapshot snapshotV2) => r with
+    {
+        ValidationV2 = snapshotV2,
+        NeedsAttentionV2 = SavedRequestColumns.NeedsAttentionV2(readable, snapshotV2, r.Metadata),
+        ProblemCount = snapshotV2.ProblemCount,
+    };
+
+    private static SaveMetadata Copy(SaveMetadata m) => m with { MetadataErrors = m.MetadataErrors.ToList() };
 
     private static bool NeedsAttention(PayloadRead read, ValidationSnapshot snapshot) => !read.Readable || snapshot.NeedsAttention;
 

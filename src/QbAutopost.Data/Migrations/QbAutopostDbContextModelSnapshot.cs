@@ -394,6 +394,10 @@ namespace QbAutopost.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("family_id");
 
+                    b.Property<long?>("GraceSuccessorId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("grace_successor_id");
+
                     b.Property<long?>("ReplacedById")
                         .HasColumnType("bigint")
                         .HasColumnName("replaced_by_id");
@@ -477,13 +481,42 @@ namespace QbAutopost.Data.Migrations
                         .HasColumnType("text[]")
                         .HasColumnName("duplicate_reasons");
 
+                    b.Property<string>("EmailFrom")
+                        .HasColumnType("text")
+                        .HasColumnName("email_from");
+
+                    b.Property<string>("EmailMessageId")
+                        .HasColumnType("text")
+                        .HasColumnName("email_message_id");
+
+                    b.Property<DateTime?>("EmailReceivedUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("email_received_utc");
+
+                    b.Property<string>("EmailSubject")
+                        .HasColumnType("text")
+                        .HasColumnName("email_subject");
+
                     b.Property<string>("IdempotencyKey")
                         .HasColumnType("text")
                         .HasColumnName("idempotency_key");
 
+                    b.Property<List<string>>("MetadataErrors")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text[]")
+                        .HasColumnName("metadata_errors")
+                        .HasDefaultValueSql("'{}'::text[]");
+
                     b.Property<bool>("NeedsAttention")
                         .HasColumnType("boolean")
                         .HasColumnName("needs_attention");
+
+                    b.Property<bool>("NeedsAttentionV2")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("needs_attention_v2");
 
                     b.Property<string>("OriginalBody")
                         .IsRequired()
@@ -499,12 +532,28 @@ namespace QbAutopost.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("post_id");
 
+                    b.Property<int>("ProblemCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0)
+                        .HasColumnName("problem_count");
+
                     b.Property<string>("PublicRef")
                         .IsRequired()
                         .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("text")
                         .HasColumnName("public_ref")
                         .HasComputedColumnSql("'SR-' || CASE WHEN id < 1000000 THEN lpad(id::text, 6, '0') ELSE id::text END", true);
+
+                    b.Property<Guid?>("PushId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("push_id");
+
+                    b.Property<string>("PushIdHex")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("text")
+                        .HasColumnName("push_id_hex")
+                        .HasComputedColumnSql("replace(push_id::text, '-', '')", true);
 
                     b.Property<string>("Reference")
                         .HasColumnType("text")
@@ -519,6 +568,12 @@ namespace QbAutopost.Data.Migrations
                         .IsConcurrencyToken()
                         .HasColumnType("integer")
                         .HasColumnName("row_version");
+
+                    b.Property<int>("SkipCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0)
+                        .HasColumnName("skip_count");
 
                     b.Property<string>("Source")
                         .IsRequired()
@@ -551,6 +606,10 @@ namespace QbAutopost.Data.Migrations
                         .HasColumnType("jsonb")
                         .HasColumnName("validation");
 
+                    b.Property<string>("ValidationV2")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("validation_v2");
+
                     b.HasKey("Id")
                         .HasName("pk_saved_requests");
 
@@ -560,6 +619,16 @@ namespace QbAutopost.Data.Migrations
                     b.HasIndex("PublicRef")
                         .IsUnique()
                         .HasDatabaseName("ix_saved_requests_public_ref");
+
+                    b.HasIndex("PushId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_saved_requests_push_id")
+                        .HasFilter("push_id IS NOT NULL");
+
+                    b.HasIndex("PushIdHex")
+                        .HasDatabaseName("ix_saved_requests_push_id_hex");
+
+                    NpgsqlIndexBuilderExtensions.HasOperators(b.HasIndex("PushIdHex"), new[] { "text_pattern_ops" });
 
                     b.HasIndex("Reference")
                         .HasDatabaseName("ix_saved_requests_reference");
@@ -609,6 +678,10 @@ namespace QbAutopost.Data.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_saved_request_events");
+
+                    b.HasIndex("AtUtc")
+                        .IsDescending()
+                        .HasDatabaseName("ix_saved_request_events_at_utc");
 
                     b.HasIndex("SavedRequestId")
                         .HasDatabaseName("ix_saved_request_events_saved_request_id");
@@ -668,6 +741,10 @@ namespace QbAutopost.Data.Migrations
                     b.HasKey("Id")
                         .HasName("pk_saved_request_versions");
 
+                    b.HasIndex("CreatedUtc")
+                        .IsDescending()
+                        .HasDatabaseName("ix_saved_request_versions_created_utc");
+
                     b.HasIndex("SavedRequestId", "Number")
                         .IsUnique()
                         .HasDatabaseName("ix_saved_request_versions_saved_request_id_number");
@@ -708,6 +785,10 @@ namespace QbAutopost.Data.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_user_audit");
+
+                    b.HasIndex("AtUtc")
+                        .IsDescending()
+                        .HasDatabaseName("ix_user_audit_at_utc");
 
                     b.HasIndex("UserId")
                         .HasDatabaseName("ix_user_audit_user_id");

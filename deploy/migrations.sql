@@ -405,3 +405,153 @@ BEGIN
 END $EF$;
 COMMIT;
 
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    ALTER TABLE saved_requests ADD email_from text;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    ALTER TABLE saved_requests ADD email_message_id text;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    ALTER TABLE saved_requests ADD email_received_utc timestamp with time zone;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    ALTER TABLE saved_requests ADD email_subject text;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    ALTER TABLE saved_requests ADD metadata_errors text[] NOT NULL DEFAULT ('{}'::text[]);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    ALTER TABLE saved_requests ADD needs_attention_v2 boolean NOT NULL DEFAULT FALSE;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    ALTER TABLE saved_requests ADD problem_count integer NOT NULL DEFAULT 0;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    ALTER TABLE saved_requests ADD push_id uuid;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    ALTER TABLE saved_requests ADD skip_count integer NOT NULL DEFAULT 0;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    ALTER TABLE saved_requests ADD validation_v2 jsonb;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    ALTER TABLE refresh_tokens ADD grace_successor_id bigint;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    ALTER TABLE saved_requests ADD push_id_hex text GENERATED ALWAYS AS (replace(push_id::text, '-', '')) STORED;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    CREATE INDEX ix_user_audit_at_utc ON user_audit (at_utc DESC);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    CREATE INDEX ix_saved_requests_push_id_hex ON saved_requests (push_id_hex text_pattern_ops);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    CREATE UNIQUE INDEX ux_saved_requests_push_id ON saved_requests (push_id) WHERE push_id IS NOT NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    CREATE INDEX ix_saved_request_versions_created_utc ON saved_request_versions (created_utc DESC);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    CREATE INDEX ix_saved_request_events_at_utc ON saved_request_events (at_utc DESC);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    UPDATE saved_requests SET validation_v2 = validation, needs_attention_v2 = needs_attention,
+      problem_count = coalesce(jsonb_array_length(validation->'validation'),0) + coalesce(jsonb_array_length(validation->'errors'),0);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    UPDATE saved_requests s SET skip_count = (
+      SELECT count(*) FROM saved_request_versions v
+      CROSS JOIN LATERAL jsonb_array_elements(
+        CASE WHEN jsonb_typeof(v.payload->'transactions') = 'array' THEN v.payload->'transactions' ELSE '[]'::jsonb END) t
+      WHERE v.saved_request_id = s.id AND v.number = s.current_version AND t->'post' = 'false'::jsonb);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028112037_DashboardV2') THEN
+    INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+    VALUES ('20261028112037_DashboardV2', '8.0.33');
+    END IF;
+END $EF$;
+COMMIT;
+

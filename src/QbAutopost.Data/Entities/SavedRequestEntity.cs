@@ -41,6 +41,27 @@ public sealed class SavedRequestEntity
     public DateTime UpdatedUtc { get; set; }
     public string UpdatedBy { get; set; } = "";
 
+    // ---- dashboard v2 (T-1105, spec saved-requests-dashboard-v2 4.1) ----
+
+    /// <summary>Email subject of a v2 save, set once at creation.</summary>
+    public string? EmailSubject { get; set; }
+    public DateTime? EmailReceivedUtc { get; set; }
+    public string? EmailFrom { get; set; }
+    public string? EmailMessageId { get; set; }
+    public Guid? PushId { get; set; }
+
+    /// <summary><see cref="PushId"/> without dashes, computed by the database (prefix search).</summary>
+    public string? PushIdHex { get; set; }
+
+    public List<string> MetadataErrors { get; set; } = [];
+    public int SkipCount { get; set; }
+
+    /// <summary>The latest v2 <see cref="ValidationSnapshot"/> as JSON.</summary>
+    public string? ValidationV2 { get; set; }
+
+    public bool NeedsAttentionV2 { get; set; }
+    public int ProblemCount { get; set; }
+
     /// <summary>Application-managed concurrency token, incremented on every update (§5.1).</summary>
     public int RowVersion { get; set; }
 
