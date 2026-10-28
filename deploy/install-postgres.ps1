@@ -212,18 +212,36 @@ try {
         }
         $bootstrapPassword = New-RandomSecret -Length 24
         Say 'Installing PostgreSQL 16 (silent, no pgAdmin, no Stack Builder). This takes a few minutes.'
-        # The installer takes the superuser password on its command line, so it gets a throwaway one that is replaced below.
-        # Start-Process does not quote array items, so paths with spaces are quoted here.
-        $installArgs = @(
-            '--mode', 'unattended', '--unattendedmodeui', 'none',
-            '--superpassword', $bootstrapPassword,
-            '--servicename', $ServiceName, '--serverport', [string] $Port,
-            '--prefix', ('"' + $InstallDir + '"'), '--datadir', ('"' + $DataDir + '"'),
-            '--enable-components', 'server,commandlinetools',
-            '--disable-components', 'pgAdmin,stackbuilder'
-        )
-        $process = Start-Process -FilePath $installer -ArgumentList $installArgs -Wait -PassThru
-        if ($downloaded) { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
+        # The installer would show the superuser password in the process list to every local user, so all options go in an
+        # option file (--optionfile, lines of name=value) in a fresh folder under TEMP that only the current user can
+        # read (inheritance removed, one grant). It holds a throwaway password that is replaced below, and the folder
+        # is deleted in the finally block as soon as the installer exits.
+        $optionDir = Join-Path $env:TEMP ('qbautopost-pg-' + [Guid]::NewGuid().ToString('N'))
+        $optionFile = Join-Path $optionDir 'install.options'
+        $process = $null
+        try {
+            New-Item -ItemType Directory -Path $optionDir | Out-Null
+            $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+            $acl = New-Object System.Security.AccessControl.DirectorySecurity
+            $acl.SetAccessRuleProtection($true, $false)
+            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($me, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+            $acl.AddAccessRule($rule)
+            Set-Acl -LiteralPath $optionDir -AclObject $acl
+            $lines = @(
+                'mode=unattended', 'unattendedmodeui=none',
+                ('superpassword=' + $bootstrapPassword),
+                ('servicename=' + $ServiceName), ('serverport=' + $Port),
+                ('prefix=' + $InstallDir), ('datadir=' + $DataDir),
+                'enable-components=server,commandlinetools',
+                'disable-components=pgAdmin,stackbuilder'
+            )
+            [System.IO.File]::WriteAllText($optionFile, ($lines -join [Environment]::NewLine), [System.Text.Encoding]::ASCII)
+            $process = Start-Process -FilePath $installer -ArgumentList @('--optionfile', ('"' + $optionFile + '"')) -Wait -PassThru
+        }
+        finally {
+            if (Test-Path -LiteralPath $optionDir) { Remove-Item -LiteralPath $optionDir -Recurse -Force -ErrorAction SilentlyContinue }
+            if ($downloaded) { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
+        }
         if ($process.ExitCode -ne 0) { throw "The PostgreSQL installer exited with code $($process.ExitCode)." }
     }
     else {
@@ -301,7 +319,8 @@ ALTER ROLE $AppRole NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD $(ConvertTo-Sql
     # ---- 6. daily backup task --------------------------------------------------------------------------------
     if (-not $SkipBackupTask) {
         $backupScript = Join-Path $here 'backup-postgres.ps1'
-        $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -BackupFolder "{1}" -PgBin "{2}"' -f $backupScript, $BackupFolder, $PgBin
+        $backupDir = $BackupFolder.TrimEnd([char]92)  # a trailing backslash would escape the closing quote
+        $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -BackupFolder "{1}" -PgBin "{2}"' -f $backupScript, $backupDir, $PgBin
         $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments -WorkingDirectory $here
         $trigger = New-ScheduledTaskTrigger -Daily -At $BackupTime
         # SYSTEM: no password is stored, and it reads the machine-scoped variable. A backup folder on a network share

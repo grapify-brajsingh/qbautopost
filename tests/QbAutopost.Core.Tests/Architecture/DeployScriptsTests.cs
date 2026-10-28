@@ -119,6 +119,9 @@ public sealed class DeployScriptsTests
         var script = Script(file);
 
         Assert.DoesNotContain("--password", script, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("--superpassword", script, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("PGPASSWORD=", script, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("postgres://", script, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("-W ", script, StringComparison.Ordinal);
         Assert.DoesNotContain("Set-Content", script, StringComparison.Ordinal);
         Assert.DoesNotContain(" ?? ", script, StringComparison.Ordinal);
@@ -137,6 +140,28 @@ public sealed class DeployScriptsTests
         Assert.Contains("QBAUTOPOST_MIGRATION_CONNECTION", script, StringComparison.Ordinal);
         Assert.Contains("QBAUTOPOST__Auth__Jwt__SigningKey", script, StringComparison.Ordinal);
         Assert.DoesNotContain("0.0.0.0", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_PassInstallerOptionsInAnAclFile_When_ReadingInstallPostgres()
+    {
+        var script = Script("install-postgres.ps1");
+
+        Assert.Contains("--optionfile", script, StringComparison.Ordinal);
+        Assert.Contains("SetAccessRuleProtection($true, $false)", script, StringComparison.Ordinal);
+        Assert.Contains("finally", script, StringComparison.Ordinal);
+        Assert.Contains("-Recurse -Force", script, StringComparison.Ordinal);
+        // The only place a password may be handed to the installer is the option file, as name=value.
+        Assert.DoesNotContain("'--superpassword'", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_TrimTrailingBackslashOfBackupFolder_When_ReadingInstallPostgres()
+    {
+        var script = Script("install-postgres.ps1");
+
+        Assert.Contains("$BackupFolder.TrimEnd([char]92)", script, StringComparison.Ordinal);
+        Assert.Contains("-f $backupScript, $backupDir, $PgBin", script, StringComparison.Ordinal);
     }
 
     [Fact]

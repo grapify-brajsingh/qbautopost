@@ -25,6 +25,26 @@ public sealed class MigrationScriptTests(PostgresFixture postgres) : IClassFixtu
         Assert.Equal(Normalize(generated), Normalize(checkedIn));
     }
 
+    [Fact]
+    public void Should_NameEveryMigratedTableInGrants_When_ReadingScripts()
+    {
+        var migrations = File.ReadAllText(PostgresFixture.RepoFile("deploy", "migrations.sql"));
+        var grants = string.Join(
+            ' ',
+            File.ReadAllLines(PostgresFixture.RepoFile("deploy", "grants.sql"))
+                .Where(l => !l.TrimStart().StartsWith("--", StringComparison.Ordinal)));
+        var tables = System.Text.RegularExpressions.Regex
+            .Matches(migrations, @"CREATE TABLE (?:IF NOT EXISTS )?""?(\w+)""?")
+            .Select(m => m.Groups[1].Value)
+            .Distinct()
+            .ToList();
+
+        Assert.NotEmpty(tables);
+        Assert.All(tables, t => Assert.True(
+            System.Text.RegularExpressions.Regex.IsMatch(grants, $@"(?<![\w""]){t}(?![\w""])|""{t}"""),
+            $"table {t} is created by deploy/migrations.sql but deploy/grants.sql never names it: the app role could not touch it"));
+    }
+
     [PostgresFact]
     public async Task Should_RefuseUpdateOnVersions_When_ConnectedAsAppRole()
     {

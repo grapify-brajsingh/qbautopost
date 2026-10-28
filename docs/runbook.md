@@ -528,6 +528,10 @@ It installs the service `postgresql-x64-16`, sets `listen_addresses = '127.0.0.1
 writes the machine variables, runs `apply-migrations.ps1` and registers the daily backup task (§10.5). It can be run
 again: roles, database and variables are kept; `-RotatePasswords` issues new role passwords (restart the API after).
 Use `-SkipInstall` if PostgreSQL 16 is already there.
+The vendor installer is never given a password on its command line (any local user could read it in the process list):
+the script writes its options to an option file (`--optionfile`) in a fresh folder under `%TEMP%` that only the account
+running the script can read, holding a throwaway superuser password that is replaced before the script ends, and deletes
+that folder as soon as the installer exits, even on failure.
 
 ### 10.3 Migrate (every release that has a new migration)
 
