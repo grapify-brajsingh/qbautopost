@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace QbAutopost.Core.SavedRequests;
 
 /// <summary>The denormalised columns every store writes from a version's payload, so the fake and EF agree.</summary>
@@ -17,4 +19,31 @@ public static class SavedRequestColumns
         && Math.Abs(decimal.Round(total, 2, MidpointRounding.AwayFromZero)) <= MaxControlTotal
             ? total
             : null;
+
+    /// <summary>
+    /// The number of rows marked with a literal <c>post: false</c> (spec 4.1). The strings "false" and numbers do not
+    /// count; they are read errors elsewhere.
+    /// </summary>
+    public static int SkipCountOf(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.Object
+            || !payload.TryGetProperty("transactions", out var rows)
+            || rows.ValueKind != JsonValueKind.Array)
+        {
+            return 0;
+        }
+
+        var count = 0;
+        foreach (var row in rows.EnumerateArray())
+        {
+            if (row.ValueKind == JsonValueKind.Object
+                && row.TryGetProperty("post", out var post)
+                && post.ValueKind == JsonValueKind.False)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
 }
