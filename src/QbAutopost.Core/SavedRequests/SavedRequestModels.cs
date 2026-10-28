@@ -17,7 +17,11 @@ public static class SavedRequestEvents
     public const string Resolved = "resolved";
 }
 
-public enum CreateKind { Created, Replayed, KeyReused }
+/// <summary>
+/// <see cref="PushIdReused"/>: the save's <c>pushId</c> is held by a record with a different original body (spec
+/// dashboard-v2 5.2); the result carries that record. Only a save with <c>Metadata.PushId</c> can produce it.
+/// </summary>
+public enum CreateKind { Created, Replayed, KeyReused, PushIdReused }
 
 public enum MutationKind { Ok, NotFound, Stale, WrongStatus, Unchanged }
 

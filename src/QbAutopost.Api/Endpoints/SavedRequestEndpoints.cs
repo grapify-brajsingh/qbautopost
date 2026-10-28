@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -136,6 +137,10 @@ public static class SavedRequestEndpoints
             case CreateKind.Replayed:
                 http.Response.Headers[IdempotencyMiddleware.ReplayedHeader] = "true";
                 return Json(SavedRequestViews.Saved(record));
+            case CreateKind.PushIdReused:
+                // v1 never sets SaveMetadata.PushId, so the store cannot report this here. It is not mapped to a
+                // v1 answer on purpose: any v1 body for it would be new behaviour. v2 maps it to push-id-reused.
+                throw new UnreachableException("A v1 save carries no pushId, so it cannot be push-id-reused.");
             default:
                 http.Response.Headers.Location =
                     $"{ApiRoutes.V1Prefix}/saved-requests/{record.Id.ToString(CultureInfo.InvariantCulture)}";

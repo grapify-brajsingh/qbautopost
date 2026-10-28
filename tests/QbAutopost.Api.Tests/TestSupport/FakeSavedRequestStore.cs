@@ -44,6 +44,18 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestStore
                 }
             }
 
+            if (request.Metadata.PushId is { } pushId)
+            {
+                var holder = _requests.Values.FirstOrDefault(r => r.Metadata.PushId == pushId);
+                if (holder is not null)
+                {
+                    var kind = string.Equals(holder.OriginalBody, request.OriginalBody, StringComparison.Ordinal)
+                        ? CreateKind.Replayed
+                        : CreateKind.PushIdReused;
+                    return Task.FromResult(new CreateResult(kind, View(holder)));
+                }
+            }
+
             var id = _nextRequestId++;
             var payload = request.Payload.Clone();
             var record = new SavedRequest(

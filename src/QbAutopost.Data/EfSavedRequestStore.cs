@@ -22,6 +22,7 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
     private const string RestartError = "the service restarted while this post was running";
     private const string SystemActor = "system";
     private const string IdempotencyIndex = "ix_saved_requests_source_idempotency_key";
+    private const string PushIdIndex = "ux_saved_requests_push_id";
     private const string LikeEscape = "\\";
 
     // A claim whose update matched nothing but which then finds the request pending again (claimed and finished in
@@ -40,6 +41,12 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
             return Replay(existing, request);
         }
 
+        // The key decides alone when it matched; the pushId check runs only when no key matched (spec 5.2).
+        if (request.Metadata.PushId is { } pushId && await FindByPushIdAsync(pushId, ct) is { } held)
+        {
+            return PushReplay(held, request);
+        }
+
         try
         {
             return await InsertAsync(request, ct);
@@ -53,6 +60,16 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
             var winner = await FindByKeyAsync(request.Source, request.IdempotencyKey!, ct)
                 ?? throw new InvalidOperationException("The idempotency key conflicted but no request holds it.", ex);
             return Replay(winner, request);
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException
+                                           {
+                                               SqlState: PostgresErrorCodes.UniqueViolation, ConstraintName: PushIdIndex,
+                                           })
+        {
+            // Another save with the same pushId committed between the look-up and the insert.
+            var winner = await FindByPushIdAsync(request.Metadata.PushId!.Value, ct)
+                ?? throw new InvalidOperationException("The pushId conflicted but no request holds it.", ex);
+            return PushReplay(winner, request);
         }
     }
 
@@ -131,6 +148,19 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
             .SingleOrDefaultAsync(ct);
         return id is null ? null : await LoadAsync(db, id.Value, ct);
     }
+
+    private async Task<SavedRequest?> FindByPushIdAsync(Guid pushId, CancellationToken ct)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var id = await db.SavedRequests
+            .Where(r => r.PushId == pushId)
+            .Select(r => (long?)r.Id)
+            .SingleOrDefaultAsync(ct);
+        return id is null ? null : await LoadAsync(db, id.Value, ct);
+    }
+
+    private static CreateResult PushReplay(SavedRequest existing, NewSavedRequest request) =>
+        new(existing.OriginalSha256 == Sha256(request.OriginalBody) ? CreateKind.Replayed : CreateKind.PushIdReused, existing);
 
     private static CreateResult Replay(SavedRequest existing, NewSavedRequest request) =>
         new(existing.OriginalSha256 == Sha256(request.OriginalBody) ? CreateKind.Replayed : CreateKind.KeyReused, existing);
