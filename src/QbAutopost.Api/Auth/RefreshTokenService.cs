@@ -22,7 +22,11 @@ public enum RefreshOutcome
     ReuseDetected,
 }
 
-public sealed record RefreshResult(RefreshOutcome Outcome, string? UserId, string? NewToken);
+/// <param name="FamilyId">
+/// T-1115: the presented token's family, set by <see cref="RefreshTokenService.RotateWithGraceAsync"/> so a v2 refusal
+/// can be audited as <c>refresh-reuse</c> with <c>{ familyId }</c>. <see cref="RefreshTokenService.RotateAsync"/> leaves it null.
+/// </param>
+public sealed record RefreshResult(RefreshOutcome Outcome, string? UserId, string? NewToken, Guid? FamilyId = null);
 
 /// <summary>
 /// Saved-requests spec 5.2, 11.2: refresh tokens are 32 random bytes, base64url, and only their SHA-256 (lower hex)
@@ -70,24 +74,64 @@ public sealed class RefreshTokenService(IDbContextFactory<QbAutopostDbContext> c
             return new RefreshResult(RefreshOutcome.Invalid, current.UserId, null);
         }
 
-        await using var transaction = await db.Database.BeginTransactionAsync(ct);
-        var claimed = await db.RefreshTokens
-            .Where(t => t.Id == current.Id && t.RevokedUtc == null)
-            .ExecuteUpdateAsync(set => set.SetProperty(t => t.RevokedUtc, now), ct);
-        if (claimed == 0)
+        if (await RotateLiveAsync(db, current, ip, now, ct) is not { } raw)
         {
-            await transaction.RollbackAsync(CancellationToken.None);
             await RevokeFamilyAsync(db, current.FamilyId, now, CancellationToken.None);
             return new RefreshResult(RefreshOutcome.ReuseDetected, current.UserId, null);
         }
 
-        var (raw, successor) = Add(db, current.UserId, current.FamilyId, ip, now);
-        await db.SaveChangesAsync(ct);
-        await db.RefreshTokens
-            .Where(t => t.Id == current.Id)
-            .ExecuteUpdateAsync(set => set.SetProperty(t => t.ReplacedById, successor.Id), ct);
-        await transaction.CommitAsync(ct);
         return new RefreshResult(RefreshOutcome.Ok, current.UserId, raw);
+    }
+
+    /// <summary>
+    /// T-1115 (dashboard v2 spec 11): <see cref="RotateAsync"/> for the v2 refresh, plus the reuse grace. A revoked
+    /// token is accepted once, and a second successor issued in its family, only when all of these hold:
+    /// (a) it was revoked by rotation (it has a successor); (b) that was at most <paramref name="grace"/> ago;
+    /// (c) its successor is neither rotated nor revoked (nor expired), which also means the family is not revoked,
+    /// since revoking a family revokes every live token in it; (d) <paramref name="ip"/> equals the successor's
+    /// <c>created_ip</c>; (e) no grace was given for it before (<c>grace_successor_id</c> is null). Anything else
+    /// revokes the family, as v1 does.
+    /// <para>
+    /// The second successor is recorded with a conditional update (<c>grace_successor_id</c> still null), so two grace
+    /// refreshes racing with one token give exactly one second successor; the loser takes the theft path. Once the
+    /// presented token is known to be revoked, nothing here depends on the caller staying connected.
+    /// </para>
+    /// </summary>
+    public async Task<RefreshResult> RotateWithGraceAsync(string rawToken, string? ip, TimeSpan grace, CancellationToken ct)
+    {
+        var hash = HashOf(rawToken);
+        var now = clock.UtcNow;
+        await using var db = await contexts.CreateDbContextAsync(ct);
+        var current = await db.RefreshTokens.AsNoTracking().SingleOrDefaultAsync(t => t.TokenSha256 == hash, ct);
+        if (current is null)
+        {
+            return new RefreshResult(RefreshOutcome.Invalid, null, null);
+        }
+
+        if (current.RevokedUtc is null)
+        {
+            if (current.ExpiresUtc <= now)
+            {
+                return new RefreshResult(RefreshOutcome.Invalid, current.UserId, null, current.FamilyId);
+            }
+
+            if (await RotateLiveAsync(db, current, ip, now, ct) is { } raw)
+            {
+                return new RefreshResult(RefreshOutcome.Ok, current.UserId, raw, current.FamilyId);
+            }
+
+            // A concurrent refresh rotated it first (and has committed: the claim waited for its row lock). Read what
+            // that refresh stored, so the grace below sees the successor.
+            current = await db.RefreshTokens.AsNoTracking().SingleAsync(t => t.Id == current.Id, CancellationToken.None);
+        }
+
+        if (await GraceAsync(db, current, ip, now, grace) is { } second)
+        {
+            return new RefreshResult(RefreshOutcome.Ok, current.UserId, second, current.FamilyId);
+        }
+
+        await RevokeFamilyAsync(db, current.FamilyId, now, CancellationToken.None);
+        return new RefreshResult(RefreshOutcome.ReuseDetected, current.UserId, null, current.FamilyId);
     }
 
     /// <summary>Revokes <paramref name="rawToken"/> and nothing else (logout); true when a live token was revoked.</summary>
@@ -135,6 +179,88 @@ public sealed class RefreshTokenService(IDbContextFactory<QbAutopostDbContext> c
         };
         db.RefreshTokens.Add(entity);
         return (raw, entity);
+    }
+
+    /// <summary>
+    /// Revokes the live token <paramref name="current"/> and issues its successor, in one transaction. The revocation is
+    /// conditional, so of two refreshes racing with one token only one gets a successor; null for the loser.
+    /// </summary>
+    private async Task<string?> RotateLiveAsync(QbAutopostDbContext db, RefreshTokenEntity current, string? ip, DateTime now, CancellationToken ct)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        var claimed = await db.RefreshTokens
+            .Where(t => t.Id == current.Id && t.RevokedUtc == null)
+            .ExecuteUpdateAsync(set => set.SetProperty(t => t.RevokedUtc, now), ct);
+        if (claimed == 0)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            return null;
+        }
+
+        var (raw, successor) = Add(db, current.UserId, current.FamilyId, ip, now);
+        await db.SaveChangesAsync(ct);
+        await db.RefreshTokens
+            .Where(t => t.Id == current.Id)
+            .ExecuteUpdateAsync(set => set.SetProperty(t => t.ReplacedById, successor.Id), ct);
+        await transaction.CommitAsync(ct);
+        return raw;
+    }
+
+    /// <summary>
+    /// The grace refresh of the revoked token <paramref name="current"/> (see <see cref="RotateWithGraceAsync"/>): the raw
+    /// second successor, or null when any condition fails. Runs under <see cref="CancellationToken.None"/>.
+    /// </summary>
+    private async Task<string?> GraceAsync(QbAutopostDbContext db, RefreshTokenEntity current, string? ip, DateTime now, TimeSpan grace)
+    {
+        var none = CancellationToken.None;
+
+        // (a) revoked by rotation, (b) within the grace, (e) no grace given yet.
+        if (current.ReplacedById is not { } successorId
+            || current.RevokedUtc is not { } revokedUtc
+            || now - revokedUtc > grace
+            || current.GraceSuccessorId is not null)
+        {
+            return null;
+        }
+
+        // SPEC-GAP T-1115 (Q-102): (d) compares addresses; an unknown address equals nothing, so it gets no grace.
+        if (string.IsNullOrEmpty(ip))
+        {
+            return null;
+        }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(none);
+
+        // The successor's row lock: a rotation or revocation of it in flight finishes first, so the read below is final.
+        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT id FROM refresh_tokens WHERE id = {successorId} FOR UPDATE", none);
+        var successor = await db.RefreshTokens.AsNoTracking().SingleOrDefaultAsync(t => t.Id == successorId, none);
+
+        // (c) the successor is live: not rotated, not revoked, not expired. (d) the caller's address is the successor's.
+        if (successor is null
+            || successor.RevokedUtc is not null
+            || successor.ReplacedById is not null
+            || successor.ExpiresUtc <= now
+            || !string.Equals(successor.CreatedIp, ip, StringComparison.Ordinal))
+        {
+            await transaction.RollbackAsync(none);
+            return null;
+        }
+
+        var (raw, second) = Add(db, current.UserId, current.FamilyId, ip, now);
+        await db.SaveChangesAsync(none);
+
+        // (e) again, atomically: of two grace refreshes racing with one token, exactly one records its second successor.
+        var recorded = await db.RefreshTokens
+            .Where(t => t.Id == current.Id && t.GraceSuccessorId == null)
+            .ExecuteUpdateAsync(set => set.SetProperty(t => t.GraceSuccessorId, second.Id), none);
+        if (recorded == 0)
+        {
+            await transaction.RollbackAsync(none);
+            return null;
+        }
+
+        await transaction.CommitAsync(none);
+        return raw;
     }
 
     private static Task<int> RevokeFamilyAsync(QbAutopostDbContext db, Guid familyId, DateTime now, CancellationToken ct) =>

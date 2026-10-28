@@ -153,7 +153,7 @@
         ],
         "operationId": "login",
         "summary": "Sign in with email and password.",
-        "description": "Answers an access token (JWT, HS256, `Auth:Jwt:AccessTokenMinutes`) and sets the refresh cookie `qbautopost_refresh` (`HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`, `Auth:Jwt:RefreshTokenDays`). An unknown email, a wrong password and a disabled account all answer the same `401 invalid-credentials`. `Auth:Lockout:MaxFailedAttempts` wrong passwords lock the account for `Auth:Lockout:LockoutMinutes` (`423 locked-out`). Failed sign-ins are also braked per address and per email by `Api:RateLimits:FailedAuthPerMinute` (`429`). Every failure is recorded in `user_audit`. `503 auth-not-configured` when `Auth:Jwt:SigningKey` is missing; `503 database-unavailable` when the database is not ready.",
+        "description": "Answers an access token (JWT, HS256, `Auth:Jwt:AccessTokenMinutes`) and sets the refresh cookie `qbautopost_refresh` (`HttpOnly; Secure; SameSite=Strict; Path=/api/v2/auth`, `Auth:Jwt:RefreshTokenDays`). The v2 cookie path is `/api/v2/auth`, so v1 and v2 sessions never see each other's cookie. An unknown email, a wrong password and a disabled account all answer the same `401 invalid-credentials`. `Auth:Lockout:MaxFailedAttempts` wrong passwords lock the account for `Auth:Lockout:LockoutMinutes` (`423 locked-out`). Failed sign-ins are also braked per address and per email by `Api:RateLimits:FailedAuthPerMinute` (`429`). Every failure is recorded in `user_audit`. `503 auth-not-configured` when `Auth:Jwt:SigningKey` is missing; `503 database-unavailable` when the database is not ready.",
         "x-required-scope": "none",
         "security": [],
         "requestBody": {
@@ -216,7 +216,7 @@
         ],
         "operationId": "refreshAccessToken",
         "summary": "Exchange the refresh cookie for a new access token and a new refresh cookie.",
-        "description": "Takes no body and no header credential: only the `qbautopost_refresh` cookie. The presented token is revoked and its successor set. Presenting a token that was already revoked revokes its whole family (a theft signal) and answers `401`; so does a missing, unknown or expired token, and the cookie is then cleared.",
+        "description": "Takes no body and no header credential: only the `qbautopost_refresh` cookie, which v2 sets and clears with `Path=/api/v2/auth`. The presented token is revoked and its successor set. **Reuse grace (v2 only):** a token that was already revoked is accepted once more, and a second successor issued in its family (both successors stay valid), when all of these hold: (a) it was revoked by rotation and its family is not revoked; (b) that was at most `Auth:Jwt:RefreshReuseGraceSeconds` ago (default 30); (c) its successor is neither rotated nor revoked; (d) the caller's address equals the address the successor was issued to (an unknown address gets no grace); (e) no grace was given for it before. Otherwise presenting a revoked token revokes its whole family (a theft signal), answers `401` and is recorded in `user_audit` as `refresh-reuse` with `{ familyId }`; a missing, unknown or expired token also answers `401`, and the cookie is then cleared. v1 refresh has no grace.",
         "x-required-scope": "none",
         "security": [],
         "responses": {
@@ -381,7 +381,7 @@
         ],
         "operationId": "listUsers",
         "summary": "List users.",
-        "description": "Ordered by email. A bad `role`, `disabled`, `page` or `pageSize` answers `400`.",
+        "description": "Ordered by email. A bad `role`, `disabled`, `status`, `page` or `pageSize` answers `400`. Every filter given must hold (AND); repeated `status` values are OR'd.",
         "x-required-scope": "users:manage",
         "security": [
           {
@@ -419,6 +419,20 @@
             "description": "Only disabled (`true`) or only enabled (`false`) users.",
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Only users with one of these statuses; repeat the parameter for more than one (`?status=locked&status=disabled`). An unknown value answers `400`.",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/UserStatus"
+              }
             }
           },
           {
@@ -3395,7 +3409,7 @@
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/UserView"
+              "$ref": "#/components/schemas/UserListRow"
             }
           },
           "page": {
@@ -3406,6 +3420,58 @@
           },
           "total": {
             "type": "integer"
+          }
+        }
+      },
+      "UserStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "must-change-password",
+          "locked",
+          "disabled"
+        ],
+        "description": "Exactly one holds, evaluated in this order: `disabled`; `locked` (not disabled, and the lockout has not ended); `must-change-password`; `active`."
+      },
+      "UserListRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "description": "`admin`, `editor` or `viewer`; empty when the account holds no role, or more than one (Q-87)."
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "mustChangePassword": {
+            "type": "boolean"
+          },
+          "createdUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastLoginUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lockedOutUntilUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Set only while a lockout is still running."
+          },
+          "status": {
+            "$ref": "#/components/schemas/UserStatus"
           }
         }
       },

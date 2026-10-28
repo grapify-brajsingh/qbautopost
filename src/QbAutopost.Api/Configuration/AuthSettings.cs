@@ -33,6 +33,12 @@ public sealed class JwtSettings
 
     public int RefreshTokenDays { get; set; } = 7;
 
+    /// <summary>
+    /// T-1115 (dashboard v2 spec 11): how long after its rotation a refresh token may come back once to the v2 refresh
+    /// and get a second successor. v1 refresh has no grace. Zero or less gives none.
+    /// </summary>
+    public int RefreshReuseGraceSeconds { get; set; } = 30;
+
     /// <summary>False when the key is empty or shorter than <see cref="MinSigningKeyBytes"/>: API keys keep working, Bearer answers 503.</summary>
     public bool HasUsableKey => Encoding.UTF8.GetByteCount(SigningKey) >= MinSigningKeyBytes;
 }
