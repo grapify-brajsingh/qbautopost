@@ -3,8 +3,9 @@
   <PropertyGroup>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
-    <!-- IANA zone ids (Asia/Kolkata) resolve on Windows only through ICU; Directory.Build.props turns it off. -->
-    <InvariantGlobalization>false</InvariantGlobalization>
+    <!-- IANA zone ids (Asia/Kolkata) resolve on Windows only through ICU; Directory.Build.props turns it off.
+         Linux reads tzdata without ICU, and forcing ICU there would abort the host when libicu is missing. -->
+    <InvariantGlobalization Condition="$([MSBuild]::IsOSPlatform('Windows'))">false</InvariantGlobalization>
   </PropertyGroup>
 
   <ItemGroup>

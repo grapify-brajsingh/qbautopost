@@ -65,4 +65,17 @@ public class DateBoundsTests
         Assert.Equal(TimeZoneInfo.Utc, utc);
         Assert.True(DateBounds.TryZone("", out _));
     }
+
+    [Fact]
+    public void Should_ReturnFalse_When_UpperBoundOverflowsMaxDate()
+    {
+        Assert.False(DateBounds.TryParse("9999-12-31", null, upper: true, out _));
+    }
+
+    [Fact]
+    public void Should_ReturnFalse_When_LowerBoundUnderflowsInPositiveOffsetZone()
+    {
+        Assert.True(DateBounds.TryZone("Asia/Kolkata", out var tz));
+        Assert.False(DateBounds.TryParse("0001-01-01", tz, upper: false, out _));
+    }
 }

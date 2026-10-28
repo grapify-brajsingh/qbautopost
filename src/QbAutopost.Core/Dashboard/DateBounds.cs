@@ -21,9 +21,24 @@ public static class DateBounds
 
         if (DateOnly.TryParseExact(raw, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var day))
         {
-            if (upper) day = day.AddDays(1);
-            utc = TimeBuckets.LocalMidnightUtc(day, tz ?? TimeZoneInfo.Utc);
-            return true;
+            try
+            {
+                if (upper) day = day.AddDays(1);
+                var zone = tz ?? TimeZoneInfo.Utc;
+                utc = TimeBuckets.LocalMidnightUtc(day, zone);
+                // Conversion clamps silently at DateTime.MinValue; a clamp that moved the instant is not a real bound.
+                if (utc == DateTime.MinValue && zone.GetUtcOffset(utc) > TimeSpan.Zero)
+                {
+                    utc = default;
+                    return false;
+                }
+                return true;
+            }
+            catch (ArgumentException) // outside DateTime range once the day is shifted or converted
+            {
+                utc = default;
+                return false;
+            }
         }
 
         if (Instant.IsMatch(raw) &&
