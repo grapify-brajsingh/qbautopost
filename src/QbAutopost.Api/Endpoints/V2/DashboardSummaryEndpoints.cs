@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using QbAutopost.Api.Database;
+using QbAutopost.Api.SavedRequests;
 using QbAutopost.Core.Dashboard;
 
 namespace QbAutopost.Api.Endpoints.V2;
@@ -21,7 +22,7 @@ public static class DashboardSummaryEndpoints
 
     private static readonly Regex Instant = new(
         @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,7})?)?(Z|[+-]\d{2}:\d{2})\z",
-        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase,
+        RegexOptions.CultureInvariant,
         TimeSpan.FromMilliseconds(100));
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
@@ -116,10 +117,9 @@ public static class DashboardSummaryEndpoints
             }
         }
 
-        var zoneId = q.TryGetValue("tz", out var tzText) && !string.IsNullOrWhiteSpace(tzText.ToString())
-            ? tzText.ToString().Trim()
-            : "UTC";
-        if (!DateBounds.TryZone(zoneId, out var zone))
+        // A tz that is sent must name a zone: blank or padded is refused, never trimmed or read as UTC.
+        var zoneId = q.TryGetValue("tz", out var tzText) ? tzText.ToString() : "UTC";
+        if (!V2QueryParser.IsZoneId(zoneId) || !DateBounds.TryZone(zoneId, out var zone))
         {
             error = "tz is an IANA time zone id, such as Asia/Kolkata or UTC.";
             return false;
@@ -219,7 +219,7 @@ public sealed record SummaryView(
 
 /// <summary>
 /// A <see cref="decimal"/> as a JSON number with at least two decimals, invariant (<c>60.00</c>, <c>248391.27</c>).
-/// A value carrying more decimals keeps them: this never rounds a stored amount.
+/// Never rounded: stored amounts have 2 decimals, so 2 are written; a value carrying more keeps them (rule 3).
 /// </summary>
 public sealed class MoneyJsonConverter : JsonConverter<decimal>
 {

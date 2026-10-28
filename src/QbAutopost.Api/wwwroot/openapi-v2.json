@@ -1226,7 +1226,7 @@
             "name": "tz",
             "in": "query",
             "required": false,
-            "description": "An IANA time zone id (`Asia/Kolkata`). Makes a plain date in `createdFrom`, `createdTo`, `receivedFrom`, `receivedTo`, `postedFrom` and `postedTo` a local day in this zone. Without it a plain date is a UTC day, as before. An unknown id answers `400 invalid-request`.",
+            "description": "An IANA time zone id (`Asia/Kolkata`). Makes a plain date in `createdFrom`, `createdTo`, `receivedFrom`, `receivedTo`, `postedFrom` and `postedTo` a local day in this zone. Without it a plain date is a UTC day, as before. An unknown, blank or space-padded id answers `400 invalid-request`.",
             "schema": {
               "type": "string"
             }
@@ -3044,7 +3044,7 @@
             "name": "tz",
             "in": "query",
             "required": false,
-            "description": "An IANA time zone id (default `UTC`). Buckets are local days in this zone, and `range` is rendered in it.",
+            "description": "An IANA time zone id (default `UTC` when absent). Buckets are local days in this zone, and `range` is rendered in it. An unknown, blank or space-padded id answers `400 invalid-request`.",
             "schema": {
               "type": "string",
               "default": "UTC"
@@ -6162,7 +6162,7 @@
               },
               "amount": {
                 "type": "number",
-                "description": "Two decimals, invariant (`248391.27`, `60.00`)."
+                "description": "Never rounded: stored amounts have 2 decimals, so 2 are written (`248391.27`, `60.00`); invariant, a `.` before the decimals."
               },
               "previousRows": {
                 "type": "integer",
@@ -6172,7 +6172,7 @@
               "previousAmount": {
                 "type": "number",
                 "nullable": true,
-                "description": "As `amount`, for the compare range; `null` without one."
+                "description": "As `amount` (never rounded; 2 decimals), for the compare range; `null` without one."
               }
             }
           },

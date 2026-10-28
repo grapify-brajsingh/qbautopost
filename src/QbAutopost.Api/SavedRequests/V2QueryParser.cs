@@ -52,7 +52,7 @@ public static class V2QueryParser
 
         // T-1212a (dashboard-api-m12 5): tz makes a plain date a local day; without it a plain date stays a UTC day.
         TimeZoneInfo? tz = null;
-        if (q.TryGetValue("tz", out var tzText) && !DateBounds.TryZone(tzText.ToString(), out tz))
+        if (q.TryGetValue("tz", out var tzText) && (!IsZoneId(tzText.ToString()) || !DateBounds.TryZone(tzText.ToString(), out tz)))
         {
             error = "tz is an IANA time zone id, such as Asia/Kolkata or UTC.";
             return false;
@@ -112,6 +112,13 @@ public static class V2QueryParser
         };
         return true;
     }
+
+    /// <summary>
+    /// A sent <c>tz</c> names a zone: not blank and not padded. Nothing is trimmed, and blank is never read as UTC
+    /// (<see cref="DateBounds.TryZone"/> alone would).
+    /// </summary>
+    public static bool IsZoneId(string? text) =>
+        !string.IsNullOrWhiteSpace(text) && text.Trim().Length == text.Length;
 
     /// <summary>The trimmed value, or null when it is absent or blank.</summary>
     private static string? Text(IQueryCollection q, string name) =>

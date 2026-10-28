@@ -289,10 +289,10 @@ public static class ApiRoutes
             return get ? ApiScopes.RequestsRead : ApiScopes.Admin;
         }
 
-        // T-1212a (dashboard-api-m12 4.1): the Home summary is a read of saved-request history, for every role. Named
-        // whatever the prefix, so its v1 form (never mapped: it answers 404) needs the same scope as the v2 route, as the
-        // v1/v2 scope matrix requires of every v2 route. Only a GET is mapped; anything else stays admin.
-        if (p.Equals("/dashboard/summary", Ordinal))
+        // T-1212a (dashboard-api-m12 4.1): the Home summary is a read of saved-request history, for every role. Like the
+        // audit feed it exists under /api/v2 only, so /api/v1/dashboard/summary and the flat form keep the admin
+        // fall-through. Only a GET is mapped; anything else on the path stays admin.
+        if (p.Equals("/dashboard/summary", Ordinal) && path.Value!.StartsWith(V2Prefix + "/", Ordinal))
         {
             return get ? ApiScopes.RequestsRead : ApiScopes.Admin;
         }

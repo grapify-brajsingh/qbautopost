@@ -94,6 +94,27 @@ public sealed class V2SummaryTests : IDisposable
     }
 
     [Fact]
+    public async Task Should_WriteNegativeWithTwoDecimals_When_AmountNegative()
+    {
+        await PostedAtAsync(Store, "N", Utc(10, 27, 6), -12.5m);
+
+        var (_, body) = await GetAsync(Range);
+
+        Assert.Equal("-12.50", body.GetProperty("posted").GetProperty("amount").GetRawText());
+    }
+
+    [Fact]
+    public async Task Should_WriteEveryDecimal_When_StoredAmountHasMoreThanTwo()
+    {
+        // Never rounded (rule 3): stored amounts have 2 decimals, so 2 are written; a third is kept, not dropped.
+        await PostedAtAsync(Store, "X", Utc(10, 27, 6), 10.125m);
+
+        var (_, body) = await GetAsync(Range);
+
+        Assert.Equal("10.125", body.GetProperty("posted").GetProperty("amount").GetRawText());
+    }
+
+    [Fact]
     public async Task Should_ReturnNullPreviousAndTimeToPost_When_NoCompareAndNoPosts()
     {
         await SaveAsync(Store, "R1", Utc(10, 27, 20));
@@ -213,6 +234,19 @@ public sealed class V2SummaryTests : IDisposable
         await AssertInvalidAsync("from=2026-10-27T00:00:00Z&to=2026-10-28T00:00:00Z&tz=Mars/Olympus");
 
     [Theory]
+    [InlineData("tz=")]
+    [InlineData("tz=%20")]
+    [InlineData("tz=%20Asia/Kolkata")]
+    [InlineData("tz=Asia/Kolkata%20")]
+    public async Task Should_Return400_When_TzBlankOrPadded(string tz) =>
+        await AssertInvalidAsync("from=2026-10-27T00:00:00Z&to=2026-10-28T00:00:00Z&" + tz);
+
+    [Theory]
+    [InlineData("from=2026-10-27T00:00:00Z%0A&to=2026-10-28T00:00:00Z")]
+    [InlineData("from=2026-10-27T00:00:00Z&to=2026-10-28T00:00:00Z%0A")]
+    public async Task Should_Return400_When_InstantHasTrailingNewline(string query) => await AssertInvalidAsync(query);
+
+    [Theory]
     [InlineData("bucket=month")]
     [InlineData("bucket=Day")]
     public async Task Should_Return400_When_BucketUnknown(string bucket) =>
@@ -237,6 +271,23 @@ public sealed class V2SummaryTests : IDisposable
 
         Assert.Equal(HttpStatusCode.OK, status);
         Assert.Equal(ApiScopes.RequestsRead, ApiRoutes.ScopeFor("GET", Route));
+    }
+
+    [Theory]
+    [InlineData("/api/v1/dashboard/summary")]
+    [InlineData("/API/V1/Dashboard/Summary")]
+    [InlineData("/dashboard/summary")]
+    public void Should_KeepAdminScope_When_SummaryPathIsNotV2(string path) =>
+        Assert.Equal(ApiScopes.Admin, ApiRoutes.ScopeFor("GET", path));
+
+    [Fact]
+    public async Task Should_Refuse403_When_ViewerCallsV1SummaryPath()
+    {
+        using var viewer = _host.User(DashboardRoles.Viewer);
+
+        using var response = await viewer.GetAsync("/api/v1/dashboard/summary?from=2026-10-27T00:00:00Z&to=2026-10-28T00:00:00Z");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Theory]

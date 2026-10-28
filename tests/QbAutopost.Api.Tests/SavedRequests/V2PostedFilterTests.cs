@@ -142,6 +142,12 @@ public sealed class V2PostedFilterTests : IDisposable
     [InlineData("postedTo=2026-10-27T10:00:00")]
     [InlineData("createdFrom=2026-10-27T10:00")]
     [InlineData("receivedTo=yesterday")]
+    [InlineData("tz=")]
+    [InlineData("tz=%20")]
+    [InlineData("tz=%20Asia/Kolkata&postedFrom=2026-10-27")]
+    [InlineData("tz=Asia/Kolkata%20&postedFrom=2026-10-27")]
+    [InlineData("postedFrom=2026-10-27T00:00:00Z%0A")]
+    [InlineData("createdTo=2026-10-27T00:00:00%2B05:30%0A")]
     public async Task Should_Return400_When_TzOrDateBad(string query)
     {
         var (status, body) = await GetAsync(query);
