@@ -954,7 +954,7 @@
         ],
         "operationId": "saveRequest",
         "summary": "Save a validate-and-post body for a person to review and post.",
-        "description": "Saved-requests §6.1. The body is exactly the validate-and-post body; nothing is posted. Over `Api:MaxRequestBodyBytes` answers `413` and anything that is not one JSON object `400 not-a-json-object`; neither is stored. Every JSON object is stored as version 1, byte for byte, even when it cannot be read (`needsAttention: true`, the JSON path in `validation.errors`) or when validation refuses it (`dryRun`, `allowModelAccounts`, control-total mismatch, too many rows) or holds rows. When validation cannot run (rules file missing, lists unreadable) the snapshot is `unavailable` and the save still succeeds. A request that looks like another one is flagged (`duplicate`), never refused. `createdBy` and `updatedBy` come from the caller, never the body. Treat any `201` as success.",
+        "description": "Saved-requests §6.1. The body is exactly the validate-and-post body; nothing is posted. Over `Api:MaxRequestBodyBytes` answers `413` and anything that is not one JSON object `400 not-a-json-object`; neither is stored. Every JSON object is stored, its original body byte for byte, even when it cannot be read (`needsAttention: true`, the JSON path in `validation.errors`) or when validation refuses it (`dryRun`, `allowModelAccounts`, control-total mismatch, too many rows) or holds rows. When validation cannot run (rules file missing, lists unreadable) the snapshot is `unavailable` and the save still succeeds. A request that looks like another one is flagged (`duplicate`), never refused. `createdBy` and `updatedBy` come from the caller, never the body. Treat any `201` as success. v2 (dashboard v2 §5, §7.1): rows without an `externalId` get `row-<n>` in version 1, while `GET …/original` keeps the exact bytes; `email` and `pushId` are read from the body as received; the canonical hash ignores `email`, `pushId` and `post: true`. Repeats are checked in order: `Idempotency-Key` (its rules alone when it matches), then `pushId`.",
         "x-required-scope": "requests:submit",
         "security": [
           {
@@ -981,7 +981,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SyncPostRequest"
+                "$ref": "#/components/schemas/SavedRequestSaveBody"
               }
             }
           }
@@ -1006,7 +1006,21 @@
             }
           },
           "200": {
-            "description": "The same `Idempotency-Key` and body were saved before: the existing record (`Idempotency-Replayed: true`).",
+            "description": "Nothing was saved; the existing record. Either the same `Idempotency-Key` and body were saved before, or (no key matched) the same `pushId` with the same body.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "description": "`true`: the existing record, nothing was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Idempotent-Replayed": {
+                "description": "`true`, the same answer under the spelling of dashboard v2 §5.2 (Q-101).",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1026,11 +1040,18 @@
             }
           },
           "409": {
-            "description": "`idempotency-key-reused`: this source used the key for a different body; nothing was saved.",
+            "description": "`idempotency-key-reused`: this source used the key for a different body. `push-id-reused`: the `pushId` is held by another request with a different body (`savedRequestId`, `publicRef` name it). Nothing was saved.",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problem"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PushIdReusedProblem"
+                    }
+                  ]
                 }
               }
             }
@@ -3292,7 +3313,7 @@
           "externalId": {
             "type": "string",
             "nullable": true,
-            "description": "The caller's key. Echoed and stored; never used to decide identity."
+            "description": "The caller's key. Echoed and stored; never used to decide identity. A v2 save gives a row without one (missing, `null` or `\"\"`) `row-<n>` (1-based position, `-2`, `-3`, ... appended when taken); a v2 edit gives it `edit<v>-<n>`. The original body keeps the bytes as sent."
           },
           "kind": {
             "$ref": "#/components/schemas/TxnKind"
@@ -3336,6 +3357,11 @@
             "type": "string",
             "nullable": true,
             "description": "Last four digits of the account; part of the fingerprint."
+          },
+          "post": {
+            "type": "boolean",
+            "nullable": true,
+            "description": "Dashboard v2 §6.1. `false` keeps the row in the request but never sends it: it still counts toward `controlTotal`, and v2 validate and post report it under `skipped` with `reason: \"not-to-post\"`, never `held`. Missing or `true` means post. Any other value makes the version unreadable in v2 (`$.transactions[i].post: must be true or false`). Every row `false` is refused as `nothing-to-post`."
           }
         }
       },
@@ -3750,9 +3776,98 @@
           }
         }
       },
+      "SavedRequestEmailInput": {
+        "type": "object",
+        "description": "Dashboard v2 §5.1: the email this request came from. Every field is optional. A field of the wrong type (or `email` that is not an object) is kept as null; the save still succeeds and nothing is flagged. Never reaches the engine.",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "description": "At most 998 characters are kept."
+          },
+          "receivedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "description": "An ISO 8601 instant with an offset (`Z` or `+hh:mm`)."
+          },
+          "from": {
+            "type": "string",
+            "description": "At most 998 characters are kept."
+          },
+          "messageId": {
+            "type": "string",
+            "description": "At most 998 characters are kept."
+          }
+        }
+      },
+      "SavedRequestEmail": {
+        "type": "object",
+        "nullable": true,
+        "description": "Dashboard v2 §5.1: the email read at the v2 save, or `null` when none of the four fields was kept. A field that was missing or malformed is `null`.",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "nullable": true
+          },
+          "receivedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "from": {
+            "type": "string",
+            "nullable": true
+          },
+          "messageId": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "SavedRequestSaveBody": {
+        "description": "Dashboard v2 §5: the validate-and-post body, plus the optional `email` and `pushId`. Both are read from the body as received, kept in the original body and version 1, and left out of the canonical hash and change list (§7).",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SyncPostRequest"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "email": {
+                "$ref": "#/components/schemas/SavedRequestEmailInput"
+              },
+              "pushId": {
+                "type": "string",
+                "format": "uuid",
+                "nullable": true,
+                "description": "Dashboard v2 §5.2: the sender's id for this push. A UUID is stored and returned lower case with dashes. Anything else is saved, flagged (`$.pushId: not a UUID`, `needsAttention: true`, never cleared) and stays postable. The same `pushId` with the same body answers `200` with the existing record; with a different body `409 push-id-reused`."
+              }
+            }
+          }
+        ]
+      },
+      "PushIdReusedProblem": {
+        "description": "Dashboard v2 §5.2: `push-id-reused`. Names the request that holds the `pushId`.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "savedRequestId": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "publicRef": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
       "SavedRequestSaved": {
         "type": "object",
-        "description": "§6.1.",
+        "description": "§6.1, as served by v2: `needsAttention` and `validation` are the v2 judgement (dashboard v2 §5.3, §6.4), which sets `post: false` rows aside as `not-to-post` and counts a malformed `pushId`.",
         "properties": {
           "id": {
             "type": "integer",
@@ -3789,6 +3904,15 @@
           "createdUtc": {
             "type": "string",
             "format": "date-time"
+          },
+          "pushId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "Lower case with dashes; `null` when none was sent or it was not a UUID."
+          },
+          "email": {
+            "$ref": "#/components/schemas/SavedRequestEmail"
           }
         }
       },

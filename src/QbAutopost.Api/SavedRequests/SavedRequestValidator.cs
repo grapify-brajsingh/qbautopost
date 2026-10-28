@@ -21,8 +21,32 @@ public sealed class SavedRequestValidator(DirectPostRunner runner, ILogger<Saved
     /// <summary>Shown to callers when the rules file is missing (spec 10.8).</summary>
     public const string RulesMissing = "rules file missing";
 
+    /// <summary>
+    /// Dashboard v2 spec 6.4: the v1 and the v2 judgement of one version, from the same inputs. v1 plans with no row
+    /// set aside, exactly as <see cref="Validate"/> always has. v2 plans with the rows marked <c>post: false</c> set
+    /// aside; a <c>post</c> that is not a boolean makes the v2 snapshot unreadable, naming its path, and leaves the v1
+    /// snapshot as it is.
+    /// </summary>
     /// <param name="savedRequestId">For the log line only; null while a new request is being saved.</param>
-    public ValidationSnapshot Validate(PayloadRead read, int versionNumber, DateTime nowUtc, long? savedRequestId = null)
+    public (ValidationSnapshot V1, ValidationSnapshot V2) ValidateBoth(
+        PayloadRead read, NotPostedRead notPosted, int versionNumber, DateTime nowUtc, long? savedRequestId = null)
+    {
+        var v1 = Validate(read, versionNumber, nowUtc, savedRequestId);
+        if (notPosted.Errors.Count > 0)
+        {
+            // v1's read errors come first, as the v2 detail lists them (spec 6.4, Display).
+            return (v1, Snapshot(ValidationState.Unreadable, versionNumber, nowUtc, [.. read.Errors, .. notPosted.Errors]));
+        }
+
+        return (v1, Validate(read, versionNumber, nowUtc, savedRequestId, notPosted.Indexes));
+    }
+
+    /// <param name="savedRequestId">For the log line only; null while a new request is being saved.</param>
+    /// <param name="notPosted">
+    /// Dashboard v2: the rows to set aside as <c>not-to-post</c>. Null (the default) plans every row, as v1 does.
+    /// </param>
+    public ValidationSnapshot Validate(
+        PayloadRead read, int versionNumber, DateTime nowUtc, long? savedRequestId = null, IReadOnlySet<int>? notPosted = null)
     {
         if (!read.Readable)
         {
@@ -38,7 +62,7 @@ public sealed class SavedRequestValidator(DirectPostRunner runner, ILogger<Saved
         DirectPlan plan;
         try
         {
-            plan = runner.Plan(request.ToDirectRequest());
+            plan = runner.Plan(notPosted is null ? request.ToDirectRequest() : request.ToDirectRequest(notPosted));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

@@ -33,6 +33,9 @@ public static class SavedRequestEndpoints
     private const int DefaultPageSize = 25;
     private const string DefaultSort = "-created";
 
+    /// <summary>Dashboard v2 spec 5.2: the replay header as that spec spells it, sent on v2 replays only (Q-101).</summary>
+    public const string PushIdReplayedHeader = "Idempotent-Replayed";
+
     /// <summary>Spec 7.1: the longest discard reason, after trimming.</summary>
     public const int MaxDiscardReasonLength = 500;
 
@@ -128,7 +131,7 @@ public static class SavedRequestEndpoints
         }
 
         var caller = CallerMiddleware.CallerOf(http)!;
-        var result = await intake.SaveAsync(raw!, key.Length == 0 ? null : key, caller, ct);
+        var result = await intake.SaveAsync(raw!, key.Length == 0 ? null : key, caller, ct, flavor);
         var record = result.Record;
         switch (result.Kind)
         {
@@ -140,17 +143,47 @@ public static class SavedRequestEndpoints
                     "idempotency-key-reused");
             case CreateKind.Replayed:
                 http.Response.Headers[IdempotencyMiddleware.ReplayedHeader] = "true";
+                if (flavor == ApiFlavor.V2)
+                {
+                    // SPEC-GAP T-1110 (Q-101): dashboard v2 spec 5.2 spells the replay header Idempotent-Replayed, while
+                    // every replay so far says Idempotency-Replayed. A v2 replay says both until the owner picks one.
+                    http.Response.Headers[PushIdReplayedHeader] = "true";
+                    return Json(SavedRequestViewsV2.Saved(record));
+                }
+
                 return Json(SavedRequestViews.Saved(record));
+            case CreateKind.PushIdReused when flavor == ApiFlavor.V2:
+                return PushIdReused(record);
             case CreateKind.PushIdReused:
                 // v1 never sets SaveMetadata.PushId, so the store cannot report this here. It is not mapped to a
                 // v1 answer on purpose: any v1 body for it would be new behaviour. v2 maps it to push-id-reused.
                 throw new UnreachableException("A v1 save carries no pushId, so it cannot be push-id-reused.");
             default:
                 http.Response.Headers.Location = Location(flavor, record.Id);
-                return Results.Json(
-                    SavedRequestViews.Saved(record), SavedRequestJson.Options, statusCode: StatusCodes.Status201Created);
+                return flavor == ApiFlavor.V2
+                    ? Results.Json(
+                        SavedRequestViewsV2.Saved(record), SavedRequestJson.Options, statusCode: StatusCodes.Status201Created)
+                    : Results.Json(
+                        SavedRequestViews.Saved(record), SavedRequestJson.Options, statusCode: StatusCodes.Status201Created);
         }
     }
+
+    /// <summary>
+    /// Dashboard v2 spec 5.2 (Q-94): the body's <c>pushId</c> is held by <paramref name="holder"/>, saved from a
+    /// different body. Nothing was stored; the problem names the holder so a person can find it.
+    /// </summary>
+    private static IResult PushIdReused(SavedRequest holder) =>
+        Results.Problem(
+            statusCode: StatusCodes.Status409Conflict,
+            title: "pushId already used",
+            detail: $"This pushId was already used for {holder.PublicRef} with a different body. Nothing was saved. "
+                + "Send a new pushId for a new request.",
+            type: "push-id-reused",
+            extensions: new Dictionary<string, object?>
+            {
+                ["savedRequestId"] = holder.Id,
+                ["publicRef"] = holder.PublicRef,
+            });
 
     /// <summary>
     /// The <c>Location</c> of a saved request on the surface it was saved through: <c>/api/v1/saved-requests/{id}</c>

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.Options;
 using QbAutopost.Api.Configuration;
+using QbAutopost.Api.Endpoints;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Api;
 using QbAutopost.Core.SavedRequests;
@@ -103,8 +104,15 @@ public sealed class SavedRequestIntake(
     /// <summary>
     /// Spec 6.1 step 3 onwards, for a body <see cref="TryParseObject"/> accepted. The source and the author are the
     /// caller (spec 5.3); a <c>createdBy</c> in the body is just another unknown field, kept and ignored.
+    /// <para>
+    /// Dashboard v2 (spec 5, 7, 7.1): a v2 save gives rows without an <c>externalId</c> a <c>row-&lt;n&gt;</c> id
+    /// before version 1 is written, reads <c>email</c> and <c>pushId</c> from the body as received, and hashes the
+    /// assigned payload by the v2 rules. The original body is kept byte for byte either way. A v1 save does none of
+    /// that. Both store the v2 snapshot beside the v1 one (spec 6.4); v1 answers never show it.
+    /// </para>
     /// </summary>
-    public async Task<CreateResult> SaveAsync(string rawBody, string? idempotencyKey, Caller caller, CancellationToken ct)
+    public async Task<CreateResult> SaveAsync(
+        string rawBody, string? idempotencyKey, Caller caller, CancellationToken ct, ApiFlavor flavor = ApiFlavor.V1)
     {
         if (!TryParseObject(rawBody, out var payload))
         {
@@ -113,17 +121,25 @@ public sealed class SavedRequestIntake(
 
         GuardStorable(payload);
 
+        var v2 = flavor == ApiFlavor.V2;
+        var version1 = v2 ? ExternalIdAssigner.AssignOnSave(payload) : payload;
+        var metadata = v2 ? SaveMetadataReader.Read(payload) : SaveMetadata.None;
+
         var now = clock.UtcNow;
-        var read = SavedPayloadReader.Read(payload);
-        var snapshot = validator.Validate(read, 1, now);
-        var canonical = PayloadCanonicalizer.Sha256(payload);
+        var read = SavedPayloadReader.Read(version1);
+        var (snapshot, snapshotV2) = validator.ValidateBoth(read, NotPostedRows.Read(version1), 1, now);
+        var canonical = PayloadCanonicalizer.Sha256(version1, v2 ? PayloadRules.V2 : PayloadRules.V1);
         var fingerprints = Fingerprints(read, now);
         var duplicate = await DetectAsync(canonical, read, fingerprints, null, now, ct);
 
         return await store.CreateAsync(
             new NewSavedRequest(
-                SourceOf(caller), caller.Actor, rawBody, payload, read, canonical, fingerprints, idempotencyKey,
-                snapshot, duplicate, now),
+                SourceOf(caller), caller.Actor, rawBody, version1, read, canonical, fingerprints, idempotencyKey,
+                snapshot, duplicate, now)
+            {
+                Metadata = metadata,
+                SnapshotV2 = snapshotV2,
+            },
             ct);
     }
 
