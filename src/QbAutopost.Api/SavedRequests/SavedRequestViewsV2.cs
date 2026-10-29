@@ -12,6 +12,13 @@ namespace QbAutopost.Api.SavedRequests;
 public sealed record EmailView(string? Subject, DateTime? ReceivedUtc, string? From, string? MessageId);
 
 /// <summary>
+/// Dashboard-api-m12 7.4: the PDF a request was saved from, copied from the extraction record at save (never from the
+/// client). Null on a request that was not saved from an upload.
+/// </summary>
+public sealed record UploadView(
+    string FileName, long SizeBytes, string Sha256, string Model, string PromptVersion, DateTime ExtractedUtc);
+
+/// <summary>
 /// Dashboard v2 spec 5: the answer to a v2 save. The v1 fields, with <c>needsAttention</c> and <c>validation</c> taken
 /// from the v2 judgement (spec 5.3, 6.4), plus <c>pushId</c> and <c>email</c>.
 /// </summary>
@@ -69,7 +76,8 @@ public sealed record SavedRequestSummaryV2View(
     int HistoryCount,
     ValidationSummaryV2View ValidationSummary,
     PostSummaryView? PostSummary,
-    int SkipCount);
+    int SkipCount,
+    UploadView? Upload);
 
 /// <summary>
 /// Dashboard v2 spec 9.1, 6.4, 10 items 4.1, 4.3, 4.9: one request. The v1 detail's fields with <c>needsAttention</c> and
@@ -104,7 +112,8 @@ public sealed record SavedRequestDetailV2View(
     PostSummaryView? PostSummary,
     int SkipCount,
     IReadOnlyList<OtherPushView> OtherUnpostedPushes,
-    DetailLedgerBatchView? LedgerBatch);
+    DetailLedgerBatchView? LedgerBatch,
+    UploadView? Upload);
 
 /// <summary>Dashboard v2 spec 9.3: a flag among pending requests and among all.</summary>
 public sealed record FlagCountsView(int Pending, int All);
@@ -188,7 +197,8 @@ public static class SavedRequestViewsV2
             ValidationSummary(r.ValidationV2?.State, r.ProblemCount, r.Metadata, r.ValidationV2?.ValidatedUtc, r.ValidationV2?.VersionNumber),
             PostSummary(r.PostSummary, names), r.SkipCount,
             others.Select(o => new OtherPushView(o.Id, o.PublicRef, o.PushId?.ToString("D"), o.ReceivedUtc, o.Status)).ToList(),
-            ledger is null ? null : DetailLedgerBatch(ledger));
+            ledger is null ? null : DetailLedgerBatch(ledger),
+            Upload(r.Upload));
     }
 
     public static SavedRequestSummaryV2View Summary(SavedRequestSummary s, Caller c, ActorNames names)
@@ -201,8 +211,12 @@ public static class SavedRequestViewsV2
             v1.PostId, v1.Created, v1.Updated, v1.AllowedActions,
             PushId(s.Metadata), Email(s.Metadata), s.HistoryCount,
             ValidationSummary(s.ValidationV2State, s.ProblemCount, s.Metadata, s.ValidationV2Utc, s.ValidationV2Version),
-            PostSummary(s.PostSummary, names), s.SkipCount);
+            PostSummary(s.PostSummary, names), s.SkipCount, Upload(s.Upload));
     }
+
+    /// <summary>Dashboard-api-m12 7.4: the upload columns, or null.</summary>
+    public static UploadView? Upload(UploadMeta? u) =>
+        u is null ? null : new UploadView(u.FileName, u.SizeBytes, u.Sha256, u.Model, u.PromptVersion, u.ExtractedUtc);
 
     public static StatsV2View Stats(SavedRequestStatsV2 s) =>
         new(

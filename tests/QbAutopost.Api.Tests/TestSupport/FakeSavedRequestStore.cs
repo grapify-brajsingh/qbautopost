@@ -65,7 +65,7 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestStore
                     _nextVersionId++, id, 1, payload, request.Read.Readable, request.Read.Errors.ToList(), [], null,
                     request.NowUtc, request.CreatedBy),
             ];
-            AddCreatedEvents(id, request, createdDetail: null);
+            AddCreatedEvents(id, request, createdDetail: request.Metadata.ReceivedDetail());
             return Task.FromResult(new CreateResult(CreateKind.Created, View(record)));
         }
     }

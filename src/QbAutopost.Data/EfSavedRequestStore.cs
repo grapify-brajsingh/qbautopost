@@ -80,7 +80,7 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
 
         var entity = NewRequestEntity(request, currentVersion: 1);
         entity.Versions.Add(NewVersionEntity(1, request.Payload, request.Read, "[]", null, request));
-        entity.Events.Add(Event(SavedRequestEvents.Created, null, request.NowUtc, request.CreatedBy));
+        entity.Events.Add(Event(SavedRequestEvents.Created, request.Metadata.ReceivedDetail(), request.NowUtc, request.CreatedBy));
         db.SavedRequests.Add(entity);
         await db.SaveChangesAsync(ct);
         await FlagDuplicateAsync(db, entity.Id, request, ct);

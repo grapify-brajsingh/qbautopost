@@ -1005,7 +1005,7 @@
         ],
         "operationId": "saveRequest",
         "summary": "Save a validate-and-post body for a person to review and post.",
-        "description": "Saved-requests §6.1. The body is exactly the validate-and-post body; nothing is posted. Over `Api:MaxRequestBodyBytes` answers `413` and anything that is not one JSON object `400 not-a-json-object`; neither is stored. Every JSON object is stored, its original body byte for byte, even when it cannot be read (`needsAttention: true`, the JSON path in `validation.errors`) or when validation refuses it (`dryRun`, `allowModelAccounts`, control-total mismatch, too many rows) or holds rows. When validation cannot run (rules file missing, lists unreadable) the snapshot is `unavailable` and the save still succeeds. A request that looks like another one is flagged (`duplicate`), never refused. `createdBy` and `updatedBy` come from the caller, never the body. Treat any `201` as success. v2 (dashboard v2 §5, §7.1): rows without an `externalId` get `row-<n>` in version 1, while `GET …/original` keeps the exact bytes; `email` and `pushId` are read from the body as received; the canonical hash ignores `email`, `pushId` and `post: true`. Repeats are checked in order: `Idempotency-Key` (its rules alone when it matches), then `pushId`.",
+        "description": "Saved-requests §6.1. The body is exactly the validate-and-post body; nothing is posted. Over `Api:MaxRequestBodyBytes` answers `413` and anything that is not one JSON object `400 not-a-json-object`; neither is stored. Every JSON object is stored, its original body byte for byte, even when it cannot be read (`needsAttention: true`, the JSON path in `validation.errors`) or when validation refuses it (`dryRun`, `allowModelAccounts`, control-total mismatch, too many rows) or holds rows. When validation cannot run (rules file missing, lists unreadable) the snapshot is `unavailable` and the save still succeeds. A request that looks like another one is flagged (`duplicate`), never refused. `createdBy` and `updatedBy` come from the caller, never the body. Treat any `201` as success. v2 (dashboard v2 §5, §7.1): rows without an `externalId` get `row-<n>` in version 1, while `GET …/original` keeps the exact bytes; `email` and `pushId` are read from the body as received; the canonical hash ignores `email`, `pushId` and `post: true`. Repeats are checked in order: `Idempotency-Key` (its rules alone when it matches), then `pushId`. Upload (dashboard-api-m12 §7.2): a body with `upload: { extractionId }` saves a reviewed PDF upload, and only a signed-in user may send one (an API key gets `403`). Version 1 is the extraction's rows with the body's `reference` and `controlTotal` (note `Read from {fileName}`); version 2 is the body, written only when its `transactions` differ from version 1's (note `Reviewed before saving`, its `changes` the ordinary change list). Read errors, validation, duplicates and the hash use the current version. The `upload` columns come from the extraction record, never from the body. A matching `Idempotency-Key` replay is answered first; any other save of an already-saved extraction is `409 extraction-already-saved`.",
         "x-required-scope": "requests:submit",
         "security": [
           {
@@ -1075,7 +1075,7 @@
             }
           },
           "400": {
-            "description": "`not-a-json-object`: the body is not one JSON object (or not UTF-8); nothing was saved. `invalid-request`: the `Idempotency-Key` is too long.",
+            "description": "`not-a-json-object`: the body is not one JSON object (or not UTF-8); nothing was saved. `invalid-request`: the `Idempotency-Key` is too long. `invalid-request`: `upload` with `email` or `pushId` (an upload has neither), or `upload.extractionId` that is not a UUID.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1085,7 +1085,7 @@
             }
           },
           "409": {
-            "description": "`idempotency-key-reused`: this source used the key for a different body. `push-id-reused`: the `pushId` is held by another request with a different body (`savedRequestId`, `publicRef` name it). Nothing was saved.",
+            "description": "`idempotency-key-reused`: this source used the key for a different body. `push-id-reused`: the `pushId` is held by another request with a different body (`savedRequestId`, `publicRef` name it). Nothing was saved. `extraction-already-saved`: the `upload.extractionId` was saved before; `savedRequestId` and `publicRef` name that request. Nothing new was saved.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1095,8 +1095,31 @@
                     },
                     {
                       "$ref": "#/components/schemas/PushIdReusedProblem"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ExtractionAlreadySavedProblem"
                     }
                   ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: the `upload.extractionId` belongs to another user (the plain v2 not-found problem, revealing nothing). Nothing was saved.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "`extraction-expired`: the `upload.extractionId` is unknown or its record expired (24 h after extraction); an expired record is deleted. Upload the PDF again. Nothing was saved.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -3541,7 +3564,7 @@
           },
           "detail": {
             "nullable": true,
-            "description": "Action-specific, or null."
+            "description": "Action-specific, or null. For `received` (dashboard-api-m12 §7.5): `{ \"source\": \"upload\", \"fileName\": \"…\" }` for a saved upload, `{ \"source\": \"email\" }` for a v2 save that carried email metadata, `null` for every other save and for older rows."
           }
         }
       },
@@ -4848,8 +4871,51 @@
           }
         }
       },
+      "SavedRequestUploadInput": {
+        "type": "object",
+        "nullable": true,
+        "description": "Dashboard-api-m12 §7.2: the extraction this save is a reviewed upload of. Only `extractionId` is read; any other field (such as `fileName`) is ignored, since the upload columns come from the extraction record. Not allowed with `email` or `pushId`; only a signed-in user may send it.",
+        "required": [
+          "extractionId"
+        ],
+        "properties": {
+          "extractionId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "From `POST /statement-extractions`."
+          }
+        }
+      },
+      "SavedRequestUpload": {
+        "type": "object",
+        "nullable": true,
+        "description": "Dashboard-api-m12 §7.4: the PDF the request was saved from, copied from the extraction record at save and never changed; `null` for a request not saved from an upload (whose `email` is then also `null`).",
+        "properties": {
+          "fileName": {
+            "type": "string"
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Lower-case hex SHA-256 of the PDF bytes."
+          },
+          "model": {
+            "type": "string"
+          },
+          "promptVersion": {
+            "type": "string"
+          },
+          "extractedUtc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "SavedRequestSaveBody": {
-        "description": "Dashboard v2 §5: the validate-and-post body, plus the optional `email` and `pushId`. Both are read from the body as received, kept in the original body and version 1, and left out of the canonical hash and change list (§7).",
+        "description": "Dashboard v2 §5: the validate-and-post body, plus the optional `email` and `pushId`. Both are read from the body as received, kept in the original body and version 1, and left out of the canonical hash and change list (§7). Dashboard-api-m12 §7.2: also the optional `upload`, metadata in the same way (left out of binding, the canonical hash and the change list).",
         "allOf": [
           {
             "$ref": "#/components/schemas/SyncPostRequest"
@@ -4865,6 +4931,9 @@
                 "format": "uuid",
                 "nullable": true,
                 "description": "Dashboard v2 §5.2: the sender's id for this push. A UUID is stored and returned lower case with dashes. Anything else is saved, flagged (`$.pushId: not a UUID`, `needsAttention: true`, never cleared) and stays postable. The same `pushId` with the same body answers `200` with the existing record; with a different body `409 push-id-reused`."
+              },
+              "upload": {
+                "$ref": "#/components/schemas/SavedRequestUploadInput"
               }
             }
           }
@@ -4872,6 +4941,26 @@
       },
       "PushIdReusedProblem": {
         "description": "Dashboard v2 §5.2: `push-id-reused`. Names the request that holds the `pushId`.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "savedRequestId": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "publicRef": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "ExtractionAlreadySavedProblem": {
+        "description": "Dashboard-api-m12 §7.2: `extraction-already-saved`. Names the request the extraction was saved into.",
         "allOf": [
           {
             "$ref": "#/components/schemas/Problem"
@@ -5732,7 +5821,7 @@
       },
       "SavedRequestSummaryV2": {
         "type": "object",
-        "description": "Dashboard v2 §9.1: the v1 row (§6.5) with `needsAttention` and `validation` from the v2 judgement, plus `pushId`, `email`, `historyCount`, `validationSummary`, `postSummary` and `skipCount`.",
+        "description": "Dashboard v2 §9.1: the v1 row (§6.5) with `needsAttention` and `validation` from the v2 judgement, plus `pushId`, `email`, `historyCount`, `validationSummary`, `postSummary` and `skipCount`. Dashboard-api-m12 §7.4: plus `upload`.",
         "properties": {
           "id": {
             "type": "integer",
@@ -5854,6 +5943,9 @@
             "type": "integer",
             "format": "int32",
             "description": "Rows of the current version sent with `post: false`."
+          },
+          "upload": {
+            "$ref": "#/components/schemas/SavedRequestUpload"
           }
         }
       },
@@ -5882,7 +5974,7 @@
       },
       "SavedRequestDetailV2": {
         "type": "object",
-        "description": "Dashboard v2 §9.1: the v1 detail (§6.2) with `needsAttention`, `validation` (its `versionNumber` is the version judged, §10 4.3) and `readErrors` from the v2 judgement, plus the list row's additions, `otherUnpostedPushes` and `ledgerBatch`.",
+        "description": "Dashboard v2 §9.1: the v1 detail (§6.2) with `needsAttention`, `validation` (its `versionNumber` is the version judged, §10 4.3) and `readErrors` from the v2 judgement, plus the list row's additions, `otherUnpostedPushes` and `ledgerBatch`. Dashboard-api-m12 §7.4: plus `upload`.",
         "properties": {
           "id": {
             "type": "integer",
@@ -6020,6 +6112,9 @@
           },
           "ledgerBatch": {
             "$ref": "#/components/schemas/SavedRequestLedgerBatch"
+          },
+          "upload": {
+            "$ref": "#/components/schemas/SavedRequestUpload"
           }
         }
       },

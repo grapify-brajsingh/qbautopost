@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
 namespace QbAutopost.Core.SavedRequests;
@@ -17,6 +18,53 @@ public sealed record SaveMetadata(
 
     public bool HasEmail => EmailSubject is not null || EmailReceivedUtc is not null
         || EmailFrom is not null || EmailMessageId is not null;
+
+    /// <summary>
+    /// Dashboard-api-m12 7.5 (R-14.5): the <c>detail</c> of the <c>created</c> event of an ordinary save,
+    /// <c>{ "source": "email" }</c> only when email metadata is present, otherwise null. An upload's detail is the
+    /// upload store path's own.
+    /// </summary>
+    public JsonObject? ReceivedDetail() => HasEmail ? new JsonObject { ["source"] = "email" } : null;
+}
+
+/// <summary>What a v2 save body says under <c>upload</c> (dashboard-api-m12 7.2).</summary>
+public enum UploadFieldKind
+{
+    /// <summary>No <c>upload</c>, or <c>upload: null</c>: an ordinary save.</summary>
+    Absent,
+
+    /// <summary><c>upload</c> is present but <c>upload.extractionId</c> is not a UUID string.</summary>
+    Invalid,
+
+    /// <summary><c>upload.extractionId</c> is a UUID.</summary>
+    Present,
+}
+
+/// <summary>The <c>upload</c> field of a v2 save body. Only <c>extractionId</c> is read; every other field is ignored.</summary>
+public sealed record UploadField(UploadFieldKind Kind, Guid ExtractionId)
+{
+    public static UploadField Read(JsonElement body)
+    {
+        if (body.ValueKind != JsonValueKind.Object
+            || !body.TryGetProperty("upload", out var upload)
+            || upload.ValueKind == JsonValueKind.Null)
+        {
+            return new UploadField(UploadFieldKind.Absent, Guid.Empty);
+        }
+
+        return upload.ValueKind == JsonValueKind.Object
+            && upload.TryGetProperty("extractionId", out var id)
+            && id.ValueKind == JsonValueKind.String
+            && Guid.TryParseExact(id.GetString(), "D", out var guid)
+                ? new UploadField(UploadFieldKind.Present, guid)
+                : new UploadField(UploadFieldKind.Invalid, Guid.Empty);
+    }
+
+    /// <summary>R-14.2: true when the body also carries a non-null <c>email</c> or <c>pushId</c>, which an upload never has.</summary>
+    public static bool HasEmailOrPushId(JsonElement body) =>
+        body.ValueKind == JsonValueKind.Object
+        && ((body.TryGetProperty("email", out var e) && e.ValueKind != JsonValueKind.Null)
+            || (body.TryGetProperty("pushId", out var p) && p.ValueKind != JsonValueKind.Null));
 }
 
 /// <summary>Reads <see cref="SaveMetadata"/> from the ORIGINAL payload. Malformed email fields stay null without a flag.</summary>

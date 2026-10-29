@@ -28,7 +28,7 @@ namespace QbAutopost.Api.Endpoints;
 /// through <see cref="SavedRequestId.TryParse"/>: something that is not an id is <c>404</c>, like an unknown one.
 /// </para>
 /// </summary>
-public static class SavedRequestEndpoints
+public static partial class SavedRequestEndpoints
 {
     private const int DefaultPageSize = 25;
     private const string DefaultSort = "-created";
@@ -159,16 +159,17 @@ public static class SavedRequestEndpoints
         }
 
         var caller = CallerMiddleware.CallerOf(http)!;
+        if (flavor == ApiFlavor.V2 && UploadField.Read(payload) is { Kind: not UploadFieldKind.Absent } upload)
+        {
+            return await SaveUploadAsync(http, intake, raw!, payload, upload, key.Length == 0 ? null : key, caller, ct);
+        }
+
         var result = await intake.SaveAsync(raw!, key.Length == 0 ? null : key, caller, ct, flavor);
         var record = result.Record;
         switch (result.Kind)
         {
             case CreateKind.KeyReused:
-                return Problem(
-                    StatusCodes.Status409Conflict, "Idempotency-Key already used",
-                    $"This Idempotency-Key was already used for {record.PublicRef} with a different body. Nothing was saved. "
-                    + "Send a new key for a new request.",
-                    "idempotency-key-reused");
+                return KeyReused(record);
             case CreateKind.Replayed:
                 http.Response.Headers[IdempotencyMiddleware.ReplayedHeader] = "true";
                 return flavor == ApiFlavor.V2 ? Json(SavedRequestViewsV2.Saved(record)) : Json(SavedRequestViews.Saved(record));
@@ -187,6 +188,14 @@ public static class SavedRequestEndpoints
                         SavedRequestViews.Saved(record), SavedRequestJson.Options, statusCode: StatusCodes.Status201Created);
         }
     }
+
+    /// <summary>10.1: the Idempotency-Key is held by <paramref name="holder"/>, saved from a different body.</summary>
+    private static IResult KeyReused(SavedRequest holder) =>
+        Problem(
+            StatusCodes.Status409Conflict, "Idempotency-Key already used",
+            $"This Idempotency-Key was already used for {holder.PublicRef} with a different body. Nothing was saved. "
+            + "Send a new key for a new request.",
+            "idempotency-key-reused");
 
     /// <summary>
     /// Dashboard v2 spec 5.2 (Q-94): the body's <c>pushId</c> is held by <paramref name="holder"/>, saved from a

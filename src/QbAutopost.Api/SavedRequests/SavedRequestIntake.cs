@@ -1,10 +1,13 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Options;
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Endpoints;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Api;
+using QbAutopost.Core.Extraction;
 using QbAutopost.Core.SavedRequests;
+using QbAutopost.Core.Text;
 using QbAutopost.Core.Security;
 
 namespace QbAutopost.Api.SavedRequests;
@@ -20,6 +23,7 @@ namespace QbAutopost.Api.SavedRequests;
 /// </summary>
 public sealed class SavedRequestIntake(
     ISavedRequestStore store,
+    IUploadStore uploads,
     SavedRequestValidator validator,
     DirectLimits limits,
     IOptions<AppSettings> settings,
@@ -34,6 +38,12 @@ public sealed class SavedRequestIntake(
     private static readonly JsonDocumentOptions ParseOptions = new() { MaxDepth = MaxDepth };
 
     private static readonly IReadOnlySet<string> NoFingerprints = new HashSet<string>(StringComparer.Ordinal);
+
+    /// <summary>Dashboard-api-m12 7.2 item 3: the note of version 2 of a reviewed upload.</summary>
+    public const string ReviewedNote = "Reviewed before saving";
+
+    /// <summary>Dashboard-api-m12 7.2 item 2: the note of version 1 of an upload.</summary>
+    public static string ReadFromNote(string fileName) => $"Read from {fileName}";
 
     /// <summary>Spec 6.1 step 2: true only for text that parses as one JSON object.</summary>
     public static bool TryParseObject(string text, out JsonElement payload)
@@ -142,6 +152,76 @@ public sealed class SavedRequestIntake(
             },
             ct);
     }
+
+    /// <summary>
+    /// Dashboard-api-m12 7.2: a v2 save of a reviewed upload by <paramref name="caller"/> (a user; the route checks).
+    /// Version 1 is the extraction's rows with the body's <c>reference</c> and <c>controlTotal</c>
+    /// (<see cref="UploadVersionBuilder"/>); version 2 is the body after <c>externalId</c> assignment, only when its
+    /// <c>transactions</c> differ from version 1's under the v2 change list. Read, hash, fingerprints, snapshots and
+    /// duplicates are computed on the current version, exactly as <see cref="SaveAsync"/> does for its version 1. The
+    /// store decides replay, expired, not found, already saved and key reuse, atomically (T-1210, Ruling R7).
+    /// <para>Rule 3: nothing here computes money; both versions carry the amounts as read or as sent.</para>
+    /// </summary>
+    public async Task<UploadSaveResult> SaveUploadAsync(
+        string rawBody, Guid extractionId, string? idempotencyKey, Caller caller, CancellationToken ct)
+    {
+        if (!TryParseObject(rawBody, out var payload))
+        {
+            throw new ArgumentException("The body is not a JSON object; the route answers 400 before this.", nameof(rawBody));
+        }
+
+        GuardStorable(payload);
+
+        // Read only to build version 1; the store re-reads the record under its lock and makes every decision. An
+        // unknown id still goes to the store, which answers a replay first and Expired otherwise.
+        var extraction = await uploads.GetExtractionAsync(extractionId, ct);
+        var version1 = Version1Of(extraction, payload);
+        var reviewed = ExternalIdAssigner.AssignOnSave(payload);
+        var changes = PayloadDiff.Compute(version1, reviewed, PayloadRules.V2);
+        var reviewedRows = changes.Any(c => IsTransactionsPath(c.Path));
+        var current = reviewedRows ? reviewed : version1;
+        var number = reviewedRows ? 2 : 1;
+
+        var now = clock.UtcNow;
+        var read = SavedPayloadReader.Read(current);
+        var (snapshot, snapshotV2) = validator.ValidateBoth(read, NotPostedRows.Read(current), number, now);
+        var canonical = PayloadCanonicalizer.Sha256(current, PayloadRules.V2);
+        var fingerprints = Fingerprints(read, now);
+        var duplicate = await DetectAsync(canonical, read, fingerprints, null, now, ct);
+
+        var request = new NewSavedRequest(
+            SourceOf(caller), caller.Actor, rawBody, current, read, canonical, fingerprints, idempotencyKey,
+            snapshot, duplicate, now)
+        {
+            Metadata = SaveMetadataReader.Read(payload),
+            SnapshotV2 = snapshotV2,
+        };
+        return await uploads.SaveUploadAsync(
+            new NewUploadSave(
+                request, extractionId, caller.Id, version1, reviewedRows ? reviewed : null,
+                reviewedRows ? JsonSerializer.SerializeToNode(changes, JsonOptions.Default)!.AsArray() : null,
+                ReadFromNote(extraction?.FileName ?? ""), ReviewedNote),
+            ct);
+    }
+
+    /// <summary>
+    /// Version 1 of an upload, with ids for rows the record has none for (spec 7.1 of v2, as any v2 save). A record
+    /// without a <c>transactions</c> array (or no record) reads as no rows (T-1208 deferred minor).
+    /// </summary>
+    private static JsonElement Version1Of(StatementExtraction? extraction, JsonElement body)
+    {
+        var node = UploadVersionBuilder.Version1(extraction?.Payload ?? new JsonObject(), body);
+        if (node["transactions"] is not JsonArray)
+        {
+            node["transactions"] = new JsonArray();
+        }
+
+        return ExternalIdAssigner.AssignOnSave(JsonSerializer.SerializeToElement(node));
+    }
+
+    private static bool IsTransactionsPath(string path) =>
+        path == "$.transactions" || path.StartsWith("$.transactions[", StringComparison.Ordinal)
+        || path.StartsWith("$.transactions.", StringComparison.Ordinal);
 
     /// <summary>
     /// Spec 6.3: a full replacement payload becomes version n+1 with its change list. The store decides not found,
