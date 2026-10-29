@@ -166,18 +166,20 @@ public sealed class QbListsSourceDbWiringTests(PostgresFixture postgres) : IClas
     }
 
     [PostgresFact]
-    public async Task Should_NotMoveCurrentBackwards_When_OlderOkRunIsRecordedLate()
+    public async Task Should_ReplaceCurrent_When_AnOkRunIsRecordedAfterTheClockSteppedBack()
     {
+        // Syncs are serialised on the worker, so the last Ok recorded is the newest; its SyncedUtc can still be
+        // earlier than the previous one's after a clock correction, and must not freeze the lists.
         var connectionString = await postgres.CreateDatabaseAsync();
         await TestDatabase.MigrateAsync(connectionString);
         try
         {
             var source = NewSource(connectionString, new ListLogger<DbQbListsSource>(), "missing.json");
-            await source.RecordAsync(Run(ListSyncOutcome.Ok, 20), Synced("New", 20), default);
+            await source.RecordAsync(Run(ListSyncOutcome.Ok, 20), Synced("Before", 20), default);
 
-            await source.RecordAsync(Run(ListSyncOutcome.Ok, 10), Synced("Old", 10), default);
+            await source.RecordAsync(Run(ListSyncOutcome.Ok, 10), Synced("After", 10), default);
 
-            Assert.Equal(["New"], source.Current.Accounts.Select(a => a.Name));
+            Assert.Equal(["After"], source.Current.Accounts.Select(a => a.Name));
         }
         finally
         {

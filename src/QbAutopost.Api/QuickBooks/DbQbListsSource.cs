@@ -64,11 +64,11 @@ public sealed class DbQbListsSource(
             throw;
         }
 
-        // Current never moves backwards: a slower, older sync finishing late must not replace newer lists.
+        // Syncs are serialised on the single worker, so the Ok run recorded last is the newest one: it always replaces
+        // Current. No SyncedUtc comparison: after a backward clock step it would freeze the lists until the clock caught up.
         Swap(s =>
         {
-            var replace = run.Outcome == ListSyncOutcome.Ok && lists is not null
-                && (s.Lists.SyncedUtc is null || lists.SyncedUtc is null || lists.SyncedUtc > s.Lists.SyncedUtc);
+            var replace = run.Outcome == ListSyncOutcome.Ok && lists is not null;
             return new State(replace ? lists! : s.Lists, run);
         });
     }
