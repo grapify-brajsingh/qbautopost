@@ -376,16 +376,18 @@ public static class QuickBooksEndpoints
         HttpContext http, JobQueue queue, QbListSync sync, ILoggerFactory loggers, CancellationToken ct)
     {
         var log = loggers.CreateLogger(typeof(QuickBooksEndpoints));
+        var client = CallerMiddleware.ClientOf(http);
+        var requestedBy = client is null ? null : client.Name ?? client.Id;
         try
         {
-            // Through the worker: the sync must not overlap a job that reads qb-lists.json or talks to QuickBooks.
-            var client = CallerMiddleware.ClientOf(http);
-            var requestedBy = client is null ? null : client.Name ?? client.Id;
+            // Through the worker: the sync must not overlap a job that reads the lists or talks to QuickBooks.
             var result = await queue.RunExclusiveAsync(
                 "qb-sync-lists", token => sync.SyncAsync(ListSyncTrigger.Api, requestedBy, token), ct);
+
+            // M14 §12: the same attempt line as the schedule and the dashboard. Log text only; the response is v1's.
             log.LogInformation(
-                "QuickBooks lists synced: {Accounts} accounts, {Vendors} vendors, {Customers} customers",
-                result.Accounts, result.Vendors, result.Customers);
+                "QuickBooks lists sync ({Trigger}, by {RequestedBy}): {Outcome}, {Accounts} accounts, {Vendors} vendors, {Customers} customers",
+                "api", requestedBy ?? "unknown", "ok", result.Accounts, result.Vendors, result.Customers);
             if (result.MissingInRules.Count > 0)
             {
                 log.LogWarning("Names in rules.json that QuickBooks does not have: {Missing}", string.Join("; ", result.MissingInRules));
@@ -395,7 +397,10 @@ public static class QuickBooksEndpoints
         }
         catch (Exception ex) when (QuickBooksProblem(ex) is { } problem)
         {
-            log.LogWarning("QuickBooks list sync failed, qb-lists.json unchanged: {Error}", ex.Message);
+            // The last good lists are kept in either mode (file or database), so the line names neither.
+            log.LogWarning(
+                "QuickBooks lists sync ({Trigger}, by {RequestedBy}): {Outcome} ({Reason}): {Error}",
+                "api", requestedBy ?? "unknown", "failed", QbListSync.ReasonOf(ex) ?? "error", ex.Message);
             return problem;
         }
     }
