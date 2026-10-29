@@ -709,3 +709,62 @@ Same order as section 10.6 (key with `requests:submit`, verify, then withdraw `q
   them under `skipped` with reason `not-to-post`.
 - Testing note: the 1000-request list performance test (`ListV2PerformanceTests`, trait `Perf`) is skipped unless
   `QBAUTOPOST_PERF=1` is set.
+
+## 12. Statement upload (extraction) with OpenRouter (T-1215)
+
+The dashboard's upload page sends a bank-statement PDF to the model at OpenRouter and shows the rows for review. The key,
+the enable switch, outbound HTTPS and retiring Hermes are in sections 2.4 and 3.1; this section adds the upload itself.
+Spec: `docs/dashboard-api-m12.md` sections 6, 8 and 10. Checklist: `docs/testing/T-1215.server-checklist.md`.
+
+### 12.1 Switch it on
+
+Uploads need all three of these, otherwise the route answers `503 extraction-unavailable`:
+
+```powershell
+# administrator; machine variables, readable by the service account (restart the API afterwards)
+[Environment]::SetEnvironmentVariable('OpenRouter__Enabled', 'true',  'Machine')
+[Environment]::SetEnvironmentVariable('OpenRouter__ApiKey',  '<key>', 'Machine')   # never in appsettings*.json
+[Environment]::SetEnvironmentVariable('Extraction__Enabled', 'true',  'Machine')
+```
+
+The statement text goes to `openrouter.ai` over HTTPS (port 443). Nothing of the PDF is kept: no temp file, no copy under
+`output\`, no log line with its text. Only the extracted rows are stored, in the extraction record.
+
+### 12.2 `Extraction` settings
+
+| Key | Default | Notes |
+|---|---|---|
+| `Extraction:Enabled` | `false` | Off until configured. Needs `OpenRouter:Enabled` and a key as well |
+| `Extraction:Model` | `~google/gemini-pro-latest` | Model for uploads; may differ from `OpenRouter:Model` (jobs) |
+| `Extraction:TimeoutSeconds` | `120` | |
+| `Extraction:MaxBytes` | `10485760` | 10 MB per PDF |
+| `Extraction:MaxPages` | `50` | More pages are refused before any text is sent |
+| `Extraction:MaxPerUserPerHour` | `20` | Per signed-in user |
+| `Extraction:RecordHours` | `24` | How long an extraction record waits to be saved; expired records are removed on the next use, no timer |
+
+The prompt version lives in the prompt file, not in settings. A scanned PDF without a text layer is refused (`422 no-text`);
+there is no OCR.
+
+### 12.3 Check it is configured
+
+The v2 health answer (needs a signed-in token with `requests:read` or `health:read`) has an `extraction` entry:
+`disabled`, `configured`, or `misconfigured` (enabled but no key). It never calls OpenRouter, so it proves the settings, not
+the key. The proof is one real upload (checklist section C).
+
+### 12.4 Time zones need ICU (Q-112)
+
+The dashboard summary takes IANA zone ids such as `Asia/Kolkata`. On Windows these resolve only through ICU, which ships
+with Windows 10 1903+ and Windows Server 2019+. The project turns invariant globalization off for Windows builds, and the
+project file decides by the **operating system of the machine that builds or publishes**, so **build and publish on
+Windows** (a Linux-built package would be invariant and could not resolve the zone). If `Asia/Kolkata` cannot be resolved
+at startup the log has one warning. An older server needs a Windows update, not a code change.
+
+### 12.5 Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| `503 extraction-unavailable` | One of `OpenRouter__Enabled`, `OpenRouter__ApiKey`, `Extraction__Enabled` is missing, or the API was not restarted |
+| `502` / `504` on upload | OpenRouter unreachable or slow: check outbound HTTPS and the key; nothing was stored |
+| `429` | The user passed `Extraction:MaxPerUserPerHour` |
+| `413` / `422` | Over 10 MB or 50 pages, not a PDF, protected, no text layer, or not a bank statement |
+| The save says the record expired | More than `Extraction:RecordHours` passed; upload again |
