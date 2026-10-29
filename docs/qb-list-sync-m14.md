@@ -136,6 +136,14 @@ Settings `QuickBooks:ListSync` (§11). `IntervalMinutes = 30`; `0` turns the sch
 7. A dialog in QuickBooks can hold `BeginSession` for up to about 2 minutes (seen 2026-10-29). That is the worst
    delay a scheduled sync can add to a job submitted meanwhile; it is logged and documented, not hidden.
 8. Host stopping cancels the wait; a sync in progress finishes or is cancelled like an exclusive item today.
+9. **The scheduled sync holds the exclusive slot** (ADR-0008, ADR-0012). Before it starts it claims
+   `JobQueue`'s busy count from 0 to 1 in one interlocked step (the same claim `TryRunExclusiveAsync` makes) and
+   releases it when the attempt ends, on every path. While it runs, a caller who must not wait (v1
+   `validate-and-post`, the saved-request post) is answered **`409` "session in use"** at once and nothing is sent;
+   it is never queued behind the sync. If the slot is already taken (a caller holds it, or items are queued or
+   running) the attempt is deferred as in step 3: that work runs first, nothing is recorded, and the sync runs once
+   the slot is free. The claim is not an item: `Depth` and the counting of real items are unchanged. A dashboard
+   Sync now during a scheduled sync still joins it (§7.2) and is never refused as busy.
 
 ## 6. Guard: never start QuickBooks
 

@@ -35,6 +35,12 @@ public sealed class JobWorker(
     /// <summary>The longest single wait for the due time; a longer one is taken in steps.</summary>
     public static readonly TimeSpan MaxWait = TimeSpan.FromHours(1);
 
+    /// <summary>
+    /// The wait before a deferred scheduled attempt tries again (§5.9): the work that held the slot is normally already
+    /// in the channel and wakes the worker at once; this only bounds the instant between a claim and its enqueue.
+    /// </summary>
+    public static readonly TimeSpan DeferredRetry = TimeSpan.FromMilliseconds(250);
+
     private readonly Func<TimeSpan, CancellationToken, Task> _delay = delay ?? Task.Delay;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -54,6 +60,7 @@ public sealed class JobWorker(
             }
 
             var fallback = false;
+            var deferred = false;
             while (true)
             {
                 stoppingToken.ThrowIfCancellationRequested();
@@ -65,6 +72,14 @@ public sealed class JobWorker(
                 var delayFor = fallback ? Task.Delay : _delay;
                 fallback = false;
                 Func<CancellationToken, Task>? deadline = wait > TimeSpan.Zero ? token => delayFor(wait, token) : null;
+                if (deadline is null && deferred)
+                {
+                    // The last attempt was deferred because the slot was taken: wait for that work (or a short while)
+                    // rather than spin on a claim whose item is not in the channel yet.
+                    deadline = token => Task.Delay(DeferredRetry, token);
+                }
+
+                deferred = false;
                 bool ran;
                 try
                 {
@@ -89,7 +104,7 @@ public sealed class JobWorker(
                     continue; // woke early, or the due time moved while waiting
                 }
 
-                await RunScheduledSyncAsync(stoppingToken);
+                deferred = !await RunScheduledSyncAsync(stoppingToken);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -99,19 +114,55 @@ public sealed class JobWorker(
     }
 
     /// <summary>
-    /// M14 §5.4–5.6, §6: one scheduled attempt. Never throws except for the host stopping; a failure was already recorded
-    /// by <see cref="QbListSync"/> and never touches a job.
+    /// M14 §5.4–5.6, §5.9, §6: one scheduled attempt. Never throws except for the host stopping; a failure was already
+    /// recorded by <see cref="QbListSync"/> and never touches a job. False when the attempt was deferred (nothing ran,
+    /// nothing recorded): the exclusive slot was taken, or a dashboard sync is queued.
     /// </summary>
-    private async Task RunScheduledSyncAsync(CancellationToken stoppingToken)
+    private async Task<bool> RunScheduledSyncAsync(CancellationToken stoppingToken)
     {
         using var scope = log.BeginScope(new Dictionary<string, object> { ["jobId"] = ScheduledSyncLabel });
+
+        // §5.9 (ADR-0012 with ADR-0008): the sync holds the exclusive slot while it runs, so a post that must not wait
+        // is answered 409 rather than queued behind a QuickBooks dialog. Slot taken: that work runs first; no row (§5.3).
+        if (!queue.TryClaimIdle())
+        {
+            log.LogDebug("Scheduled list sync deferred: the QuickBooks session is in use");
+            return false;
+        }
+
+        var claimed = 1;
+        void Release()
+        {
+            if (Interlocked.Exchange(ref claimed, 0) == 1)
+            {
+                queue.ReleaseIdleClaim();
+            }
+        }
+
+        try
+        {
+            return await RunClaimedAttemptAsync(Release, stoppingToken);
+        }
+        finally
+        {
+            Release();
+        }
+    }
+
+    /// <summary>
+    /// The attempt itself, with the slot held. <paramref name="release"/> frees the slot before the attempt's result is
+    /// published (as <see cref="JobQueue"/>'s exclusive work does), so a joiner who has its answer is never told "busy"
+    /// by the sync it has just waited for.
+    /// </summary>
+    private async Task<bool> RunClaimedAttemptAsync(Action release, CancellationToken stoppingToken)
+    {
         var warnOnFailure = schedule.LastKnownWasOk;
         var started = schedule.UtcNow;
         if (schedule.BeginAttempt() is not { } attempt)
         {
             // M14 §7.2: a dashboard sync is in flight; its item is already in the channel, so the loop runs it next.
             log.LogDebug("Scheduled list sync deferred: a dashboard sync is queued");
-            return;
+            return false;
         }
 
         var outcome = ListSyncOutcome.Failed;
@@ -122,8 +173,9 @@ public sealed class JobWorker(
                 outcome = ListSyncOutcome.Skipped;
                 await RecordSkippedAsync(stoppingToken);
                 LogNotOk(warnOnFailure, outcome, ListSyncReasons.QuickBooksNotOpen, "QuickBooks is not running in this session");
+                release();
                 attempt.TrySetResult(null);
-                return;
+                return true;
             }
 
             try
@@ -139,10 +191,12 @@ public sealed class JobWorker(
                     log.LogWarning("Names in rules.json that QuickBooks does not have: {Missing}", string.Join("; ", result.MissingInRules));
                 }
 
+                release();
                 attempt.TrySetResult(completion);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
+                release();
                 attempt.TrySetCanceled(stoppingToken);
                 throw;
             }
@@ -154,12 +208,14 @@ public sealed class JobWorker(
                     ? r.Reason
                     : null;
                 LogNotOk(warnOnFailure, ListSyncOutcome.Failed, reason, ex.Message);
+                release();
                 attempt.TrySetException(ex);
                 _ = attempt.Task.Exception; // observed: a joiner may never come
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
+            release();
             attempt.TrySetCanceled(stoppingToken);
             throw;
         }
@@ -167,6 +223,7 @@ public sealed class JobWorker(
         {
             // Never crash the loop over a sync.
             log.LogError(ex, "Scheduled list sync crashed");
+            release();
             attempt.TrySetException(ex);
             _ = attempt.Task.Exception;
         }
@@ -174,6 +231,8 @@ public sealed class JobWorker(
         {
             schedule.EndAttempt(outcome);
         }
+
+        return true;
     }
 
     /// <summary>§6: never start QuickBooks. A check that itself fails counts as "not open" — hold, don't guess.</summary>

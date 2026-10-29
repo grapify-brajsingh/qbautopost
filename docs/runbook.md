@@ -344,7 +344,9 @@ stay as they were; open it and the next due sync runs.
 
 **A dialog delays the worker for up to about two minutes.** When QuickBooks is showing a dialog (or is busy), the sync
 waits for it inside QuickBooks' session start, which can take up to about 2 minutes. The worker is occupied meanwhile,
-so a job submitted in that time waits and then runs normally; nothing is lost. Close the dialog to release it. A sync
+so a job submitted in that time waits and then runs normally; nothing is lost. A post that does not wait
+(`validate-and-post`, or posting a saved request) is answered `409` "session in use" while the sync holds QuickBooks,
+with nothing sent: retry it after the sync ends. Close the dialog to release it. A sync
 that fails this way is recorded as `failed` (reason `quickbooks-busy` or `quickbooks-unavailable`), the lists stay as
 they were, and the next attempt is a full interval later.
 

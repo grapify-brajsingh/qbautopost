@@ -294,7 +294,7 @@ public sealed class ScheduledListSyncTests : IDisposable
     }
 
     [Fact]
-    public async Task Should_NotCountTheSyncAsQueuedWork_When_ItIsRunning()
+    public async Task Should_HoldTheExclusiveSlotButNotCountAsQueued_When_TheSyncIsRunning()
     {
         var gated = new GatedGateway(_gateway);
         var schedule = Schedule();
@@ -305,14 +305,92 @@ public sealed class ScheduledListSyncTests : IDisposable
         first.Release();
         await gated.Entered.Task.WaitAsync(Patience);
 
-        Assert.Equal((0, 0), (_queue.Depth, _queue.Outstanding));
+        Assert.Equal((0, 1), (_queue.Depth, _queue.Outstanding)); // §5.9: the claim, not an item
         Assert.NotNull(schedule.InFlight);
-        var exclusive = _queue.TryRunExclusiveAsync("other", _ => Task.FromResult(_gateway.Queries.Count), CancellationToken.None);
         gated.Release.TrySetResult();
-        var (ran, queriesThen) = await exclusive.WaitAsync(Patience);
+        await worker.StopAsync(CancellationToken.None);
+    }
 
-        Assert.True(ran); // not refused because of the sync — it waited behind it
+    [Fact]
+    public async Task Should_RefuseATryExclusiveCaller_When_AScheduledSyncIsRunning()
+    {
+        var gated = new GatedGateway(_gateway);
+        using var worker = Worker(Schedule(), Sync(gated));
+        await worker.StartAsync(CancellationToken.None);
+        var first = await _delay.NextAsync();
+        _clock.UtcNow += first.Wait;
+        first.Release();
+        await gated.Entered.Task.WaitAsync(Patience);
+
+        var called = false;
+        var (ran, _) = await _queue.TryRunExclusiveAsync("post", _ => Task.FromResult(called = true), CancellationToken.None)
+            .WaitAsync(Patience);
+
+        Assert.False(ran); // ADR-0008: busy is an answer now, never a wait behind the sync
+        Assert.False(called);
+        gated.Release.TrySetResult();
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Should_FreeTheExclusiveSlot_When_TheScheduledSyncEnds()
+    {
+        var gated = new GatedGateway(_gateway);
+        using var worker = Worker(Schedule(), Sync(gated));
+        await worker.StartAsync(CancellationToken.None);
+        var first = await _delay.NextAsync();
+        _clock.UtcNow += first.Wait;
+        first.Release();
+        await gated.Entered.Task.WaitAsync(Patience);
+        gated.Release.TrySetResult();
+        await _delay.NextAsync(); // the sync has ended and the worker waits again
+
+        var (ran, queriesThen) = await _queue.TryRunExclusiveAsync("post", _ => Task.FromResult(_gateway.Queries.Count), CancellationToken.None)
+            .WaitAsync(Patience);
+
+        Assert.True(ran);
         Assert.Equal(1, queriesThen);
+        Assert.Equal(0, _queue.Outstanding);
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Should_FreeTheExclusiveSlot_When_TheScheduledAttemptFailsOrIsSkipped(bool skipped)
+    {
+        _presence.IsOpen = !skipped;
+        _gateway.QueryThrow = skipped ? null : new QuickBooksUnavailableException("simulated: QuickBooks closed");
+        using var worker = Worker(Schedule());
+        await worker.StartAsync(CancellationToken.None);
+
+        await ElapseAsync(await _delay.NextAsync());
+
+        Assert.Equal(skipped ? ListSyncOutcome.Skipped : ListSyncOutcome.Failed, _lists.LastAttempt!.Outcome);
+        Assert.Equal(0, _queue.Outstanding);
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Should_DeferWithoutARowAndRunOnceTheSlotFrees_When_TheSlotIsTakenAtTheDueTime()
+    {
+        using var worker = Worker(Schedule());
+        await worker.StartAsync(CancellationToken.None);
+        var first = await _delay.NextAsync();
+        Assert.True(_queue.TryClaimIdle()); // a caller holds the slot as the sync falls due
+
+        _clock.UtcNow += first.Wait;
+        first.Release();
+        await UntilAsync(() => _log.Entries.Any(e => e.Message.Contains("deferred: the QuickBooks session is in use", StringComparison.Ordinal)));
+
+        Assert.Empty(_gateway.Requests);
+        Assert.Null(_lists.LastAttempt); // deferred, not skipped: nothing recorded
+        _queue.ReleaseIdleClaim();
+        var next = await _delay.NextAsync();
+
+        Assert.Single(_gateway.Queries);
+        Assert.Equal(ListSyncTrigger.Schedule, _lists.LastAttempt!.Trigger);
+        Assert.Equal(Interval, next.Wait);
         await worker.StopAsync(CancellationToken.None);
     }
 

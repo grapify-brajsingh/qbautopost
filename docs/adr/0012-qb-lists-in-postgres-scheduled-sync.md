@@ -60,4 +60,13 @@ stale. Spec: `docs/qb-list-sync-m14.md` (found while testing against QuickBooks 
 ### Risks
 - A dialog open in QuickBooks can hold the worker for about 2 minutes while the SDK waits; the next attempt is a full
   interval later (no retry storm).
+
+### Interaction with ADR-0008 (synchronous validate-and-post)
+ADR-0008 says a post that must not wait is answered `409` at once when the QuickBooks session is in use, never put in
+a queue the caller cannot see. A scheduled sync is therefore not invisible to it: the sync claims the same exclusive
+slot `JobQueue.TryRunExclusiveAsync` claims (0 to 1, one interlocked step) and releases it when the attempt ends. A
+v1 `validate-and-post` or saved-request post during a scheduled sync gets `409` "session in use" and retries; it does
+not wait up to ~2 minutes behind a QuickBooks dialog. When the slot is already held, the scheduled attempt is
+deferred (no row) and runs once it is free. Spec §5.9. This reverses the T-1406 choice of running the sync outside
+the queue's count.
 - Database down at startup: pickers are empty until the first successful sync; readiness says why.

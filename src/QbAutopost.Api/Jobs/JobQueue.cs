@@ -219,6 +219,19 @@ public sealed class JobQueue
     }
 
     /// <summary>
+    /// M14 §5.9 (ADR-0012, with ADR-0008): the scheduled list sync claims the same exclusive slot
+    /// <see cref="TryRunExclusiveAsync"/> claims, in the same one interlocked step, so a caller who must not wait is
+    /// answered "busy" while the sync holds QuickBooks instead of waiting behind it. False when the slot is taken (a
+    /// caller holds it, or items are queued or running): the worker defers the attempt and runs that work first. Every
+    /// true must be followed by exactly one <see cref="ReleaseIdleClaim"/>. The claim is not an item: it never touches
+    /// <see cref="Depth"/>, and items enqueued meanwhile are counted as before.
+    /// </summary>
+    public bool TryClaimIdle() => Interlocked.CompareExchange(ref _outstanding, 1, 0) == 0;
+
+    /// <summary>Releases a claim taken by <see cref="TryClaimIdle"/>.</summary>
+    public void ReleaseIdleClaim() => Interlocked.Decrement(ref _outstanding);
+
+    /// <summary>
     /// The work item both exclusive paths run: the caller's result, or their exception, back on the wire.
     /// <para>
     /// The claim is released <b>before</b> the result is published, and that ordering is the fix for a real race
