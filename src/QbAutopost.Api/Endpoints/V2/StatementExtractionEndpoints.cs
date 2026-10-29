@@ -124,24 +124,42 @@ public static class StatementExtractionEndpoints
                 found = (name, bytes);
             }
         }
-        catch (InvalidDataException ex) when (ex.Message.Contains("length limit", StringComparison.OrdinalIgnoreCase))
+        catch (InvalidDataException ex) when (ex.Message.StartsWith(BodyLimitMessage, StringComparison.Ordinal))
         {
+            // Only MultipartReader's BodyLengthLimit is a size problem; its header and line length limits are a
+            // malformed body (below).
             return (null, ExtractionOutcome.TooManyBytes(x.MaxBytes));
         }
         catch (InvalidDataException)
         {
-            return (null, ExtractionOutcome.InvalidRequest("The multipart body could not be read. Nothing was read or stored."));
+            return (null, Malformed());
         }
         catch (BadHttpRequestException ex) when (ex.StatusCode == StatusCodes.Status413PayloadTooLarge)
         {
             // The server's own body limit (set per request by RequestSizeMiddleware) stopped a body without a length.
             return (null, ExtractionOutcome.TooManyBytes(x.MaxBytes));
         }
+        catch (BadHttpRequestException ex) when (ex.StatusCode == StatusCodes.Status400BadRequest)
+        {
+            // Kestrel refused the body itself (bad chunking, or it ended before its Content-Length).
+            return (null, Malformed());
+        }
+        catch (IOException) when (!ct.IsCancellationRequested)
+        {
+            // The body ended before the closing boundary. A client fault, not ours: no error is logged.
+            return (null, Malformed());
+        }
 
         return found is null
             ? (null, ExtractionOutcome.InvalidRequest("No part named file was sent. Nothing was read or stored."))
             : (found, null);
     }
+
+    /// <summary>The start of <c>MultipartReader</c>'s message when <c>BodyLengthLimit</c> is exceeded (and only then).</summary>
+    private const string BodyLimitMessage = "Multipart body length limit ";
+
+    private static ExtractionOutcome Malformed() =>
+        ExtractionOutcome.InvalidRequest("The multipart body could not be read. Nothing was read or stored.");
 
     /// <summary>The stream's bytes, or null as soon as it holds more than <paramref name="max"/>.</summary>
     private static async Task<byte[]?> ReadCappedAsync(Stream body, long max, CancellationToken ct)

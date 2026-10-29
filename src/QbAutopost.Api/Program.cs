@@ -61,10 +61,11 @@ builder.WebHost.ConfigureKestrel((context, kestrel) =>
 {
     var api = context.Configuration.GetSection("Api").Get<ApiSettings>() ?? new ApiSettings();
     kestrel.AddServerHeader = false;
-    // T-1212b (dashboard-api-m12 6.1): the server limit is the larger of the two; RequestSizeMiddleware sets each
-    // request's own limit, so every route but the upload stays at Api:MaxRequestBodyBytes.
+    // T-1212b (dashboard-api-m12 6.1): with the upload on, the server limit is the larger of the two; RequestSizeMiddleware
+    // sets each request's own limit, so every route but the upload stays at Api:MaxRequestBodyBytes. With the upload off,
+    // Kestrel stays at Api:MaxRequestBodyBytes (M12 final review).
     var extraction = context.Configuration.GetSection("Extraction").Get<ExtractionSettings>() ?? new ExtractionSettings();
-    kestrel.Limits.MaxRequestBodySize = RequestSizeMiddleware.ServerLimit(api, extraction);
+    kestrel.Limits.MaxRequestBodySize = RequestSizeMiddleware.KestrelLimit(api, extraction);
     if (api.Tls.Configured)
     {
         kestrel.ConfigureHttpsDefaults(https => https.ServerCertificate = TlsCertificate.Load(api.Tls));
@@ -139,8 +140,10 @@ builder.Services.AddSingleton(sp =>
     };
 });
 // HermesOptions.Timeout bounds each call; the HttpClient's own 100 s default would cut the 120 s budget short.
-// A singleton reader holds its HermesClient, so the handler is never rotated (Hermes is a fixed loopback address).
+// A singleton reader holds its HermesClient, so the factory never rotates its handler; OpenRouter is a remote host
+// whose DNS can change, so the primary handler recycles its pooled connections every 10 minutes instead.
 builder.Services.AddHttpClient<HermesClient>(http => http.Timeout = Timeout.InfiniteTimeSpan)
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(10) })
     .SetHandlerLifetime(Timeout.InfiniteTimeSpan);
 // T-806 / M12: OpenRouter:Enabled=false runs without any AI (POC): nothing is sent to a model, the requirement is read by regex.
 static bool HermesEnabled(IServiceProvider sp) => sp.GetRequiredService<IOptions<AppSettings>>().Value.OpenRouter.Enabled;

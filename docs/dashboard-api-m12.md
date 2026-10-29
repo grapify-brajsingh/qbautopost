@@ -587,6 +587,7 @@ When `upload` is absent, the save is exactly today's v2 save.
 | `MaxPages` | `50` | |
 | `MaxPerUserPerHour` | `20` | |
 | `RecordHours` | `24` | |
+| `StrictSchema` | `true` | `json_schema.strict` sent to OpenRouter. Set `false` only if the provider rejects strict mode for the model (§6.3 builder's note, Q-108); the reply is validated in code either way. Ruling R16. |
 
 `PromptVersion` is **not** configuration: it lives in the prompt file (§6.3), so the version and the text cannot
 drift apart.

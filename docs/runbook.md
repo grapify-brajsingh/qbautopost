@@ -741,6 +741,7 @@ The statement text goes to `openrouter.ai` over HTTPS (port 443). Nothing of the
 | `Extraction:MaxPages` | `50` | More pages are refused before any text is sent |
 | `Extraction:MaxPerUserPerHour` | `20` | Per signed-in user |
 | `Extraction:RecordHours` | `24` | How long an extraction record waits to be saved; expired records are removed on the next use, no timer |
+| `Extraction:StrictSchema` | `true` | Sends `strict: true` in the JSON schema. Set `Extraction__StrictSchema=false` only if OpenRouter rejects strict mode for the model (Q-108); the reply is still validated in code |
 
 The prompt version lives in the prompt file, not in settings. A scanned PDF without a text layer is refused (`422 no-text`);
 there is no OCR.

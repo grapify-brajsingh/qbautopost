@@ -117,18 +117,18 @@ public sealed class StatementExtractionService(
                         prompt.SystemPrompt,
                         read.Text,
                         AuditDir: null,
-                        Format: new ResponseFormat(SchemaName, prompt.Schema, Strict: true),
+                        Format: new ResponseFormat(SchemaName, prompt.Schema, Strict: x.StrictSchema),
                         Model: x.Model),
                     timeout.Token);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                return ExtractionOutcome.Timeout(x.TimeoutSeconds);
+                return ExtractionOutcome.Timeout(ExtractionOutcome.ExtractionTimeout, x.TimeoutSeconds);
             }
             catch (HermesUnavailableException ex) when (ex.InnerException is TimeoutException)
             {
-                // OpenRouter:TimeoutSeconds, the client's own per-call bound, ran out first.
-                return ExtractionOutcome.Timeout(x.TimeoutSeconds);
+                // OpenRouter:TimeoutSeconds, the client's own per-call bound, ran out first: the detail names that one.
+                return ExtractionOutcome.Timeout(ExtractionOutcome.OpenRouterTimeout, s.OpenRouter.TimeoutSeconds);
             }
             catch (HermesException)
             {
@@ -237,9 +237,13 @@ public sealed record ExtractionOutcome(
     public static ExtractionOutcome Failed() => Problem(
         502, "extraction-failed", "Extraction failed", "The statement could not be read. Try again. Nothing was stored.");
 
-    public static ExtractionOutcome Timeout(int seconds) => Problem(
+    public const string ExtractionTimeout = "Extraction:TimeoutSeconds";
+    public const string OpenRouterTimeout = "OpenRouter:TimeoutSeconds";
+
+    /// <summary>504; the detail names the setting whose bound actually ran out, with its value.</summary>
+    public static ExtractionOutcome Timeout(string setting, int seconds) => Problem(
         504, "extraction-timeout", "Extraction timed out",
-        string.Create(CultureInfo.InvariantCulture, $"No answer within {seconds} s. Try again. Nothing was stored."));
+        string.Create(CultureInfo.InvariantCulture, $"No answer within {seconds} s ({setting}). Try again. Nothing was stored."));
 
     private static ExtractionOutcome Problem(int status, string type, string title, string detail) =>
         new(status, type, title, detail, null, null);

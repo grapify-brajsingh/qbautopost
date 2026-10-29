@@ -21,4 +21,10 @@ public sealed class ExtractionSettings
     public int MaxPerUserPerHour { get; set; } = 20;
 
     public int RecordHours { get; set; } = 24;
+
+    /// <summary>
+    /// Ruling R16 (spec 6.3 builder's note, Q-108): <c>json_schema.strict</c> sent to OpenRouter. Set false only when the
+    /// provider rejects strict mode for the model; the reply is validated in code either way.
+    /// </summary>
+    public bool StrictSchema { get; set; } = true;
 }

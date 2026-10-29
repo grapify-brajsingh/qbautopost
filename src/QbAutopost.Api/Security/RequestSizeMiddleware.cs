@@ -27,6 +27,13 @@ public sealed class RequestSizeMiddleware(RequestDelegate next, IOptions<AppSett
     public static long ServerLimit(ApiSettings api, ExtractionSettings extraction) =>
         Math.Max(api.MaxRequestBodyBytes, StatementExtractionEndpoints.BodyLimit(extraction));
 
+    /// <summary>
+    /// Kestrel's own limit: <c>Api:MaxRequestBodyBytes</c> while the upload is off, <see cref="ServerLimit"/> only when
+    /// <c>Extraction:Enabled</c> is true (M12 final review).
+    /// </summary>
+    public static long KestrelLimit(ApiSettings api, ExtractionSettings extraction) =>
+        extraction.Enabled ? ServerLimit(api, extraction) : api.MaxRequestBodyBytes;
+
     /// <summary>The body limit of one request.</summary>
     public static long LimitFor(string method, PathString path, ApiSettings api, ExtractionSettings extraction) =>
         IsExtraction(method, path) ? StatementExtractionEndpoints.BodyLimit(extraction) : api.MaxRequestBodyBytes;
