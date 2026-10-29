@@ -128,7 +128,8 @@ public sealed class JobWorker(
 
             try
             {
-                var result = await listSync.SyncAsync(ListSyncTrigger.Schedule, null, stoppingToken);
+                var completion = await listSync.SyncWithRunAsync(ListSyncTrigger.Schedule, null, stoppingToken);
+                var result = completion.Result;
                 outcome = ListSyncOutcome.Ok;
                 log.LogInformation(
                     "QuickBooks lists sync ({Trigger}, by {RequestedBy}): {Outcome}, {Accounts} accounts, {Vendors} vendors, {Customers} customers",
@@ -138,7 +139,7 @@ public sealed class JobWorker(
                     log.LogWarning("Names in rules.json that QuickBooks does not have: {Missing}", string.Join("; ", result.MissingInRules));
                 }
 
-                attempt.TrySetResult(result);
+                attempt.TrySetResult(completion);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

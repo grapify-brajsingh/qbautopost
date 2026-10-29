@@ -57,6 +57,7 @@ public static class QuickBooksListsV2Endpoints
 
     public const string NotOpenType = "quickbooks-not-open";
     public const string TimeoutType = "sync-timeout";
+    public const string StoppingType = "api-stopping";
 
     public static IEndpointRouteBuilder MapQuickBooksListsV2Endpoints(this IEndpointRouteBuilder v2)
     {
@@ -84,7 +85,6 @@ public static class QuickBooksListsV2Endpoints
         QbListSync sync,
         ListSyncSchedule schedule,
         JobQueue queue,
-        IQbListsSource lists,
         ActorDirectory actors,
         IOptions<AppSettings> settings,
         ILoggerFactory loggers,
@@ -113,10 +113,10 @@ public static class QuickBooksListsV2Endpoints
         var seconds = settings.Value.Api.SyncPostTimeoutSeconds;
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
         using var wait = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, ct);
-        ListSyncResult? result;
+        ListSyncCompletion? done;
         try
         {
-            result = await flight.WaitAsync(wait.Token);
+            done = await flight.WaitAsync(wait.Token);
         }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested && !ct.IsCancellationRequested)
         {
@@ -127,29 +127,72 @@ public static class QuickBooksListsV2Endpoints
                 detail: $"QuickBooks has not answered within {seconds} s. The sync carries on; GET /api/v2/quickbooks/lists shows its result.",
                 type: TimeoutType);
         }
-        catch (Exception ex) when (QuickBooksEndpoints.QuickBooksProblem(ex) is { } problem)
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            // The same mapping as v1's SyncLists; the failed row was recorded by QbListSync.
+            // The flight itself was cancelled: the host is stopping (the worker's token), not this caller's wait.
+            log.LogInformation("QuickBooks lists sync: cancelled because the API is stopping; answering 503");
+            return Results.Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                title: "The API is stopping",
+                detail: "The API is stopping; try again in a moment.",
+                type: StoppingType);
+        }
+        catch (Exception ex) when (SyncProblem(ex) is { } problem)
+        {
+            // The failed row was recorded by QbListSync, and the raw error logged where the sync ran.
             return problem;
         }
 
-        if (result is null)
+        if (done is null)
         {
             // A scheduled attempt this request joined was skipped: QuickBooks closed between the two checks.
             return NotOpen();
         }
 
-        var current = lists.Current;
-        var last = await LastSyncAsync(lists.LastAttempt, actors, loggers, ct);
+        // The run and lists this flight produced, not whatever the source holds by now (§7.2: lastSync = this run).
+        var last = await LastSyncAsync(done.Run, actors, loggers, ct);
         return Results.Ok(new QbListsSyncedViewV2(
-            current.SyncedUtc,
-            current.Accounts,
-            current.Vendors,
-            current.Customers,
+            done.Lists.SyncedUtc,
+            done.Lists.Accounts,
+            done.Lists.Vendors,
+            done.Lists.Customers,
             last,
             schedule.NextSyncUtc,
-            new ListSyncCountsView(result.Accounts, result.Vendors, result.Customers)));
+            new ListSyncCountsView(done.Result.Accounts, done.Result.Vendors, done.Result.Customers)));
     }
+
+    /// <summary>
+    /// M14 §7.2: v1's QuickBooks mapping (<see cref="QuickBooksEndpoints.QuickBooksProblem"/> decides which failures are
+    /// QuickBooks's, and its status and title), with the v2 code as the problem <c>type</c> (the reason
+    /// <see cref="QbListSync.ReasonOf"/> records) and a fixed detail: never the exception text, which stays in the log
+    /// and the recorded row. Null for any other failure.
+    /// </summary>
+    public static IResult? SyncProblem(Exception ex)
+    {
+        if (QuickBooksEndpoints.QuickBooksProblem(ex) is null)
+        {
+            return null;
+        }
+
+        return QbListSync.ReasonOf(ex) switch
+        {
+            ListSyncReasons.QuickBooksBusy => Problem(
+                StatusCodes.Status503ServiceUnavailable, UnavailableTitle, ListSyncReasons.QuickBooksBusy,
+                "QuickBooks did not answer in time; it may be showing a dialog. The lists from the last good sync are still used."),
+            ListSyncReasons.QbStatus => Problem(
+                StatusCodes.Status502BadGateway, RefusedTitle, ListSyncReasons.QbStatus,
+                "QuickBooks refused the list query or sent an answer that could not be read. The lists from the last good sync are still used."),
+            _ => Problem(
+                StatusCodes.Status503ServiceUnavailable, UnavailableTitle, ListSyncReasons.QuickBooksUnavailable,
+                "QuickBooks could not be reached. The lists from the last good sync are still used; try again in a moment."),
+        };
+    }
+
+    private const string UnavailableTitle = "QuickBooks is not available";
+    private const string RefusedTitle = "QuickBooks refused the request";
+
+    private static IResult Problem(int status, string title, string type, string detail) =>
+        Results.Problem(statusCode: status, title: title, detail: detail, type: type);
 
     /// <summary>
     /// A dashboard user is the <c>dashboard</c> trigger, by their id (§3). An API key on this route is an API caller,
@@ -196,12 +239,13 @@ public static class QuickBooksListsV2Endpoints
     }
 
     /// <summary>The sync itself, on the worker, with the §12 line for its outcome.</summary>
-    private static async Task<ListSyncResult> RunLoggedAsync(
+    private static async Task<ListSyncCompletion> RunLoggedAsync(
         QbListSync sync, ListSyncTrigger trigger, string? requestedBy, ILogger log, CancellationToken ct)
     {
         try
         {
-            var result = await sync.SyncAsync(trigger, requestedBy, ct);
+            var completion = await sync.SyncWithRunAsync(trigger, requestedBy, ct);
+            var result = completion.Result;
             log.LogInformation(
                 "QuickBooks lists sync ({Trigger}, by {RequestedBy}): {Outcome}, {Accounts} accounts, {Vendors} vendors, {Customers} customers",
                 Lower(trigger), requestedBy ?? "unknown", Lower(ListSyncOutcome.Ok), result.Accounts, result.Vendors, result.Customers);
@@ -210,7 +254,7 @@ public static class QuickBooksListsV2Endpoints
                 log.LogWarning("Names in rules.json that QuickBooks does not have: {Missing}", string.Join("; ", result.MissingInRules));
             }
 
-            return result;
+            return completion;
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {

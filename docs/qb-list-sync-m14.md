@@ -99,7 +99,7 @@ Index on `(outcome, id desc)`.
    with `trigger = import` (counts from the file, `missing_in_rules` = null), so an upgraded server keeps its lists
    before the first sync.
 4. With **no database configured**, everything works as today from `qb-lists.json` (file source, §9); sync attempts
-   are not recorded and `lastSync` is null. The schedule still runs; its due time is kept in memory (startup +
+   are not stored; `lastSync` is the last attempt since the API started (kept in memory), null before any (Q-124). The schedule still runs; its due time is kept in memory (startup +
    `FirstDelayMinutes`, then last attempt + interval).
 5. When the database is configured, the app **no longer writes** `qb-lists.json` (it stays on disk, unused, after the
    import). SPEC-GAP T-1404 → Q-119.
@@ -168,7 +168,8 @@ Unchanged fields (`syncedUtc`, `accounts[{name,type}]`, `vendors`, `customers`),
 "nextSyncUtc": "2026-10-29T15:30:02Z"
 ```
 
-- `lastSync`: newest attempt; null with no database or before any attempt. `requestedBy` only for `dashboard`
+- `lastSync`: newest attempt; null before any attempt. With no database it is the last attempt since the API started
+  (kept in memory), null before any (Q-124). `requestedBy` only for `dashboard`
   (resolved with the existing user directory, as audit actors are). `message` is fixed operator-safe text per
   outcome/reason, never the raw exception.
 - `nextSyncUtc`: due time of the next scheduled sync; null when the schedule is off.
@@ -269,7 +270,7 @@ Startup log `QuickBooks:` line gains `list sync every 30 min (first after 2 min)
 - **A-5** v1 bytes unchanged (`V1ContractPinTests`, v1 OpenAPI hash); a v1 sync is recorded with trigger `api`.
 - **A-6** Retention keeps 200 rows and always the newest `ok`.
 - **A-7** Import: DB empty + file present → one `import` row; readers see the file's lists.
-- **A-8** No-database mode: everything behaves as before M14 (file source, `lastSync` null, schedule still runs and
+- **A-8** No-database mode: everything behaves as before M14 (file source, `lastSync` only the attempts since startup (Q-124), schedule still runs and
   writes the file).
 - **A-9** Golden list query includes the `IncludeRetElement` lines in qbXML order.
 - **A-10** [server] On the QuickBooks machine: scheduled sync with QuickBooks open → `ok`; QuickBooks closed → `skipped`

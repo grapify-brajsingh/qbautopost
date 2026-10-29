@@ -334,7 +334,7 @@ public sealed class ScheduledListSyncTests : IDisposable
         await _delay.NextAsync();
 
         Assert.NotNull(result);
-        Assert.Equal(_lists.Current.Accounts.Count, result.Accounts);
+        Assert.Equal(_lists.Current.Accounts.Count, result.Result.Accounts);
         Assert.Null(schedule.InFlight);
         await worker.StopAsync(CancellationToken.None);
     }

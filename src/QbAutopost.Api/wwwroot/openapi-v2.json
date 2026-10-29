@@ -158,7 +158,7 @@
         ],
         "operationId": "syncListsV2",
         "summary": "Sync now: fetch the active accounts, vendors and customers from QuickBooks and store them.",
-        "description": "M14 §7.2 (R-16). No body. In order: if QuickBooks is not running on the server the answer is `409 quickbooks-not-open` and a `skipped` attempt is recorded (the API never starts QuickBooks); if a sync is already queued or running (the automatic one, or another Sync now) this request **joins it** and answers with its result, so two presses make one QuickBooks call; otherwise the sync runs on the job worker after any job ahead of it. The caller waits at most `Api:SyncPostTimeoutSeconds` (120): past that the answer is `504 sync-timeout`, the sync carries on and `GET /api/v2/quickbooks/lists` shows its result. A failed sync never replaces the stored lists. Needs `requests:edit` (editors and admins; viewers get `403`) or, for an API key, `qb:read` as on v1. A dashboard user's sync is recorded with trigger `dashboard` and their id; an API key's with trigger `api` and the client's name. Counts against the posting rate limit (`Api:RateLimits:PostPerMinute`), because it opens a QuickBooks session. Not an audit-feed event.",
+        "description": "M14 §7.2 (R-16). No body. In order: if QuickBooks is not running on the server the answer is `409 quickbooks-not-open` and a `skipped` attempt is recorded (the API never starts QuickBooks); if a sync is already queued or running (the automatic one, or another Sync now) this request **joins it** and answers with its result, so two presses make one QuickBooks call; otherwise the sync runs on the job worker after any job ahead of it. The caller waits at most `Api:SyncPostTimeoutSeconds` (120): past that the answer is `504 sync-timeout`, the sync carries on and `GET /api/v2/quickbooks/lists` shows its result. A failed sync never replaces the stored lists. The `200` is built from the run and lists this sync produced (or the sync it joined), not read back afterwards. Needs `requests:edit` (editors and admins; viewers get `403`) or, for an API key, `qb:read` as on v1. A dashboard user's sync is recorded with trigger `dashboard` and their id; an API key's with trigger `api` and the client's name. Counts against the posting rate limit (`Api:RateLimits:PostPerMinute`), because it opens a QuickBooks session. Not an audit-feed event.",
         "x-required-scope": "requests:edit|qb:read",
         "security": [
           {
@@ -199,7 +199,7 @@
             "$ref": "#/components/responses/TooManyRequests"
           },
           "502": {
-            "description": "QuickBooks answered with an error or an unreadable response (title \"QuickBooks refused the request\"), as v1's sync. A `failed` attempt (`qb-status`) is recorded; the stored lists are unchanged.",
+            "description": "`qb-status` (problem `type`): QuickBooks answered with an error or an unreadable response (title \"QuickBooks refused the request\"). The `detail` is fixed text, never the QuickBooks or exception message (that stays in the log and the recorded attempt). A `failed` attempt (`qb-status`) is recorded; the stored lists are unchanged.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -209,7 +209,7 @@
             }
           },
           "503": {
-            "description": "QuickBooks could not be reached or did not answer in time (title \"QuickBooks is not available\"), as v1's sync. A `failed` attempt (`quickbooks-unavailable` or `quickbooks-busy`) is recorded; the stored lists are unchanged.",
+            "description": "`quickbooks-unavailable` or `quickbooks-busy` (problem `type`): QuickBooks could not be reached, or did not answer in time (title \"QuickBooks is not available\"). The `detail` is fixed text, never the exception message (that stays in the log and the recorded attempt). A `failed` attempt with the same code is recorded; the stored lists are unchanged. Or `api-stopping`: the sync this request waited for was cancelled because the API is shutting down (detail \"The API is stopping; try again in a moment.\").",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4655,7 +4655,7 @@
                   }
                 ],
                 "nullable": true,
-                "description": "The newest attempt of any outcome; null before any attempt."
+                "description": "The newest attempt of any outcome; null before any. With no database it is the last attempt since the API started (kept in memory), so it is null again after a restart."
               },
               "nextSyncUtc": {
                 "type": "string",
@@ -4708,7 +4708,7 @@
       },
       "ListSyncAttempt": {
         "type": "object",
-        "description": "M14 §7.1: one list sync attempt. `message` is fixed operator-safe text chosen by `outcome` and `reason`, never the raw error.",
+        "description": "M14 §7.1: one list sync attempt. `message` is fixed operator-safe text chosen by `outcome` and `reason`, never the raw error. With no database configured it is the last attempt since the API started (kept in memory).",
         "required": [
           "trigger",
           "outcome",

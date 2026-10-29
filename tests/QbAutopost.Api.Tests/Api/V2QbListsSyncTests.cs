@@ -460,8 +460,8 @@ public sealed class V2QbListsSyncTests : IDisposable
     public async Task Should_StartOneFlightAndJoinIt_When_TwoCallersAskTogether()
     {
         var schedule = NewSchedule();
-        var enqueued = new List<Func<CancellationToken, Task<ListSyncResult>>>();
-        var result = new ListSyncResult(1, 2, 3, []);
+        var enqueued = new List<Func<CancellationToken, Task<ListSyncCompletion>>>();
+        var result = Done(1);
 
         var (first, joinedFirst) = schedule.JoinOrStart(_ => Task.FromResult(result), enqueued.Add);
         var (second, joinedSecond) = schedule.JoinOrStart(_ => throw new InvalidOperationException("never started"), enqueued.Add);
@@ -482,7 +482,7 @@ public sealed class V2QbListsSyncTests : IDisposable
     public async Task Should_FaultTheFlightAndClearIt_When_TheSyncFails()
     {
         var schedule = NewSchedule();
-        Func<CancellationToken, Task<ListSyncResult>>? work = null;
+        Func<CancellationToken, Task<ListSyncCompletion>>? work = null;
         var (flight, _) = schedule.JoinOrStart(_ => throw new QuickBooksBusyException("busy"), w => work = w);
 
         await Assert.ThrowsAsync<QuickBooksBusyException>(() => work!(CancellationToken.None));
@@ -497,9 +497,149 @@ public sealed class V2QbListsSyncTests : IDisposable
         var schedule = NewSchedule();
 
         Assert.Throws<InvalidOperationException>(() =>
-            schedule.JoinOrStart(_ => Task.FromResult(new ListSyncResult(0, 0, 0, [])), _ => throw new InvalidOperationException("closed")));
+            schedule.JoinOrStart(_ => Task.FromResult(Done(0)), _ => throw new InvalidOperationException("closed")));
 
         Assert.Null(schedule.InFlight);
+    }
+
+    /// <summary>Review fix 5: the two triggers exclude each other through the one handle, with no worker or host.</summary>
+    [Fact]
+    public async Task Should_RefuseAScheduledAttempt_When_ADashboardFlightHoldsTheHandle()
+    {
+        var schedule = NewSchedule();
+        Func<CancellationToken, Task<ListSyncCompletion>>? work = null;
+        var (flight, _) = schedule.JoinOrStart(_ => Task.FromResult(Done(4)), w => work = w);
+
+        Assert.Null(schedule.BeginAttempt());
+
+        await work!(CancellationToken.None);
+        Assert.True(flight.IsCompletedSuccessfully);
+        var attempt = schedule.BeginAttempt();
+
+        Assert.NotNull(attempt);
+        Assert.Same(attempt.Task, schedule.InFlight);
+        var (joined, wasJoined) = schedule.JoinOrStart(_ => throw new InvalidOperationException("never started"), _ => Assert.Fail("never queued"));
+        Assert.True(wasJoined);
+        Assert.Same(attempt.Task, joined);
+        attempt.TrySetResult(null);
+        schedule.EndAttempt(ListSyncOutcome.Skipped);
+        Assert.Null(schedule.InFlight);
+    }
+
+    // ---- review fixes: the flight's own answer, v2 codes, stopping -----------------------------------------------------
+
+    [Fact]
+    public async Task Should_AnswerWithTheRunAndListsTheFlightProduced_When_TheSourceHasMovedOn()
+    {
+        using var host = LoggedHost();
+        using var editor = User(host, DashboardRoles.Editor);
+        var schedule = host.Services.GetRequiredService<ListSyncSchedule>();
+        var attempt = schedule.BeginAttempt()!;
+        var post = editor.PostAsync(Sync, null);
+        await UntilJoinedAsync();
+
+        // Something else is recorded after the flight's own run; the answer must still be the flight's.
+        await Store(host).RecordAsync(Skipped(), null, CancellationToken.None);
+        var syncedUtc = new DateTime(2026, 10, 29, 9, 0, 0, DateTimeKind.Utc);
+        var lists = new QbLists
+        {
+            SyncedUtc = syncedUtc,
+            Accounts = [new QbAccount { Name = "Flight Account", Type = "Bank" }],
+            Vendors = ["Flight Vendor"],
+            Customers = [],
+        };
+        var run = new ListSyncRun
+        {
+            Trigger = ListSyncTrigger.Schedule, Outcome = ListSyncOutcome.Ok, Accounts = 1, Vendors = 1, Customers = 0,
+            StartedUtc = syncedUtc, FinishedUtc = syncedUtc,
+        };
+        attempt.TrySetResult(new ListSyncCompletion(new ListSyncResult(1, 1, 0, []), run, lists));
+
+        using var response = await post.WaitAsync(Patience);
+        schedule.EndAttempt(ListSyncOutcome.Ok);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(["Flight Account"], body.GetProperty("accounts").EnumerateArray().Select(a => a.GetProperty("name").GetString()));
+        Assert.Equal(["Flight Vendor"], body.GetProperty("vendors").EnumerateArray().Select(v => v.GetString()));
+        Assert.Equal(syncedUtc, body.GetProperty("syncedUtc").GetDateTime().ToUniversalTime());
+        Assert.Equal("schedule", body.GetProperty("lastSync").GetProperty("trigger").GetString());
+        Assert.Equal("ok", body.GetProperty("lastSync").GetProperty("outcome").GetString());
+        Assert.Equal(1, body.GetProperty("counts").GetProperty("accounts").GetInt32());
+        Assert.Equal(1, body.GetProperty("counts").GetProperty("vendors").GetInt32());
+        Assert.Equal(0, body.GetProperty("counts").GetProperty("customers").GetInt32());
+        Assert.Empty(_factory.Gateway.Requests);
+    }
+
+    [Fact]
+    public async Task Should_Answer503ApiStopping_When_TheJoinedFlightIsCancelled()
+    {
+        using var host = LoggedHost();
+        using var editor = User(host, DashboardRoles.Editor);
+        var schedule = host.Services.GetRequiredService<ListSyncSchedule>();
+        var attempt = schedule.BeginAttempt()!;
+        var post = editor.PostAsync(Sync, null);
+        await UntilJoinedAsync();
+
+        attempt.TrySetCanceled();
+
+        using var response = await post.WaitAsync(Patience);
+        schedule.EndAttempt(ListSyncOutcome.Failed);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var problem = await response.ReadProblemAsync();
+        Assert.Equal(QuickBooksListsV2Endpoints.StoppingType, problem.GetProperty("type").GetString());
+        Assert.Equal("The API is stopping; try again in a moment.", problem.GetProperty("detail").GetString());
+        Assert.Empty(_factory.Gateway.Requests);
+    }
+
+    public static TheoryData<string, HttpStatusCode, string> QuickBooksFailures() => new()
+    {
+        { "unavailable", HttpStatusCode.ServiceUnavailable, ListSyncReasons.QuickBooksUnavailable },
+        { "call", HttpStatusCode.ServiceUnavailable, ListSyncReasons.QuickBooksUnavailable },
+        { "busy", HttpStatusCode.ServiceUnavailable, ListSyncReasons.QuickBooksBusy },
+        { "status", HttpStatusCode.BadGateway, ListSyncReasons.QbStatus },
+        { "format", HttpStatusCode.BadGateway, ListSyncReasons.QbStatus },
+    };
+
+    [Theory]
+    [MemberData(nameof(QuickBooksFailures))]
+    public async Task Should_AnswerTheV2CodeWithAFixedDetail_When_QuickBooksFails(string failure, HttpStatusCode status, string code)
+    {
+        const string Raw = "RAW-ERROR-TEXT at C:\\secret\\company.QBW";
+        _factory.Gateway.QueryThrow = failure switch
+        {
+            "unavailable" => new QuickBooksUnavailableException(Raw),
+            "call" => new QuickBooksCallException(Raw, -1, null),
+            "busy" => new QuickBooksBusyException(Raw),
+            "status" => new QbStatusException(Raw),
+            _ => new FormatException(Raw),
+        };
+        using var editor = User(_factory, DashboardRoles.Editor);
+
+        using var response = await editor.PostAsync(Sync, null);
+
+        Assert.Equal(status, response.StatusCode);
+        var problem = await response.ReadProblemAsync();
+        Assert.Equal(code, problem.GetProperty("type").GetString());
+        var detail = problem.GetProperty("detail").GetString()!;
+        Assert.False(string.IsNullOrWhiteSpace(detail));
+        Assert.DoesNotContain("RAW-ERROR-TEXT", problem.GetRawText(), StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", detail, StringComparison.Ordinal);
+        Assert.Equal(code, Source(_factory).LastAttempt!.Reason);
+        Assert.Contains("RAW-ERROR-TEXT", Source(_factory).LastAttempt!.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Should_KeepTheV1RawProblem_When_TheV1SyncFails()
+    {
+        _factory.Gateway.QueryThrow = new QuickBooksUnavailableException("RAW-ERROR-TEXT");
+        using var key = Key(_factory, ApiFactory.ApiKey);
+
+        using var response = await key.PostAsync(ApiRoutes.V1Prefix + "/quickbooks/lists/sync", null);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var problem = await response.ReadProblemAsync();
+        Assert.Contains("RAW-ERROR-TEXT", problem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.NotEqual(ListSyncReasons.QuickBooksUnavailable, problem.GetProperty("type").GetString());
     }
 
     // ---- messages -----------------------------------------------------------------------------------------------------
@@ -570,6 +710,18 @@ public sealed class V2QbListsSyncTests : IDisposable
 
     private ListSyncSchedule NewSchedule() =>
         new(new global::QbAutopost.Api.Configuration.ListSyncSettings { IntervalMinutes = 0 }, new FileQbLists(_factory.Dir.Combine("unit-lists.json")), new FixedClock());
+
+    private WebApplicationFactory<Program> LoggedHost() =>
+        _factory.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<ILoggerFactory>(LoggerFactory.Create(l => l.AddProvider(_logs)))));
+
+    private static ListSyncCompletion Done(int accounts) =>
+        new(new ListSyncResult(accounts, 0, 0, []), Skipped() with { Outcome = ListSyncOutcome.Ok, Reason = null }, QbLists.Empty);
+
+    private static ListSyncRun Skipped() => new()
+    {
+        Trigger = ListSyncTrigger.Api, Outcome = ListSyncOutcome.Skipped, Reason = ListSyncReasons.QuickBooksNotOpen,
+        StartedUtc = DateTime.UtcNow, FinishedUtc = DateTime.UtcNow,
+    };
 
     private static IQbListsSource Source(WebApplicationFactory<Program> host) => host.Services.GetRequiredService<IQbListsSource>();
 

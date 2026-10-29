@@ -21,8 +21,8 @@ public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource s
     private readonly object _gate = new();
     private DateTime? _workerStartedUtc;
     private Attempt? _ownLast;
-    private Task<ListSyncResult?>? _inFlight;
-    private Task<ListSyncResult?>? _scheduled;
+    private Task<ListSyncCompletion?>? _inFlight;
+    private Task<ListSyncCompletion?>? _scheduled;
 
     /// <summary>False when <c>IntervalMinutes</c> is 0: the worker never syncs on its own.</summary>
     public bool Enabled => settings.IntervalMinutes > 0;
@@ -67,7 +67,7 @@ public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource s
     /// skipped, faulted with the sync's exception when it failed, cancelled when the host stopped it. It completes
     /// before it is cleared, so a caller who read it can always await it.
     /// </summary>
-    public Task<ListSyncResult?>? InFlight => Volatile.Read(ref _inFlight);
+    public Task<ListSyncCompletion?>? InFlight => Volatile.Read(ref _inFlight);
 
     /// <summary>
     /// M14 §7.2: the dashboard's single flight. When a sync is in flight (<see cref="InFlight"/>: scheduled, or another
@@ -80,8 +80,8 @@ public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource s
     /// worker moves on. A caller's own wait bound is applied by the caller; it never cancels the flight.
     /// </para>
     /// </summary>
-    public (Task<ListSyncResult?> Flight, bool Joined) JoinOrStart(
-        Func<CancellationToken, Task<ListSyncResult>> sync, Action<Func<CancellationToken, Task<ListSyncResult>>> enqueue)
+    public (Task<ListSyncCompletion?> Flight, bool Joined) JoinOrStart(
+        Func<CancellationToken, Task<ListSyncCompletion>> sync, Action<Func<CancellationToken, Task<ListSyncCompletion>>> enqueue)
     {
         ArgumentNullException.ThrowIfNull(sync);
         ArgumentNullException.ThrowIfNull(enqueue);
@@ -92,7 +92,7 @@ public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource s
                 return (running, true);
             }
 
-            var flight = new TaskCompletionSource<ListSyncResult?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var flight = new TaskCompletionSource<ListSyncCompletion?>(TaskCreationOptions.RunContinuationsAsynchronously);
             Volatile.Write(ref _inFlight, flight.Task);
             try
             {
@@ -146,7 +146,8 @@ public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource s
     /// sync is already in flight (<see cref="JoinOrStart"/>): its item is in the worker's channel, so the worker runs it
     /// next instead, records nothing for this pass (§5.3), and the attempt it records moves the due time.
     /// </summary>
-    internal TaskCompletionSource<ListSyncResult?>? BeginAttempt()
+    /// <remarks>Called by <see cref="JobWorker"/> only; public so the single-flight rule can be tested on its own.</remarks>
+    public TaskCompletionSource<ListSyncCompletion?>? BeginAttempt()
     {
         lock (_gate)
         {
@@ -155,7 +156,7 @@ public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource s
                 return null;
             }
 
-            var attempt = new TaskCompletionSource<ListSyncResult?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var attempt = new TaskCompletionSource<ListSyncCompletion?>(TaskCreationOptions.RunContinuationsAsynchronously);
             _scheduled = attempt.Task;
             Volatile.Write(ref _inFlight, attempt.Task);
             return attempt;
@@ -166,7 +167,8 @@ public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource s
     /// Ends a scheduled attempt: remembers when it finished and how (the next due time moves even if it could not be
     /// recorded) and clears <see cref="InFlight"/>. The caller completes the attempt's task first.
     /// </summary>
-    internal void EndAttempt(ListSyncOutcome outcome)
+    /// <remarks>Called by <see cref="JobWorker"/> only; public for the same reason as <see cref="BeginAttempt"/>.</remarks>
+    public void EndAttempt(ListSyncOutcome outcome)
     {
         lock (_gate)
         {
@@ -180,8 +182,8 @@ public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource s
     }
 
     /// <summary>The work of one dashboard flight, on the worker: completes the flight, then clears it.</summary>
-    private async Task<ListSyncResult> RunFlightAsync(
-        TaskCompletionSource<ListSyncResult?> flight, Func<CancellationToken, Task<ListSyncResult>> sync, CancellationToken ct)
+    private async Task<ListSyncCompletion> RunFlightAsync(
+        TaskCompletionSource<ListSyncCompletion?> flight, Func<CancellationToken, Task<ListSyncCompletion>> sync, CancellationToken ct)
     {
         try
         {
@@ -210,7 +212,7 @@ public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource s
     }
 
     /// <summary>Clears <see cref="InFlight"/> when it is still <paramref name="task"/>. Called under the lock.</summary>
-    private void Clear(Task<ListSyncResult?> task)
+    private void Clear(Task<ListSyncCompletion?> task)
     {
         if (ReferenceEquals(_inFlight, task))
         {
