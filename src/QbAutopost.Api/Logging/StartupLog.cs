@@ -33,10 +33,12 @@ public static class StartupLog
             "Data files: ledger {Ledger} ({LedgerState}), QuickBooks lists {QbLists} ({QbListsState}), job index {JobIndex} ({JobIndexState}), logs {Logs}",
             s.Paths.Ledger, State(s.Paths.Ledger), s.Paths.QbLists, State(s.Paths.QbLists), s.Paths.JobIndex, State(s.Paths.JobIndex), s.Paths.Logs);
         log.LogInformation(
-            "QuickBooks: app name {AppName}, qbXML {QbXmlVersion}, duplicate window {DuplicateWindowDays} days, busy timeout {BusyTimeoutSeconds} s, backup folder {BackupFolder}, backup max age {BackupMaxAgeHours} h",
+            "QuickBooks: app name {AppName}, qbXML {QbXmlVersion}, duplicate window {DuplicateWindowDays} days, busy timeout {BusyTimeoutSeconds} s, backup folder {BackupFolder}, backup max age {BackupMaxAgeHours} h, {ListSync}, {ListsSource}",
             s.QuickBooks.AppName, s.QuickBooks.QbXmlVersion, s.QuickBooks.DuplicateWindowDays, s.QuickBooks.BusyTimeoutSeconds,
             string.IsNullOrWhiteSpace(s.QuickBooks.BackupFolder) ? "(not set: backup age not checked)" : s.QuickBooks.BackupFolder,
-            s.QuickBooks.BackupMaxAgeHours);
+            s.QuickBooks.BackupMaxAgeHours,
+            ListSyncText(s.QuickBooks.ListSync),
+            s.Database.Configured ? "lists in the database" : "lists in " + s.Paths.QbLists);
         if (s.OpenRouter.Enabled)
         {
             log.LogInformation(
@@ -63,6 +65,12 @@ public static class StartupLog
             log.LogWarning("Rules file {RulesFile} is {State}: every job will fail until it exists", s.Company.RulesFile, State(s.Company.RulesFile));
         }
     }
+
+    // M14 §11: the schedule as the worker will run it; 0 is "off" (the validator already rejected values below 5).
+    private static string ListSyncText(ListSyncSettings l) =>
+        l.IntervalMinutes == 0
+            ? "list sync schedule off"
+            : FormattableString.Invariant($"list sync every {l.IntervalMinutes} min (first after {l.FirstDelayMinutes} min)");
 
     private static string State(string path) =>
         string.IsNullOrWhiteSpace(path) ? "not set" : File.Exists(path) ? Found : "missing";

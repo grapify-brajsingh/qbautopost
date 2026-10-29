@@ -1,6 +1,7 @@
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Database;
 using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Pipeline;
 
 namespace QbAutopost.Api.Health;
 
@@ -56,9 +57,19 @@ public static class Readiness
         // Only a warning: FR-15 lists are how names are validated, but a job every rule resolves still posts.
         try
         {
-            return lists.Current.SyncedUtc is not null
-                ? new ReadinessCheck("qb-lists", true, Warning, s.Paths.QbLists)
-                : new ReadinessCheck("qb-lists", false, Warning, $"{s.Paths.QbLists} not found; run POST /api/v1/quickbooks/lists/sync");
+            var current = lists.Current;
+            var last = lists.LastAttempt;
+            if (current.SyncedUtc is not { } synced)
+            {
+                var failed = last is { Outcome: not ListSyncOutcome.Ok } bad ? $" ({AttemptText(bad)})" : "";
+                return new ReadinessCheck("qb-lists", false, Warning, $"{s.Paths.QbLists} not found; run POST /api/v1/quickbooks/lists/sync{failed}");
+            }
+
+            // Spec §9: ok, with the age and any failed or skipped newest attempt named in the text.
+            var message = last is { Outcome: not ListSyncOutcome.Ok } attempt
+                ? $"{AttemptText(attempt)}; lists from {Hm(synced)}"
+                : $"{(s.Database.Configured ? "database" : s.Paths.QbLists)}; lists from {Hm(synced)}";
+            return new ReadinessCheck("qb-lists", true, Warning, message);
         }
         catch (Exception ex) when (ex is System.Text.Json.JsonException or IOException or InvalidDataException)
         {
@@ -66,6 +77,11 @@ public static class Readiness
             return new ReadinessCheck("qb-lists", false, Warning, $"{s.Paths.QbLists} is unreadable; run POST /api/v1/quickbooks/lists/sync");
         }
     }
+
+    private static string AttemptText(ListSyncRun run) =>
+        $"last sync {run.Outcome.ToString().ToLowerInvariant()} {Hm(run.FinishedUtc)}{(string.IsNullOrEmpty(run.Reason) ? "" : $" ({run.Reason})")}";
+
+    private static string Hm(DateTime utc) => utc.ToUniversalTime().ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture);
 
     private static ReadinessCheck LogFolder(AppSettings s)
     {

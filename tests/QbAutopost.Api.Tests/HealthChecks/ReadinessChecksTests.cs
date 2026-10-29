@@ -107,6 +107,83 @@ public sealed class ReadinessChecksTests : IDisposable
         Assert.Contains("unreadable", lists.Message, StringComparison.Ordinal);
     }
 
+    private sealed class StubLists(QbAutopost.Core.Models.QbLists current, QbAutopost.Core.Pipeline.ListSyncRun? last) : QbAutopost.Core.Abstractions.IQbListsSource
+    {
+        public QbAutopost.Core.Models.QbLists Current => current;
+
+        public QbAutopost.Core.Pipeline.ListSyncRun? LastAttempt => last;
+    }
+
+    private static QbAutopost.Core.Pipeline.ListSyncRun Attempt(QbAutopost.Core.Pipeline.ListSyncOutcome outcome, string? reason, DateTime finished) =>
+        new()
+        {
+            Trigger = QbAutopost.Core.Pipeline.ListSyncTrigger.Schedule,
+            StartedUtc = finished,
+            FinishedUtc = finished,
+            Outcome = outcome,
+            Reason = reason,
+        };
+
+    private static readonly QbAutopost.Core.Models.QbLists Synced1430 =
+        new() { SyncedUtc = new DateTime(2026, 10, 29, 14, 30, 0, DateTimeKind.Utc) };
+
+    [Fact]
+    public void Should_NameFailedAttemptAndListAge_When_ListsExistAndLastSyncFailed()
+    {
+        var failed = Attempt(QbAutopost.Core.Pipeline.ListSyncOutcome.Failed, "quickbooks-not-open", new DateTime(2026, 10, 29, 15, 0, 0, DateTimeKind.Utc));
+
+        var view = Readiness.Evaluate(Ready(), workerStarted: true, new StubLists(Synced1430, failed));
+
+        var lists = Check(view, "qb-lists");
+        Assert.True(lists.Ok);
+        Assert.Equal(Readiness.Warning, lists.Severity);
+        Assert.Contains("last sync failed 15:00 (quickbooks-not-open); lists from 14:30", lists.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_NameSkippedAttempt_When_LastSyncWasSkipped()
+    {
+        var skipped = Attempt(QbAutopost.Core.Pipeline.ListSyncOutcome.Skipped, "quickbooks-not-open", new DateTime(2026, 10, 29, 15, 30, 0, DateTimeKind.Utc));
+
+        var lists = Check(Readiness.Evaluate(Ready(), workerStarted: true, new StubLists(Synced1430, skipped)), "qb-lists");
+
+        Assert.True(lists.Ok);
+        Assert.Contains("last sync skipped 15:30 (quickbooks-not-open); lists from 14:30", lists.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_NameOnlyListAge_When_LastSyncWasOk()
+    {
+        var ok = Attempt(QbAutopost.Core.Pipeline.ListSyncOutcome.Ok, null, new DateTime(2026, 10, 29, 14, 30, 0, DateTimeKind.Utc));
+
+        var lists = Check(Readiness.Evaluate(Ready(), workerStarted: true, new StubLists(Synced1430, ok)), "qb-lists");
+
+        Assert.True(lists.Ok);
+        Assert.Contains("lists from 14:30", lists.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("last sync", lists.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_KeepNotSyncedGuidance_When_NeverSynced()
+    {
+        var lists = Check(Readiness.Evaluate(Ready(), workerStarted: true, new StubLists(QbAutopost.Core.Models.QbLists.Empty, null)), "qb-lists");
+
+        Assert.False(lists.Ok);
+        Assert.Contains("run POST /api/v1/quickbooks/lists/sync", lists.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("last sync", lists.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_AddFailedAttempt_When_NeverSyncedAndLastAttemptFailed()
+    {
+        var failed = Attempt(QbAutopost.Core.Pipeline.ListSyncOutcome.Failed, "qb-status", new DateTime(2026, 10, 29, 9, 5, 0, DateTimeKind.Utc));
+
+        var lists = Check(Readiness.Evaluate(Ready(), workerStarted: true, new StubLists(QbAutopost.Core.Models.QbLists.Empty, failed)), "qb-lists");
+
+        Assert.False(lists.Ok);
+        Assert.Contains("last sync failed 09:05 (qb-status)", lists.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Should_NotBeReady_When_LogFolderCannotBeCreated()
     {
