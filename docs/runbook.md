@@ -769,3 +769,27 @@ at startup the log has one warning. An older server needs a Windows update, not 
 | `429` | The user passed `Extraction:MaxPerUserPerHour` |
 | `413` / `422` | Over 10 MB or 50 pages, not a PDF, protected, no text layer, or not a bank statement |
 | The save says the record expired | More than `Extraction:RecordHours` passed; upload again |
+
+## 13. Local Docker stack for dashboard integration (T-1303)
+
+**Not a deployment.** QuickBooks Desktop needs Windows COM, so production stays the Windows service of sections 1–12.
+The `Dockerfile` at the repository root builds a Linux image that runs the **simulated QuickBooks company**
+(`QuickBooks:Fake=true`, allowed only with `ASPNETCORE_ENVIRONMENT=Development`), for developing and testing the
+dashboard against the real API.
+
+- The stack is defined in the dashboard repository: `D:\qb_post_react\docker-compose.integration.yml` (PostgreSQL 16,
+  a one-shot `psql` step that applies `deploy/migrations.sql`, this API, an OpenRouter stand-in on the API's loopback,
+  and the dashboard behind nginx on `http://localhost:8080`).
+- Every secret is a throwaway value in that compose file and reaches the API as a `QBAUTOPOST__*` variable; nothing is
+  baked into the image.
+- The QuickBooks name lists come from `docker/seed/qb-lists.json` in the dashboard repository, mounted read-only at
+  `/data/qb-lists.json` (the simulated company starts with empty lists).
+- To read real PDFs with the real model, set `OPENROUTER_BASE_URL=https://openrouter.ai/api/v1` and
+  `OPENROUTER_API_KEY` before `docker compose up`.
+
+```
+cd D:\qb_post_react
+docker compose -f docker-compose.integration.yml up -d --build
+npx playwright test -c playwright.integration.config.ts
+docker compose -f docker-compose.integration.yml down -v   # -v also drops the database volume
+```

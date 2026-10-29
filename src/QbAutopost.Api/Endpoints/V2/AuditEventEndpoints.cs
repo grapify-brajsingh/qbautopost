@@ -52,7 +52,8 @@ public static class AuditEventEndpoints
         }
 
         var page = await audit.AuditEventsAsync(query!, ct);
-        var names = await actors.ResolveAsync(page.Items.Select(e => (string?)e.ActorId), ct);
+        // One lookup for the actors and for the users the user events are about (M13 spec 4).
+        var names = await actors.ResolveAsync(page.Items.Select(e => (string?)e.ActorId).Concat(page.Items.Select(SubjectOf)), ct);
         var infos = new Dictionary<long, AuditRequestView?>();
         foreach (var id in page.Items.Where(e => e.RequestId is not null).Select(e => e.RequestId!.Value).Distinct())
         {
@@ -76,7 +77,39 @@ public static class AuditEventEndpoints
             e.Old,
             e.New,
             e.VersionNumber,
-            e.Detail);
+            WithSubjectNames(e, names));
+
+    /// <summary>The user a user event is about (<c>detail.userId</c>, added by <see cref="AuditEventMapper"/>), else null.</summary>
+    private static string? SubjectOf(AuditEvent e) =>
+        e.Action.StartsWith("user-", StringComparison.Ordinal)
+        && e.Detail is JsonObject d && d["userId"] is JsonValue v && v.TryGetValue<string>(out var id)
+            ? id
+            : null;
+
+    /// <summary>
+    /// M13 spec 4 (R-7.3): a user event also names the user it is about, read now from the user table. A copy is changed,
+    /// never the stored detail; a value already stored is kept; an unknown id leaves the detail as stored.
+    /// </summary>
+    private static JsonNode? WithSubjectNames(AuditEvent e, ActorNames names)
+    {
+        if (SubjectOf(e) is not { } id || names.UserOf(id) is not { } user)
+        {
+            return e.Detail;
+        }
+
+        var detail = (JsonObject)e.Detail!.DeepClone();
+        if (!detail.ContainsKey("email") && user.Email is not null)
+        {
+            detail["email"] = user.Email;
+        }
+
+        if (!detail.ContainsKey("displayName"))
+        {
+            detail["displayName"] = user.Name;
+        }
+
+        return detail;
+    }
 
     /// <summary>One read per distinct request on the page (at most 200); the store has no batched summary read.</summary>
     private static async Task<AuditRequestView?> RequestOfAsync(ISavedRequestStore store, long id, CancellationToken ct) =>

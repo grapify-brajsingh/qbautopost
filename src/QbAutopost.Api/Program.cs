@@ -454,6 +454,9 @@ try
     app.UseExceptionHandler();
     app.UseStatusCodePages();
     app.UseQbAutopostRequestLogging();
+    // T-1304 (dashboard-integration-m13 §4a): inside the request log, so a request the client abandoned is one 499 line
+    // at Information rather than a 500 at Error.
+    app.UseMiddleware<ClientAbortMiddleware>();
     // T-911 (FR-A-14): in front of the key check, so a 401 carries the same headers a 200 does.
     app.UseMiddleware<SecurityHeadersMiddleware>();
     // T-911 (FR-A-17): also in front of it — refusing a flood should not depend on who is sending it.

@@ -3564,7 +3564,7 @@
           },
           "detail": {
             "nullable": true,
-            "description": "Action-specific, or null. For `received` (dashboard-api-m12 §7.5): `{ \"source\": \"upload\", \"fileName\": \"…\" }` for a saved upload, `{ \"source\": \"email\" }` for a v2 save that carried email metadata, `null` for every other save and for older rows."
+            "description": "Action-specific, or null. For `received` (dashboard-api-m12 §7.5): `{ \"source\": \"upload\", \"fileName\": \"…\" }` for a saved upload, `{ \"source\": \"email\" }` for a v2 save that carried email metadata, `null` for every other save and for older rows. For user events (`user-*` except `user-session-revoked` and `user-other`): the stored detail plus `userId`, `email` and `displayName` of the user concerned, looked up when the feed is read (dashboard-integration-m13 §4, R-7.3)."
           }
         }
       },
@@ -3831,6 +3831,10 @@
           },
           "status": {
             "$ref": "#/components/schemas/UserStatus"
+          },
+          "rowVersion": {
+            "type": "string",
+            "description": "The user's version: exactly the value the ETag of GET /users/{id} carries, without the quotes. Send it as If-Match: \"<rowVersion>\" from a list row (dashboard-integration-m13 §3, R-15)."
           }
         }
       },

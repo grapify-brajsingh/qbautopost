@@ -53,6 +53,9 @@ public sealed class ActorNames(IReadOnlyDictionary<string, UserName> users, IRea
     }
 
     public string ClientName(string clientId) => clients.GetValueOrDefault(clientId) ?? clientId;
+
+    /// <summary>A dashboard user the lookup found, or null (an API client, or an id nobody knows).</summary>
+    public UserName? UserOf(string id) => users.GetValueOrDefault(id);
 }
 
 /// <summary>

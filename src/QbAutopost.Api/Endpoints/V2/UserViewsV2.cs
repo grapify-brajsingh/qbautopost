@@ -26,7 +26,11 @@ public static class UserStatuses
         : Active;
 }
 
-/// <summary>A v2 <c>GET /users</c> row: the v1 <see cref="UserView"/> fields plus <see cref="Status"/> (spec 12).</summary>
+/// <summary>
+/// A v2 <c>GET /users</c> row: the v1 <see cref="UserView"/> fields plus <see cref="Status"/> (spec 12) and
+/// <see cref="RowVersion"/>, the user's <c>ConcurrencyStamp</c> (M13 spec 3, R-15): the value the user's <c>ETag</c>
+/// carries, without the quotes, so a list row can send <c>If-Match</c> for the version the admin saw.
+/// </summary>
 public sealed record UserViewV2(
     string Id,
     string Email,
@@ -37,13 +41,14 @@ public sealed record UserViewV2(
     DateTime CreatedUtc,
     DateTime? LastLoginUtc,
     DateTime? LockedOutUntilUtc,
-    string Status)
+    string Status,
+    string RowVersion)
 {
     public static UserViewV2 Of(AppUser user, string role, DateTime nowUtc)
     {
         var view = UserView.Of(user, role, nowUtc);
         return new(view.Id, view.Email, view.DisplayName, view.Role, view.Disabled, view.MustChangePassword, view.CreatedUtc,
-            view.LastLoginUtc, view.LockedOutUntilUtc, UserStatuses.Of(user, nowUtc));
+            view.LastLoginUtc, view.LockedOutUntilUtc, UserStatuses.Of(user, nowUtc), user.ConcurrencyStamp ?? "");
     }
 }
 
