@@ -1,9 +1,11 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using QbAutopost.Api.Tests.TestSupport;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Models;
+using QbAutopost.Core.Pipeline;
 using QbAutopost.Core.Store;
 
 namespace QbAutopost.Api.Tests.Api;
@@ -94,6 +96,23 @@ public sealed class SyncListsApiTests : IDisposable
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         Assert.Empty(_factory.Gateway.Requests);
+    }
+
+    /// <summary>M14 A-5 (§8): a v1 sync, by either spelling, is recorded with trigger <c>api</c> and the client's name.</summary>
+    [Theory]
+    [InlineData("/qb/sync-lists")]
+    [InlineData("/api/v1/quickbooks/lists/sync")]
+    public async Task Should_RecordTheSyncWithTriggerApi_When_TheV1RouteSyncs(string route)
+    {
+        using var response = await _client.PostAsync(route, null);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var run = _factory.Services.GetRequiredService<IQbListsSource>().LastAttempt;
+
+        Assert.NotNull(run);
+        Assert.Equal(ListSyncTrigger.Api, run.Trigger);
+        Assert.Equal(ListSyncOutcome.Ok, run.Outcome);
+        Assert.False(string.IsNullOrEmpty(run.RequestedBy));
     }
 
     [Fact]

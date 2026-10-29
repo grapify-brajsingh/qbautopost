@@ -107,7 +107,13 @@ public sealed class JobWorker(
         using var scope = log.BeginScope(new Dictionary<string, object> { ["jobId"] = ScheduledSyncLabel });
         var warnOnFailure = schedule.LastKnownWasOk;
         var started = schedule.UtcNow;
-        var attempt = schedule.BeginAttempt();
+        if (schedule.BeginAttempt() is not { } attempt)
+        {
+            // M14 §7.2: a dashboard sync is in flight; its item is already in the channel, so the loop runs it next.
+            log.LogDebug("Scheduled list sync deferred: a dashboard sync is queued");
+            return;
+        }
+
         var outcome = ListSyncOutcome.Failed;
         try
         {

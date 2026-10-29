@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using QbAutopost.Api.Configuration;
+using QbAutopost.Api.Endpoints.V2;
 using QbAutopost.Api.Jobs;
 using QbAutopost.Api.Security;
 using QbAutopost.Core.Abstractions;
@@ -21,13 +22,15 @@ public static class QuickBooksEndpoints
     /// <summary>FR-A-4 request; every field optional.</summary>
     public sealed record ConnectionTestRequest(string? CompanyFile, int? TimeoutSeconds, bool? IncludeCompanyInfo);
 
-    /// <param name="flavor">T-1109: <see cref="ApiFlavor.V2"/> maps <c>GET /quickbooks/lists</c> only (dashboard v2 spec 3).</param>
+    /// <param name="flavor">
+    /// T-1109: <see cref="ApiFlavor.V2"/> maps the dashboard's lists routes only (dashboard v2 spec 3); since M14 §7 they
+    /// are <see cref="V2.QuickBooksListsV2Endpoints"/> (the v2 GET shape and Sync now).
+    /// </param>
     public static IEndpointRouteBuilder MapQuickBooksEndpoints(this IEndpointRouteBuilder app, ApiFlavor flavor = ApiFlavor.V1)
     {
         if (flavor == ApiFlavor.V2)
         {
-            app.MapGet("/quickbooks/lists", GetLists);
-            return app;
+            return app.MapQuickBooksListsV2Endpoints();
         }
 
         // T-914 (api-v1 §3): the versioned spelling of the sync, and the read of what it cached. The flat

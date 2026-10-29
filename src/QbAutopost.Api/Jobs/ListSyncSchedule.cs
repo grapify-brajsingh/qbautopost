@@ -7,6 +7,8 @@ namespace QbAutopost.Api.Jobs;
 /// <summary>
 /// M14 §5: when the scheduled list sync is due, and the handle of the one running now. Shared by <see cref="JobWorker"/>
 /// (which runs the sync) and the v2 lists routes (which show <see cref="NextSyncUtc"/> and join <see cref="InFlight"/>).
+/// M14 §7.2: <see cref="InFlight"/> is the one single-flight handle for both triggers; a dashboard sync takes it through
+/// <see cref="JoinOrStart"/>, a scheduled attempt through <c>BeginAttempt</c>, and neither starts while the other holds it.
 /// <para>
 /// Due = <c>max(last attempt finished + interval, worker start + FirstDelay)</c>, or <c>worker start + FirstDelay</c>
 /// when no attempt is known. "Last attempt" is the newest of the source's <see cref="IQbListsSource.LastAttempt"/> (any
@@ -20,6 +22,7 @@ public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource s
     private DateTime? _workerStartedUtc;
     private Attempt? _ownLast;
     private Task<ListSyncResult?>? _inFlight;
+    private Task<ListSyncResult?>? _scheduled;
 
     /// <summary>False when <c>IntervalMinutes</c> is 0: the worker never syncs on its own.</summary>
     public bool Enabled => settings.IntervalMinutes > 0;
@@ -59,11 +62,51 @@ public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource s
     }
 
     /// <summary>
-    /// The scheduled attempt running now, or null. Its result is the sync's answer, null when the attempt was skipped,
-    /// faulted with the sync's exception when it failed, cancelled when the host stopped it. It completes before it is
-    /// cleared, so a caller who read it can always await it.
+    /// The list sync in flight now, or null: the scheduled attempt the worker is running, or a dashboard sync that is
+    /// queued or running (<see cref="JoinOrStart"/>). Its result is the sync's answer, null when a scheduled attempt was
+    /// skipped, faulted with the sync's exception when it failed, cancelled when the host stopped it. It completes
+    /// before it is cleared, so a caller who read it can always await it.
     /// </summary>
     public Task<ListSyncResult?>? InFlight => Volatile.Read(ref _inFlight);
+
+    /// <summary>
+    /// M14 §7.2: the dashboard's single flight. When a sync is in flight (<see cref="InFlight"/>: scheduled, or another
+    /// dashboard request's), returns it with <c>Joined</c> true and starts nothing. Otherwise the new flight becomes
+    /// <see cref="InFlight"/> and <paramref name="enqueue"/> is called, under this schedule's lock, with the work that
+    /// runs <paramref name="sync"/>; it must only <b>enqueue</b> that work on the worker (never run it inline), so the
+    /// worker, which checks this lock before a scheduled attempt, always finds the item already in its channel.
+    /// <para>
+    /// The flight completes (result, fault, or cancellation) and is cleared inside that work, on the worker, before the
+    /// worker moves on. A caller's own wait bound is applied by the caller; it never cancels the flight.
+    /// </para>
+    /// </summary>
+    public (Task<ListSyncResult?> Flight, bool Joined) JoinOrStart(
+        Func<CancellationToken, Task<ListSyncResult>> sync, Action<Func<CancellationToken, Task<ListSyncResult>>> enqueue)
+    {
+        ArgumentNullException.ThrowIfNull(sync);
+        ArgumentNullException.ThrowIfNull(enqueue);
+        lock (_gate)
+        {
+            if (_inFlight is { } running)
+            {
+                return (running, true);
+            }
+
+            var flight = new TaskCompletionSource<ListSyncResult?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Volatile.Write(ref _inFlight, flight.Task);
+            try
+            {
+                enqueue(ct => RunFlightAsync(flight, sync, ct));
+            }
+            catch
+            {
+                Volatile.Write(ref _inFlight, null);
+                throw;
+            }
+
+            return (flight.Task, false);
+        }
+    }
 
     /// <summary>Time until <see cref="NextSyncUtc"/> (zero or less when due); null when there is no schedule.</summary>
     public TimeSpan? TimeUntilDue() => NextSyncUtc is { } due ? due - clock.UtcNow : null;
@@ -98,12 +141,25 @@ public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource s
     /// <summary>The source's newest recorded attempt (any trigger).</summary>
     internal ListSyncRun? RecordedLastAttempt => source.LastAttempt;
 
-    /// <summary>Starts a scheduled attempt: <see cref="InFlight"/> becomes the returned source's task.</summary>
-    internal TaskCompletionSource<ListSyncResult?> BeginAttempt()
+    /// <summary>
+    /// Starts a scheduled attempt: <see cref="InFlight"/> becomes the returned source's task. Null when a dashboard
+    /// sync is already in flight (<see cref="JoinOrStart"/>): its item is in the worker's channel, so the worker runs it
+    /// next instead, records nothing for this pass (§5.3), and the attempt it records moves the due time.
+    /// </summary>
+    internal TaskCompletionSource<ListSyncResult?>? BeginAttempt()
     {
-        var attempt = new TaskCompletionSource<ListSyncResult?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        Volatile.Write(ref _inFlight, attempt.Task);
-        return attempt;
+        lock (_gate)
+        {
+            if (_inFlight is not null)
+            {
+                return null;
+            }
+
+            var attempt = new TaskCompletionSource<ListSyncResult?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _scheduled = attempt.Task;
+            Volatile.Write(ref _inFlight, attempt.Task);
+            return attempt;
+        }
     }
 
     /// <summary>
@@ -115,9 +171,51 @@ public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource s
         lock (_gate)
         {
             _ownLast = new Attempt(clock.UtcNow, outcome);
+            if (_scheduled is { } scheduled)
+            {
+                Clear(scheduled);
+                _scheduled = null;
+            }
         }
+    }
 
-        Volatile.Write(ref _inFlight, null);
+    /// <summary>The work of one dashboard flight, on the worker: completes the flight, then clears it.</summary>
+    private async Task<ListSyncResult> RunFlightAsync(
+        TaskCompletionSource<ListSyncResult?> flight, Func<CancellationToken, Task<ListSyncResult>> sync, CancellationToken ct)
+    {
+        try
+        {
+            var result = await sync(ct);
+            flight.TrySetResult(result);
+            return result;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            flight.TrySetCanceled(ct);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            flight.TrySetException(ex);
+            _ = flight.Task.Exception; // observed: every joiner may have stopped waiting
+            throw;
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                Clear(flight.Task);
+            }
+        }
+    }
+
+    /// <summary>Clears <see cref="InFlight"/> when it is still <paramref name="task"/>. Called under the lock.</summary>
+    private void Clear(Task<ListSyncResult?> task)
+    {
+        if (ReferenceEquals(_inFlight, task))
+        {
+            Volatile.Write(ref _inFlight, null);
+        }
     }
 
     // SPEC-GAP T-1406 (Q-122): the schedule's own last attempt counts too, so an unrecordable one still waits an interval.
