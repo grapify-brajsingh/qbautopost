@@ -271,13 +271,17 @@ builder.Services.AddSingleton<SavedRequestPoster>();
 // T-914 (FR-A-7): the same StatementReader the job uses, so a validate and the job it predicts cannot disagree.
 builder.Services.AddSingleton<FolderValidator>();
 builder.Services.AddSingleton<JobPipeline>();
+// M14 T-1402: file mode; T-1404 swaps in the database store and source.
+builder.Services.AddSingleton(sp => new FileQbLists(sp.GetRequiredService<PipelineOptions>().QbListsFile));
+builder.Services.AddSingleton<IQbListsStore>(sp => sp.GetRequiredService<FileQbLists>());
+builder.Services.AddSingleton<IQbListsSource>(sp => sp.GetRequiredService<FileQbLists>());
 builder.Services.AddSingleton<QbListSync>();
 builder.Services.AddSingleton<BatchUndo>();
 builder.Services.AddSingleton<QbHealth>();
 builder.Services.AddSingleton(sp =>
 {
     var s = sp.GetRequiredService<IOptions<AppSettings>>().Value;
-    return new RulesEditor(s.Company.RulesFile, s.Paths.QbLists);
+    return new RulesEditor(s.Company.RulesFile, sp.GetRequiredService<IQbListsSource>());
 });
 builder.Services.AddSingleton<IJobProcessor, JobRunner>();
 builder.Services.AddSingleton<JobAdmission>();

@@ -113,6 +113,7 @@ public sealed class RulesApiTests : IDisposable
     {
         new QbListsStore(ListsFile).Save(new QbLists
         {
+            SyncedUtc = new DateTime(2026, 9, 17, 8, 0, 0, DateTimeKind.Utc),
             Accounts = [new QbAccount { Name = "Utilities", Type = "Expense" }],
             Vendors = ["Amazon"],
         });
@@ -131,6 +132,7 @@ public sealed class RulesApiTests : IDisposable
     {
         new QbListsStore(ListsFile).Save(new QbLists
         {
+            SyncedUtc = new DateTime(2026, 9, 17, 8, 0, 0, DateTimeKind.Utc),
             Accounts = [new QbAccount { Name = "Utilities", Type = "Expense" }],
             Vendors = ["Amazon"],
         });

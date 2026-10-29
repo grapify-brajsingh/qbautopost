@@ -168,6 +168,7 @@ public static class QuickBooksEndpoints
         PipelineOptions pipeline,
         DirectPlanner planner,
         IClock clock,
+        IQbListsSource lists,
         ILoggerFactory loggers)
     {
         var log = loggers.CreateLogger(typeof(QuickBooksEndpoints));
@@ -182,7 +183,7 @@ public static class QuickBooksEndpoints
         var plan = planner.Plan(
             request,
             Rules.Load(pipeline.RulesFile),
-            new QbListsStore(pipeline.QbListsFile).Load(),
+            lists.Current,
             new LedgerStore(pipeline.LedgerFile).Load(),
             DateOnly.FromDateTime(clock.UtcNow),
             pipeline.QbXmlVersion);
@@ -365,16 +366,20 @@ public static class QuickBooksEndpoints
     /// error — it means the sync has not run, which the empty lists and the null <c>syncedUtc</c> say plainly.
     /// </para>
     /// </summary>
-    private static IResult GetLists(PipelineOptions pipeline) =>
-        Results.Ok(new QbListsStore(pipeline.QbListsFile).Load());
+    private static IResult GetLists(IQbListsSource lists) =>
+        Results.Ok(lists.Current);
 
-    private static async Task<IResult> SyncLists(JobQueue queue, QbListSync sync, ILoggerFactory loggers, CancellationToken ct)
+    private static async Task<IResult> SyncLists(
+        HttpContext http, JobQueue queue, QbListSync sync, ILoggerFactory loggers, CancellationToken ct)
     {
         var log = loggers.CreateLogger(typeof(QuickBooksEndpoints));
         try
         {
             // Through the worker: the sync must not overlap a job that reads qb-lists.json or talks to QuickBooks.
-            var result = await queue.RunExclusiveAsync("qb-sync-lists", sync.SyncAsync, ct);
+            var client = CallerMiddleware.ClientOf(http);
+            var requestedBy = client is null ? null : client.Name ?? client.Id;
+            var result = await queue.RunExclusiveAsync(
+                "qb-sync-lists", token => sync.SyncAsync(ListSyncTrigger.Api, requestedBy, token), ct);
             log.LogInformation(
                 "QuickBooks lists synced: {Accounts} accounts, {Vendors} vendors, {Customers} customers",
                 result.Accounts, result.Vendors, result.Customers);

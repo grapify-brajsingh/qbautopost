@@ -1,5 +1,6 @@
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Database;
+using QbAutopost.Core.Abstractions;
 
 namespace QbAutopost.Api.Health;
 
@@ -21,13 +22,13 @@ public static class Readiness
     /// <summary>A failure worth reporting that still leaves the host ready.</summary>
     public const string Warning = "warning";
 
-    public static ReadinessView Evaluate(AppSettings settings, bool workerStarted, DatabaseGate? database = null)
+    public static ReadinessView Evaluate(AppSettings settings, bool workerStarted, IQbListsSource lists, DatabaseGate? database = null)
     {
         var checks = new List<ReadinessCheck>
         {
             Settings(settings),
             Rules(settings),
-            QbLists(settings),
+            QbLists(settings, lists),
             LogFolder(settings),
             Worker(workerStarted),
         };
@@ -50,9 +51,9 @@ public static class Readiness
             ? new ReadinessCheck("rules", true, Error, s.Company.RulesFile)
             : new ReadinessCheck("rules", false, Error, $"{s.Company.RulesFile} not found; every job would fail");
 
-    private static ReadinessCheck QbLists(AppSettings s) =>
+    private static ReadinessCheck QbLists(AppSettings s, IQbListsSource lists) =>
         // Only a warning: FR-15 lists are how names are validated, but a job every rule resolves still posts.
-        File.Exists(s.Paths.QbLists)
+        lists.Current.SyncedUtc is not null
             ? new ReadinessCheck("qb-lists", true, Warning, s.Paths.QbLists)
             : new ReadinessCheck("qb-lists", false, Warning, $"{s.Paths.QbLists} not found; run POST /api/v1/quickbooks/lists/sync");
 

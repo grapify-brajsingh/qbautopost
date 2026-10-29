@@ -20,7 +20,7 @@ public sealed class ReadinessChecksTests : IDisposable
         var rules = _dir.Combine("rules.json");
         File.WriteAllText(rules, "{}");
         var lists = _dir.Combine("qb-lists.json");
-        File.WriteAllText(lists, "{}");
+        File.WriteAllText(lists, "{\"syncedUtc\":\"2026-09-17T08:00:00Z\"}");
         return new AppSettings
         {
             Company = { Name = "Tropicana Properties LLC", RulesFile = rules },
@@ -28,13 +28,16 @@ public sealed class ReadinessChecksTests : IDisposable
         };
     }
 
+    private static QbAutopost.Core.Abstractions.IQbListsSource ListsOf(AppSettings s) =>
+        new QbAutopost.Core.Store.FileQbLists(s.Paths.QbLists);
+
     private static ReadinessCheck Check(ReadinessView view, string name) =>
         Assert.Single(view.Checks, c => c.Name == name);
 
     [Fact]
     public void Should_BeReady_When_EveryCheckPasses()
     {
-        var view = Readiness.Evaluate(Ready(), workerStarted: true);
+        var view = Readiness.Evaluate(Ready(), workerStarted: true, ListsOf(Ready()));
 
         Assert.True(view.Ok);
         Assert.All(view.Checks, c => Assert.True(c.Ok));
@@ -46,7 +49,7 @@ public sealed class ReadinessChecksTests : IDisposable
         var settings = Ready();
         File.Delete(settings.Company.RulesFile);
 
-        var view = Readiness.Evaluate(settings, workerStarted: true);
+        var view = Readiness.Evaluate(settings, workerStarted: true, ListsOf(settings));
 
         Assert.False(view.Ok);
         var rules = Check(view, "rules");
@@ -60,7 +63,7 @@ public sealed class ReadinessChecksTests : IDisposable
         var settings = Ready();
         settings.Company.Name = "  ";
 
-        var view = Readiness.Evaluate(settings, workerStarted: true);
+        var view = Readiness.Evaluate(settings, workerStarted: true, ListsOf(settings));
 
         Assert.False(view.Ok);
         Assert.False(Check(view, "settings").Ok);
@@ -69,7 +72,7 @@ public sealed class ReadinessChecksTests : IDisposable
     [Fact]
     public void Should_NotBeReady_When_WorkerHasNotStarted()
     {
-        var view = Readiness.Evaluate(Ready(), workerStarted: false);
+        var view = Readiness.Evaluate(Ready(), workerStarted: false, ListsOf(Ready()));
 
         Assert.False(view.Ok);
         Assert.False(Check(view, "worker").Ok);
@@ -81,7 +84,7 @@ public sealed class ReadinessChecksTests : IDisposable
         var settings = Ready();
         File.Delete(settings.Paths.QbLists);
 
-        var view = Readiness.Evaluate(settings, workerStarted: true);
+        var view = Readiness.Evaluate(settings, workerStarted: true, ListsOf(settings));
 
         Assert.True(view.Ok);
         var lists = Check(view, "qb-lists");
@@ -97,7 +100,7 @@ public sealed class ReadinessChecksTests : IDisposable
         File.WriteAllText(blocker, "a file where the log folder should be");
         settings.Paths.Logs = Path.Combine(blocker, "logs");
 
-        var view = Readiness.Evaluate(settings, workerStarted: true);
+        var view = Readiness.Evaluate(settings, workerStarted: true, ListsOf(settings));
 
         Assert.False(view.Ok);
         Assert.False(Check(view, "logFolder").Ok);
@@ -106,7 +109,7 @@ public sealed class ReadinessChecksTests : IDisposable
     [Fact]
     public void Should_NameEveryCheck_When_Evaluated()
     {
-        var view = Readiness.Evaluate(Ready(), workerStarted: true);
+        var view = Readiness.Evaluate(Ready(), workerStarted: true, ListsOf(Ready()));
 
         Assert.Equal(
             ["settings", "rules", "qb-lists", "logFolder", "worker"],

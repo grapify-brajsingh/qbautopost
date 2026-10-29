@@ -26,13 +26,14 @@ public class DirectPostRunner(
     ApiBatchStore batches,
     IQbGateway gateway,
     IClock clock,
-    ILogger<DirectPostRunner> log)
+    ILogger<DirectPostRunner> log,
+    IQbListsSource listsSource)
 {
     /// <summary>FR-A-6/FR-A-8 share this: the post is the plan plus the SDK call.</summary>
     public virtual DirectPlan Plan(DirectRequest request) => planner.Plan(
         request,
         Rules.Load(options.RulesFile),
-        new QbListsStore(options.QbListsFile).Load(),
+        listsSource.Current,
         new LedgerStore(options.LedgerFile).Load(),
         DateOnly.FromDateTime(clock.UtcNow),
         options.QbXmlVersion);
