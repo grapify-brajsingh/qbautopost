@@ -77,7 +77,7 @@ closed → `skipped` and no `QBW.EXE` appears; dashboard Sync now updates the pi
 - [ ] T-1403 database table and store
 - [ ] T-1404 wiring and import
 - [ ] T-1405 QuickBooks presence
-- [ ] T-1406 scheduled sync in the worker
+- [x] T-1406 scheduled sync in the worker
 - [ ] T-1407 v2 routes
 - [ ] T-1408 log, readiness, runbook
 - [ ] T-1409 server checklist (ready-for-human)

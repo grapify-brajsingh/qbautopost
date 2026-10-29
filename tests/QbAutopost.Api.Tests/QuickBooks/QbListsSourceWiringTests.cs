@@ -48,7 +48,9 @@ public sealed class QbListsSourceWiringTests : IDisposable
     [Fact]
     public void Should_DefaultListSyncSettings_When_NothingConfigured()
     {
-        var s = _factory.Services.GetRequiredService<IOptions<AppSettings>>().Value.QuickBooks.ListSync;
+        // T-1406: ApiFactory turns the schedule off for every test host; a null value lifts that one override again.
+        using var host = _factory.WithSetting("QuickBooks:ListSync:IntervalMinutes", null);
+        var s = host.Services.GetRequiredService<IOptions<AppSettings>>().Value.QuickBooks.ListSync;
 
         Assert.Equal((30, 2, 200), (s.IntervalMinutes, s.FirstDelayMinutes, s.HistoryRows));
     }

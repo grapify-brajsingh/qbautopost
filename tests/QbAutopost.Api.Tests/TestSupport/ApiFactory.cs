@@ -173,6 +173,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             ["OpenRouter:BaseUrl"] = "https://hermes.invalid:8642",
             ["OpenRouter:ApiKey"] = "",
             ["QuickBooks:RetryDelaySeconds"] = "0.01",
+            // M14 §5: a long-lived test host must not sync on its own two minutes in (it would query the fake
+            // gateway and rewrite qb-lists.json under a running test). ScheduledListSyncTests drive the schedule directly.
+            ["QuickBooks:ListSync:IntervalMinutes"] = "0",
         }));
         builder.ConfigureTestServices(services =>
         {

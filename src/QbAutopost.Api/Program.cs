@@ -281,6 +281,11 @@ builder.Services.AddSingleton<FolderValidator>();
 builder.Services.AddSingleton<JobPipeline>();
 // M14 §3.4, §9: the store and source of the QuickBooks lists are registered below, beside the database wiring.
 builder.Services.AddSingleton<QbListSync>();
+// M14 §5: the scheduled sync's due time and in-flight handle; JobWorker runs it, the v2 lists routes read it.
+builder.Services.AddSingleton(sp => new ListSyncSchedule(
+    sp.GetRequiredService<IOptions<AppSettings>>().Value.QuickBooks.ListSync,
+    sp.GetRequiredService<IQbListsSource>(),
+    sp.GetRequiredService<IClock>()));
 builder.Services.AddSingleton<BatchUndo>();
 builder.Services.AddSingleton<QbHealth>();
 builder.Services.AddSingleton(sp =>

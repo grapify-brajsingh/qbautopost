@@ -95,6 +95,74 @@ public sealed class JobQueue
     }
 
     /// <summary>
+    /// M14 §5: the worker's bounded wait. Runs the next item through <paramref name="run"/> — with the same
+    /// <see cref="Depth"/>/<see cref="Outstanding"/> accounting as <see cref="ReadAllAsync"/> — and returns true; or
+    /// returns false when <paramref name="deadline"/> completes first and nothing is waiting. A null deadline means
+    /// "do not wait": only an item already in the channel is run.
+    /// <para>
+    /// An item that arrives together with the deadline still runs (a job always goes before the scheduled sync). The
+    /// deadline is handed a token that is cancelled once the wait is over, and must honour it.
+    /// </para>
+    /// </summary>
+    public async Task<bool> RunNextAsync(
+        Func<JobWorkItem, Task> run, Func<CancellationToken, Task>? deadline, CancellationToken ct)
+    {
+        if (!_channel.Reader.TryRead(out var item))
+        {
+            if (deadline is null)
+            {
+                return false;
+            }
+
+            using (var wait = CancellationTokenSource.CreateLinkedTokenSource(ct))
+            {
+                var ready = _channel.Reader.WaitToReadAsync(wait.Token).AsTask();
+                var due = deadline(wait.Token);
+                await Task.WhenAny(ready, due);
+                wait.Cancel();
+
+                // The deadline's own faults are observed here; only the channel wait is awaited to its end.
+                _ = due.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+                try
+                {
+                    await ready;
+                }
+                catch (OperationCanceledException)
+                {
+                    // The deadline came first, or the host is stopping (checked below).
+                }
+
+                ct.ThrowIfCancellationRequested();
+                if (due.IsFaulted)
+                {
+                    await due; // a broken deadline is the worker's error, not "nothing to do"
+                }
+            }
+
+            if (!_channel.Reader.TryRead(out item))
+            {
+                return false;
+            }
+        }
+
+        // As in ReadAllAsync: running, not waiting, from here; no longer in flight once run has returned.
+        Interlocked.Decrement(ref _depth);
+        try
+        {
+            await run(item);
+        }
+        finally
+        {
+            if (!item.ReleasesItself)
+            {
+                Interlocked.Decrement(ref _outstanding);
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Runs <paramref name="work"/> on the single worker, after any job ahead of it, and returns its result. The work
     /// runs to the end even if the caller stops waiting (<paramref name="ct"/> only ends the wait).
     /// </summary>
