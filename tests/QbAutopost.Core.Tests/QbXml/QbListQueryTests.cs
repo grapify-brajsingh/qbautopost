@@ -26,6 +26,21 @@ public sealed class QbListQueryTests
     }
 
     [Fact]
+    public void Should_ParseFullAndTrimmedAnswersTheSame_When_OnlyUsedFieldsAreRequested()
+    {
+        var full = QbListQuery.Parse(Fixtures.Read("qbxml", "list-response-full.xml"), Synced);
+        var trimmed = QbListQuery.Parse(Fixtures.Read("qbxml", "list-response-trimmed.xml"), Synced);
+
+        Assert.Equal(["Sample Checking 0001", "Utilities:Power"], trimmed.Accounts.Select(a => a.Name));
+        Assert.Equal(["Bank", "Expense"], trimmed.Accounts.Select(a => a.Type));
+        Assert.Equal(["Example Hardware", "Sample Power & Light"], trimmed.Vendors);
+        Assert.Equal(["Sample Customer", "Sample Customer:Kitchen"], trimmed.Customers);
+        Assert.Equal(full.Accounts.Select(a => (a.Name, a.Type)), trimmed.Accounts.Select(a => (a.Name, a.Type)));
+        Assert.Equal(full.Vendors, trimmed.Vendors);
+        Assert.Equal(full.Customers, trimmed.Customers);
+    }
+
+    [Fact]
     public void Should_ReadAccountFullNamesAndTypes_When_ParsingResponse()
     {
         var lists = QbListQuery.Parse(Fixtures.Read("qbxml", "list-response.xml"), Synced);
