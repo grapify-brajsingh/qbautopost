@@ -340,7 +340,9 @@ lists in the database`, or `list sync schedule off`.
 session. If there is none, the attempt is recorded as `skipped` with the reason `quickbooks-not-open` and nothing is
 sent. So QuickBooks must be open **in the same Windows session as the API** (the signed-in desktop where
 `start-all.ps1` runs it, not another user's session and not a service). Close QuickBooks at night and the lists simply
-stay as they were; open it and the next due sync runs.
+stay as they were; open it and the next due sync runs. The check sees only the QuickBooks program, not which company
+is open: with QuickBooks running and no company file open, or another file open, the sync goes on and QuickBooks may
+open `Company:FilePath` itself or show a login prompt. Keep QuickBooks on the configured company file.
 
 **A dialog delays the worker for up to about two minutes.** When QuickBooks is showing a dialog (or is busy), the sync
 waits for it inside QuickBooks' session start, which can take up to about 2 minutes. The worker is occupied meanwhile,
