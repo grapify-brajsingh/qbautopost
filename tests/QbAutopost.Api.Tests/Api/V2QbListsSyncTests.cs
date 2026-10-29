@@ -254,6 +254,16 @@ public sealed class V2QbListsSyncTests : IDisposable
         Assert.Equal(RateLimitBucket.Default, RateLimitPolicy.BucketFor("GET", new PathString(Lists)));
     }
 
+    /// <summary>Routing matches paths case-insensitively, so the scope and the bucket must too.</summary>
+    [Theory]
+    [InlineData("/api/v2/QuickBooks/Lists/Sync")]
+    [InlineData("/API/V2/QUICKBOOKS/LISTS/SYNC/")]
+    public void Should_UseThePostingBucketAndRequestsEditScope_When_TheV2SyncPathIsMixedCase(string path)
+    {
+        Assert.Equal(RateLimitBucket.Post, RateLimitPolicy.BucketFor("POST", new PathString(path)));
+        Assert.Equal(ApiScopes.AnyOf(ApiScopes.RequestsEdit, ApiScopes.QbRead), ApiRoutes.ScopeFor("POST", path));
+    }
+
     [Fact]
     public async Task Should_NotWriteAnAuditFeedEvent_When_ADashboardUserSyncs()
     {

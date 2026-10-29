@@ -204,11 +204,12 @@ public static class ApiRoutes
     /// <summary>
     /// M14 §7.2: <c>POST /api/v2/quickbooks/lists/sync</c>, the dashboard's Sync now. It opens a QuickBooks session, so
     /// <c>RateLimitPolicy</c> puts it in the posting bucket. The v1 and flat spellings are not it: they keep v1's bucket.
+    /// Case-insensitive, as routing is (R32; spelled out here because <c>Ordinal</c> in this class already ignores case).
     /// </summary>
     public static bool IsV2ListSync(string method, PathString path) =>
         HttpMethods.IsPost(method)
         && path.HasValue
-        && path.Value!.TrimEnd('/').Equals(V2Prefix + ListSyncRoute, Ordinal);
+        && path.Value!.TrimEnd('/').Equals(V2Prefix + ListSyncRoute, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// T-912 (FR-A-16): the routes whose answer changes something, and which therefore leave an audit line.
