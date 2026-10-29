@@ -7,6 +7,7 @@ using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Database;
 using QbAutopost.Api.Jobs;
 using QbAutopost.Api.QuickBooks;
+using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Jobs;
 
 namespace QbAutopost.Api.Health;
@@ -60,7 +61,7 @@ public sealed class AppHealth(
     JobQueue queue,
     IJobStore store,
     DatabaseGate database,
-    QbAutopost.Core.Abstractions.IQbListsSource lists)
+    IQbListsSource lists)
 {
     /// <summary>Process start, read once: it never changes and reading it costs a syscall.</summary>
     private static readonly DateTime ProcessStartedUtc = StartTimeUtc();

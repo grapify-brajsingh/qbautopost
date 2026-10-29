@@ -51,11 +51,21 @@ public static class Readiness
             ? new ReadinessCheck("rules", true, Error, s.Company.RulesFile)
             : new ReadinessCheck("rules", false, Error, $"{s.Company.RulesFile} not found; every job would fail");
 
-    private static ReadinessCheck QbLists(AppSettings s, IQbListsSource lists) =>
+    private static ReadinessCheck QbLists(AppSettings s, IQbListsSource lists)
+    {
         // Only a warning: FR-15 lists are how names are validated, but a job every rule resolves still posts.
-        lists.Current.SyncedUtc is not null
-            ? new ReadinessCheck("qb-lists", true, Warning, s.Paths.QbLists)
-            : new ReadinessCheck("qb-lists", false, Warning, $"{s.Paths.QbLists} not found; run POST /api/v1/quickbooks/lists/sync");
+        try
+        {
+            return lists.Current.SyncedUtc is not null
+                ? new ReadinessCheck("qb-lists", true, Warning, s.Paths.QbLists)
+                : new ReadinessCheck("qb-lists", false, Warning, $"{s.Paths.QbLists} not found; run POST /api/v1/quickbooks/lists/sync");
+        }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or IOException or InvalidDataException)
+        {
+            // A corrupt or truncated file must not turn a health poll into a 500.
+            return new ReadinessCheck("qb-lists", false, Warning, $"{s.Paths.QbLists} is unreadable; run POST /api/v1/quickbooks/lists/sync");
+        }
+    }
 
     private static ReadinessCheck LogFolder(AppSettings s)
     {

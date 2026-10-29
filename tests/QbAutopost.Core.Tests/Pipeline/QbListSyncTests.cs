@@ -133,11 +133,17 @@ public sealed class QbListSyncTests : IDisposable
     [Theory]
     [InlineData(typeof(QuickBooksBusyException), ListSyncReasons.QuickBooksBusy)]
     [InlineData(typeof(QuickBooksUnavailableException), ListSyncReasons.QuickBooksUnavailable)]
+    [InlineData(typeof(QuickBooksCallException), ListSyncReasons.QuickBooksUnavailable)]
+    [InlineData(typeof(FormatException), ListSyncReasons.QbStatus)]
+    [InlineData(typeof(System.Xml.XmlException), ListSyncReasons.QbStatus)]
     [InlineData(typeof(InvalidOperationException), null)]
     public async Task Should_MapReason_When_GatewayThrows(Type type, string? reason)
     {
         _gateway.Failure = type == typeof(QuickBooksUnavailableException) ? new QuickBooksUnavailableException("boom")
             : type == typeof(QuickBooksBusyException) ? new QuickBooksBusyException("boom")
+            : type == typeof(QuickBooksCallException) ? new QuickBooksCallException("boom", 1)
+            : type == typeof(FormatException) ? new FormatException("boom")
+            : type == typeof(System.Xml.XmlException) ? new System.Xml.XmlException("boom")
             : new InvalidOperationException("boom");
 
         await Assert.ThrowsAsync(type, () => Run(Sync()));

@@ -93,6 +93,21 @@ public sealed class ReadinessChecksTests : IDisposable
     }
 
     [Fact]
+    public void Should_WarnWithoutThrowing_When_QbListsIsCorrupt()
+    {
+        var settings = Ready();
+        File.WriteAllText(settings.Paths.QbLists, "{ \"syncedUtc\": ");
+
+        var view = Readiness.Evaluate(settings, workerStarted: true, ListsOf(settings));
+
+        Assert.True(view.Ok);
+        var lists = Check(view, "qb-lists");
+        Assert.False(lists.Ok);
+        Assert.Equal(Readiness.Warning, lists.Severity);
+        Assert.Contains("unreadable", lists.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Should_NotBeReady_When_LogFolderCannotBeCreated()
     {
         var settings = Ready();
