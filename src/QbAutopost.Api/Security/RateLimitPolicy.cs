@@ -46,7 +46,8 @@ public static class RateLimitPolicy
         // just the same, and the cheaper bucket is the one that would have to be defended later.
         // M10 review: the saved post moves money like validate-and-post, but its replay protection is the store's claim,
         // not IdempotencyMiddleware, so it is named here rather than added to IsIdempotent.
-        return ApiRoutes.IsIdempotent(method, path) || ApiRoutes.IsSavedRequestPost(method, path)
+        // M14 §7.2: the dashboard's list sync opens a QuickBooks session, so it spends the posting budget too.
+        return ApiRoutes.IsIdempotent(method, path) || ApiRoutes.IsSavedRequestPost(method, path) || ApiRoutes.IsV2ListSync(method, path)
             ? RateLimitBucket.Post
             : RateLimitBucket.Default;
     }

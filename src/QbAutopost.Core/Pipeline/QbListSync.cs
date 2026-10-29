@@ -1,5 +1,6 @@
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Mapping;
+using QbAutopost.Core.Models;
 using QbAutopost.Core.QbXml;
 using QbAutopost.Core.Store;
 
@@ -8,32 +9,128 @@ namespace QbAutopost.Core.Pipeline;
 /// <summary>FR-15 answer: list sizes and the <c>rules.json</c> accounts QuickBooks does not have.</summary>
 public sealed record ListSyncResult(int Accounts, int Vendors, int Customers, IReadOnlyList<string> MissingInRules);
 
+/// <summary>M14 §4.5: one successful sync: its answer, the run it recorded, and the lists it stored.</summary>
+public sealed record ListSyncCompletion(ListSyncResult Result, ListSyncRun Run, QbLists Lists);
+
 /// <summary>
-/// FR-15: queries the active accounts, vendors and customers, writes <c>qb-lists.json</c> atomically, and reports the
-/// account names in <c>rules.json</c> that QuickBooks does not have. Nothing is written when the rules or the query fail.
+/// FR-15, M14 §4: queries the active accounts, vendors and customers, hands them to <see cref="IQbListsStore"/>, and
+/// reports the account names in <c>rules.json</c> that QuickBooks does not have. Every attempt is recorded; the current
+/// lists change only when the rules and the query both succeed. A failure is recorded and then rethrown unchanged.
 /// </summary>
-public sealed class QbListSync(PipelineOptions options, IQbGateway gateway, IClock clock)
+public sealed class QbListSync(PipelineOptions options, IQbGateway gateway, IClock clock, IQbListsStore store)
 {
     /// <summary>SPEC-GAP T-602: sync has no job folder, so its audit copies live next to <c>qb-lists.json</c>.</summary>
     public const string AuditDir = "qb-audit";
 
     public string AuditFolder => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(options.QbListsFile))!, AuditDir);
 
-    public async Task<ListSyncResult> SyncAsync(CancellationToken ct)
+    public async Task<ListSyncResult> SyncAsync(ListSyncTrigger trigger, string? requestedBy, CancellationToken ct) =>
+        (await SyncWithRunAsync(trigger, requestedBy, ct)).Result;
+
+    /// <summary>As <see cref="SyncAsync"/>, and also returns the run it recorded and the lists it stored (§4.5).</summary>
+    public async Task<ListSyncCompletion> SyncWithRunAsync(ListSyncTrigger trigger, string? requestedBy, CancellationToken ct)
     {
-        var rules = Rules.Load(options.RulesFile);
-        var request = QbListQuery.Build(options.QbXmlVersion);
-        AtomicFile.WriteAllText(Path.Combine(AuditFolder, "sync-lists.request.qbxml"), request);
+        var started = clock.UtcNow;
+        string? reason = null;
+        try
+        {
+            Rules rules;
+            try
+            {
+                rules = Rules.Load(options.RulesFile);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                reason = ListSyncReasons.RulesUnreadable;
+                throw;
+            }
 
-        var response = await gateway.ProcessAsync(request, ct);
-        AtomicFile.WriteAllText(Path.Combine(AuditFolder, "sync-lists.response.qbxml"), response);
+            var request = QbListQuery.Build(options.QbXmlVersion);
+            AtomicFile.WriteAllText(Path.Combine(AuditFolder, "sync-lists.request.qbxml"), request);
 
-        var lists = QbListQuery.Parse(response, clock.UtcNow);
-        new QbListsStore(options.QbListsFile).Save(lists);
+            var response = await gateway.ProcessAsync(request, ct);
+            AtomicFile.WriteAllText(Path.Combine(AuditFolder, "sync-lists.response.qbxml"), response);
 
-        // SPEC-GAP T-602: names compare exactly (ordinal); a case difference is reported so the rule can be corrected.
-        var known = lists.Accounts.Select(a => a.Name).ToHashSet(StringComparer.Ordinal);
-        var missing = rules.AccountNames().Where(n => !known.Contains(n)).ToList();
-        return new ListSyncResult(lists.Accounts.Count, lists.Vendors.Count, lists.Customers.Count, missing);
+            var lists = QbListQuery.Parse(response, clock.UtcNow);
+
+            // SPEC-GAP T-602: names compare exactly (ordinal); a case difference is reported so the rule can be corrected.
+            var known = lists.Accounts.Select(a => a.Name).ToHashSet(StringComparer.Ordinal);
+            var missing = rules.AccountNames().Where(n => !known.Contains(n)).ToList();
+            var result = new ListSyncResult(lists.Accounts.Count, lists.Vendors.Count, lists.Customers.Count, missing);
+
+            var run = new ListSyncRun
+            {
+                Trigger = trigger,
+                RequestedBy = requestedBy,
+                StartedUtc = started,
+                FinishedUtc = clock.UtcNow,
+                Outcome = ListSyncOutcome.Ok,
+                Accounts = result.Accounts,
+                Vendors = result.Vendors,
+                Customers = result.Customers,
+                MissingInRules = missing,
+            };
+            await store.RecordAsync(run, lists, ct);
+            return new ListSyncCompletion(result, run, lists);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                await store.RecordAsync(
+                    new ListSyncRun
+                    {
+                        Trigger = trigger,
+                        RequestedBy = requestedBy,
+                        StartedUtc = started,
+                        FinishedUtc = clock.UtcNow,
+                        Outcome = ListSyncOutcome.Failed,
+                        Reason = reason ?? ReasonOf(ex),
+                        Error = ex.Message,
+                    },
+                    null,
+                    CancellationToken.None);
+            }
+            catch (Exception)
+            {
+                // The caller must see the sync failure, not a failure to write its record.
+            }
+
+            throw;
+        }
     }
+
+    /// <summary>Records an attempt that was not made (M14 §5, §6); nothing is sent to QuickBooks.</summary>
+    public Task RecordSkippedAsync(ListSyncTrigger trigger, string? requestedBy, string reason, CancellationToken ct)
+    {
+        var now = clock.UtcNow;
+        return store.RecordAsync(
+            new ListSyncRun
+            {
+                Trigger = trigger,
+                RequestedBy = requestedBy,
+                StartedUtc = now,
+                FinishedUtc = now,
+                Outcome = ListSyncOutcome.Skipped,
+                Reason = reason,
+            },
+            null,
+            ct);
+    }
+
+    /// <summary>
+    /// The reason code of a QuickBooks failure: the same families the API maps to 503 and 502
+    /// (<c>QuickBooksEndpoints.QuickBooksProblem</c>); null for anything else. v2 answers with it as the problem type.
+    /// </summary>
+    public static string? ReasonOf(Exception ex) => ex switch
+    {
+        QuickBooksBusyException => ListSyncReasons.QuickBooksBusy,
+        QuickBooksUnavailableException or QuickBooksCallException => ListSyncReasons.QuickBooksUnavailable,
+        QbStatusException or FormatException or System.Xml.XmlException => ListSyncReasons.QbStatus,
+        _ => null,
+    };
 }

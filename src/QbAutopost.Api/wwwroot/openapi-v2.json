@@ -125,16 +125,16 @@
           "QuickBooks"
         ],
         "operationId": "getLists",
-        "summary": "The cached QuickBooks account, vendor and customer names.",
-        "description": "Read from `qb-lists.json`, so it answers while QuickBooks is shut down and never queues behind a post. A `syncedUtc` of `null` with empty lists means the sync has not run yet; it is not an error. Needs `lists:read`, which every dashboard role holds; an API key holding `qb:read` satisfies it too.",
+        "summary": "The stored QuickBooks account, vendor and customer names, with the last sync attempt and the next automatic sync.",
+        "description": "Read from the stored lists (the newest successful sync), so it answers while QuickBooks is shut down and never queues behind a post. A `syncedUtc` of `null` with empty lists means no sync has succeeded yet; it is not an error. `syncedUtc` stays the time of the lists in use, while `lastSync` is the newest attempt of any outcome (null before any attempt), so \"synced 12 min ago\" and \"the last attempt failed\" can both be shown. `nextSyncUtc` is when the next automatic sync is due, null when `QuickBooks:ListSync:IntervalMinutes` is 0. Needs `lists:read`, which every dashboard role holds; an API key holding `qb:read` satisfies it too. The v1 route answers without `lastSync` and `nextSyncUtc`.",
         "x-required-scope": "lists:read",
         "responses": {
           "200": {
-            "description": "The names as the last sync left them.",
+            "description": "The names in use, the last attempt and the next automatic sync.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/QbLists"
+                  "$ref": "#/components/schemas/QbListsV2"
                 }
               }
             }
@@ -147,6 +147,86 @@
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/v2/quickbooks/lists/sync": {
+      "post": {
+        "tags": [
+          "QuickBooks"
+        ],
+        "operationId": "syncListsV2",
+        "summary": "Sync now: fetch the active accounts, vendors and customers from QuickBooks and store them.",
+        "description": "M14 §7.2 (R-16). No body. In order: if QuickBooks is not running on the server the answer is `409 quickbooks-not-open` and a `skipped` attempt is recorded (the API never starts QuickBooks); if a sync is already queued or running (the automatic one, or another Sync now) this request **joins it** and answers with its result, so two presses make one QuickBooks call; otherwise the sync runs on the job worker after any job ahead of it. The caller waits at most `Api:SyncPostTimeoutSeconds` (120): past that the answer is `504 sync-timeout`, the sync carries on and `GET /api/v2/quickbooks/lists` shows its result. A failed sync never replaces the stored lists. The `200` is built from the run and lists this sync produced (or the sync it joined), not read back afterwards. Needs `requests:edit` (editors and admins; viewers get `403`) or, for an API key, `qb:read` as on v1. A dashboard user's sync is recorded with trigger `dashboard` and their id; an API key's with trigger `api` and the client's name. Counts against the posting rate limit (`Api:RateLimits:PostPerMinute`), because it opens a QuickBooks session. Not an audit-feed event.",
+        "x-required-scope": "requests:edit|qb:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Synced (or joined a sync that succeeded): the `GET /api/v2/quickbooks/lists` body for the fresh lists, with `lastSync` the attempt that produced them, plus `counts`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QbListsSyncedV2"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "description": "`quickbooks-not-open` (problem `type`): QuickBooks is not running on the server, so nothing was sent; title \"QuickBooks isn't open\", detail \"Open QuickBooks on the company file, then sync again.\" A `skipped` attempt is recorded. Also the answer when the automatic sync this request joined was skipped for the same reason.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "502": {
+            "description": "`qb-status` (problem `type`): QuickBooks answered with an error or an unreadable response (title \"QuickBooks refused the request\"). The `detail` is fixed text, never the QuickBooks or exception message (that stays in the log and the recorded attempt). A `failed` attempt (`qb-status`) is recorded; the stored lists are unchanged.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`quickbooks-unavailable` or `quickbooks-busy` (problem `type`): QuickBooks could not be reached, or did not answer in time (title \"QuickBooks is not available\"). The `detail` is fixed text, never the exception message (that stays in the log and the recorded attempt). A `failed` attempt with the same code is recorded; the stored lists are unchanged. Or `api-stopping`: the sync this request waited for was cancelled because the API is shutting down (detail \"The API is stopping; try again in a moment.\").",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`sync-timeout` (problem `type`): the sync is still running after `Api:SyncPostTimeoutSeconds`. It carries on; its attempt shows in `lastSync` when it ends.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       }
@@ -4554,6 +4634,159 @@
             "description": "QuickBooks `AccountType`, e.g. `Expense`."
           }
         }
+      },
+      "QbListsV2": {
+        "description": "v2's lists: v1's `QbLists` plus `lastSync` and `nextSyncUtc`.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/QbLists"
+          },
+          {
+            "type": "object",
+            "required": [
+              "lastSync",
+              "nextSyncUtc"
+            ],
+            "properties": {
+              "lastSync": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/ListSyncAttempt"
+                  }
+                ],
+                "nullable": true,
+                "description": "The newest attempt of any outcome; null before any. With no database it is the last attempt since the API started (kept in memory), so it is null again after a restart."
+              },
+              "nextSyncUtc": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true,
+                "description": "When the next automatic sync is due; null when the schedule is off."
+              }
+            }
+          }
+        ]
+      },
+      "QbListsSyncedV2": {
+        "description": "Sync now's `200`: the v2 lists body for the fresh lists plus the list sizes the sync found. v1's `missingInRules` is not returned.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/QbListsV2"
+          },
+          {
+            "type": "object",
+            "required": [
+              "counts"
+            ],
+            "properties": {
+              "counts": {
+                "$ref": "#/components/schemas/ListSyncCounts"
+              }
+            }
+          }
+        ]
+      },
+      "ListSyncCounts": {
+        "type": "object",
+        "description": "The list sizes the sync found.",
+        "required": [
+          "accounts",
+          "vendors",
+          "customers"
+        ],
+        "properties": {
+          "accounts": {
+            "type": "integer"
+          },
+          "vendors": {
+            "type": "integer"
+          },
+          "customers": {
+            "type": "integer"
+          }
+        }
+      },
+      "ListSyncAttempt": {
+        "type": "object",
+        "description": "M14 §7.1: one list sync attempt. `message` is fixed operator-safe text chosen by `outcome` and `reason`, never the raw error. With no database configured it is the last attempt since the API started (kept in memory).",
+        "required": [
+          "trigger",
+          "outcome",
+          "reason",
+          "startedUtc",
+          "finishedUtc",
+          "requestedBy",
+          "message"
+        ],
+        "properties": {
+          "trigger": {
+            "$ref": "#/components/schemas/ListSyncTrigger"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/ListSyncOutcome"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "description": "`skipped`: `quickbooks-not-open`, `worker-busy`; `failed`: `quickbooks-unavailable`, `quickbooks-busy`, `qb-status`, `rules-unreadable`, or null for any other failure; null when `ok`."
+          },
+          "startedUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "requestedBy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ListSyncRequester"
+              }
+            ],
+            "nullable": true,
+            "description": "Only for trigger `dashboard`; null otherwise."
+          },
+          "message": {
+            "type": "string",
+            "example": "QuickBooks was not open, so nothing was synced. The lists from the last good sync are still used."
+          }
+        }
+      },
+      "ListSyncRequester": {
+        "type": "object",
+        "description": "The dashboard user who pressed Sync now. `displayName` is the user's name, or the id when the user cannot be found.",
+        "required": [
+          "id",
+          "displayName"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          }
+        }
+      },
+      "ListSyncTrigger": {
+        "type": "string",
+        "description": "What started a sync: `schedule` (the automatic sync), `dashboard` (Sync now by a user), `api` (v1's sync, the server script, or an API key on the v2 route), `import` (`qb-lists.json` imported at startup).",
+        "enum": [
+          "schedule",
+          "dashboard",
+          "api",
+          "import"
+        ]
+      },
+      "ListSyncOutcome": {
+        "type": "string",
+        "description": "How a sync attempt ended.",
+        "enum": [
+          "ok",
+          "failed",
+          "skipped"
+        ]
       },
       "SavedRequestActor": {
         "type": "object",

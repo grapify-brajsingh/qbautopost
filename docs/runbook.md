@@ -49,11 +49,11 @@ Job states: `queued → analysing → ready → posting → posted | partial`, o
 | `C:\qb-autopost\app\` | the published program |
 | `C:\qb-autopost\rules.json` | mapping rules (§3.3) |
 | `C:\qb-autopost\ledger.json` | every posted line and batch (do not edit by hand) |
-| `C:\qb-autopost\qb-lists.json` | cached QuickBooks accounts / vendors / customers |
+| `C:\qb-autopost\qb-lists.json` | cached QuickBooks accounts / vendors / customers, **only when no database is configured**. With PostgreSQL the lists live in the database (`qb_list_syncs`, §5.4); the file is then read once to import and never written again |
 | `C:\qb-autopost\jobs.json` | index of known job folders |
 | `C:\qb-autopost\clients.json` | API callers: id, name, scopes and a **salted hash** of each key, never a key (§3.4) |
 | `C:\qb-autopost\api-batches\` | one folder per direct post: its request, state and qbXML, plus `idempotency.json` |
-| `C:\qb-autopost\qb-audit\` | qbXML copies of list syncs and undos without a job folder |
+| `C:\qb-autopost\qb-audit\` | qbXML copies of list syncs and undos without a job folder. A list-sync copy holds names and types only (the query asks for nothing else), replaced at each sync |
 | `C:\qb-autopost\logs\` | `qbautopost-yyyyMMdd.log`, one per day, 31 kept, **and** `audit-yyyyMMdd.jsonl`, 400 days (§8.7) |
 | `C:\qb-jobs\` | job folders (any location works; the API takes an absolute path — see `Paths:AllowedJobRoots`, §3.5) |
 
@@ -113,6 +113,9 @@ Copy `rules.json` (start from `samples/rules.json`) to `C:\qb-autopost\rules.jso
 | `QuickBooks:QbXmlVersion` | `13.0` | `16.0` on QuickBooks 2023+ if needed |
 | `QuickBooks:DuplicateWindowDays` | `3` | Days either side for the live duplicate check (G4) |
 | `QuickBooks:BusyTimeoutSeconds` | `60` | A QuickBooks call longer than this is abandoned (`quickbooks-busy`) |
+| `QuickBooks:ListSync:IntervalMinutes` | `30` | Minutes between scheduled list syncs. `0` = schedule off; otherwise 5 to 1440 (anything else stops startup). §5.4 |
+| `QuickBooks:ListSync:FirstDelayMinutes` | `2` | First scheduled attempt this long after startup when no attempt is recorded; 0 to 1440 |
+| `QuickBooks:ListSync:HistoryRows` | `200` | Rows kept in `qb_list_syncs` (at least 10) |
 | `QuickBooks:BackupFolder` | empty | When set, posting is refused unless the newest `*.QBB` there is recent |
 | `QuickBooks:BackupMaxAgeHours` | `36` | Age limit for that backup |
 | `QuickBooks:Fake` | `false` | Test only: simulated company. Refused outside Development/Testing |
@@ -167,7 +170,7 @@ of the key — never the key itself. Issue one with:
 ```
 
 It prints the key **once** and stores only the hash; it cannot be recovered, only replaced. The caller sends it as
-`X-Api-Key: <key>` on every request. (`Authorization: Bearer` is *not* accepted by this build — tracker Q-67.)
+`X-Api-Key: <key>` on every request. API keys are sent only in `X-Api-Key`; an API key in `Authorization: Bearer` is *not* accepted by this build (tracker Q-67). `Authorization: Bearer` carries only a dashboard user's access token (§11).
 
 | Scope | Lets the caller |
 |---|---|
@@ -287,7 +290,7 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:5080/api/v1/quickbooks/list
 ```
 
 The read never opens a QuickBooks session, so it answers while QuickBooks is shut down; a `syncedUtc` of `null`
-means the sync has not run yet.
+means the sync has not run yet. The lists also refresh by themselves every 30 minutes (§5.4).
 
 ### 5.2 Review a dry run
 
@@ -319,13 +322,99 @@ queries QuickBooks for duplicates. Result:
 
 Only one job or QuickBooks operation runs at a time; others wait in the queue.
 
+### 5.4 Scheduled list sync (M14)
+
+The account, vendor and customer names are refreshed from QuickBooks by the API itself, on the same single worker that
+runs jobs, so a sync never overlaps a job or a post. Settings (§3.1; environment form
+`QuickBooks__ListSync__IntervalMinutes`):
+
+- `QuickBooks:ListSync:IntervalMinutes` (default 30): minutes between syncs, 5 to 1440. `0` turns the schedule off.
+- `QuickBooks:ListSync:FirstDelayMinutes` (default 2): the first sync after the API starts, when no earlier attempt is known.
+- `QuickBooks:ListSync:HistoryRows` (default 200): how many attempts `qb_list_syncs` keeps (at least 10; the newest
+  successful row is always kept). At most about four days at the default (Sync now and skipped attempts count too).
+
+The startup log's `QuickBooks:` line shows what is in force, for example `list sync every 30 min (first after 2 min),
+lists in the database`, or `list sync schedule off`.
+
+**It never starts QuickBooks.** Before each scheduled sync the API looks for a running QuickBooks in its own Windows
+session. If there is none, the attempt is recorded as `skipped` with the reason `quickbooks-not-open` and nothing is
+sent. So QuickBooks must be open **in the same Windows session as the API** (the signed-in desktop where
+`start-all.ps1` runs it, not another user's session and not a service). Close QuickBooks at night and the lists simply
+stay as they were; open it and the next due sync runs. The check sees only the QuickBooks program, not which company
+is open: with QuickBooks running and no company file open, or another file open, the sync goes on and QuickBooks may
+open `Company:FilePath` itself or show a login prompt. Keep QuickBooks on the configured company file.
+
+**A dialog delays the worker for up to about two minutes.** When QuickBooks is showing a dialog (or is busy), the sync
+waits for it inside QuickBooks' session start, which can take up to about 2 minutes. The worker is occupied meanwhile,
+so a job submitted in that time waits and then runs normally; nothing is lost. A post that does not wait
+(`validate-and-post`, or posting a saved request) is answered `409` "session in use" while the sync holds QuickBooks,
+with nothing sent: retry it after the sync ends. Close the dialog to release it. A sync
+that fails this way is recorded as `failed` (reason `quickbooks-busy` or `quickbooks-unavailable`), the lists stay as
+they were, and the next attempt is a full interval later.
+
+**Reading the state.** `GET /api/v2/quickbooks/lists` with a dashboard user's token, or with an API key that holds
+`lists:read` or `qb:read`:
+
+```powershell
+$token = "<access token from a dashboard sign-in>"
+Invoke-RestMethod http://127.0.0.1:5080/api/v2/quickbooks/lists -Headers @{ Authorization = "Bearer $token" }
+# or, with an API key ($key holds lists:read or qb:read):
+Invoke-RestMethod http://127.0.0.1:5080/api/v2/quickbooks/lists -Headers @{ 'X-Api-Key' = $key }
+```
+
+Besides the names it returns:
+
+- `lastSync`: the newest attempt of any kind, with its outcome (`ok`, `failed`, `skipped`), reason, time, who asked
+  (`requestedBy` for a person's Sync now) and a fixed message. With a database it survives restarts; with **no database
+  it is the last attempt since the API started** and is null before any.
+- `nextSyncUtc`: when the next scheduled sync is due, or null when the schedule is off.
+
+`GET /api/v1/health/ready` also reports it in the `qb-lists` check (a warning only), for example
+`last sync failed 15:00 (quickbooks-not-open); lists from 14:30` (times UTC). If the lists are old and the last sync
+failed or was skipped, start with the reason.
+
+**History.** With PostgreSQL every attempt is a row in `qb_list_syncs` (who, when, trigger, outcome, reason, counts;
+never the names):
+
+```sql
+SELECT * FROM qb_list_syncs ORDER BY id DESC LIMIT 20;
+```
+
+**Turning it off.** Set the machine variable `QuickBooks__ListSync__IntervalMinutes=0` and restart the API. The lists
+then change only when somebody syncs by hand (`POST /api/v1/quickbooks/lists/sync`, or Sync now). Setting it back to 30
+restores the schedule.
+
+**Sync now.** The dashboard's lists panel has a Sync now button; it calls `POST /api/v2/quickbooks/lists/sync`:
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:5080/api/v2/quickbooks/lists/sync -Headers @{ Authorization = "Bearer $token" }
+# or, with an API key that holds qb:read:
+Invoke-RestMethod -Method Post http://127.0.0.1:5080/api/v2/quickbooks/lists/sync -Headers @{ 'X-Api-Key' = $key }
+```
+
+Who may call it: a dashboard user with `requests:edit` (editors and admins; viewers do not see the button), or an API
+key with `qb:read`. A key's sync is recorded with trigger `api` and the key's client name; a person's with trigger
+`dashboard` and their user id. The route uses the **posting** rate-limit bucket. Two people pressing it together cause one
+sync; a press while the scheduled sync runs joins it. Answers:
+
+| Status | Code | Meaning |
+|---|---|---|
+| `200` | | Fresh lists, counts and `lastSync`; the pickers update |
+| `403` | | A viewer, or a key without `qb:read` |
+| `409` | `quickbooks-not-open` | QuickBooks is not running in the API's session; a `skipped` row is recorded |
+| `503` | `quickbooks-unavailable` | QuickBooks could not be reached |
+| `503` | `quickbooks-busy` | QuickBooks did not answer within `QuickBooks:BusyTimeoutSeconds` (a dialog, usually) |
+| `503` | `api-stopping` | The API is shutting down |
+| `502` | `qb-status` | QuickBooks answered with an error status |
+| `504` | `sync-timeout` | Longer than `Api:SyncPostTimeoutSeconds`; the sync keeps running and its `qb_list_syncs` row shows the result |
+
 ## 6. Exceptions: held and skipped lines
 
 | Reason | Meaning | What to do |
 |---|---|---|
 | `unknown-payee` | No vendor/customer found; `candidates` lists the closest names | Teach an alias (below), re-run |
 | `no-account-rule`, `low-confidence`, `no-prior-posting` | No rule for the expense account, or the AI suggestion is not trusted yet; `candidates` has suggestions | Teach a vendor account (below) |
-| `no-accounts` | `qb-lists.json` empty | Sync lists |
+| `no-accounts` | The QuickBooks lists are empty (never synced) | Sync lists (§5.4) |
 | `hermes-failed` | Hermes did not give a valid answer | Check `/api/v1/health/hermes` (pings OpenRouter), re-run |
 | `unknown-account` | No `BankAccounts`/`CardAccounts` entry for the last four, or none detected | Add it to `rules.json`, or put the last four in the file name |
 | `unknown-csv-layout`, `ambiguous-csv-layout`, `unparsable-rows` | The CSV/XLSX export does not match exactly one layout, or a row cannot be read | Fix `CsvLayouts` or the export |

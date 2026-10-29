@@ -202,6 +202,9 @@ public sealed class QuickBooksSettings
     public string BackupFolder { get; set; } = "";
     public int BackupMaxAgeHours { get; set; } = 36;
 
+    /// <summary>M14 §11: the scheduled QuickBooks list sync and how much of its history is kept.</summary>
+    public ListSyncSettings ListSync { get; set; } = new();
+
     /// <summary>
     /// SPEC-GAP T-601: <c>true</c> answers from an in-memory simulated company instead of the SDK (plan T-601
     /// "QuickBooks:Fake"). Allowed only in Development/Testing because its TxnIDs would enter the real ledger.
@@ -303,4 +306,29 @@ public sealed class PathsSettings
             }
         }
     }
+}
+
+/// <summary>
+/// M14 §11, <c>QuickBooks:ListSync</c>. Checked at startup by <see cref="ListSyncOptionsValidator"/>: a value the
+/// schedule or the history cannot honour stops the app rather than being corrected silently.
+/// </summary>
+public sealed class ListSyncSettings
+{
+    /// <summary>Minimum for a non-zero <see cref="IntervalMinutes"/>.</summary>
+    public const int MinIntervalMinutes = 5;
+
+    /// <summary>Maximum for <see cref="IntervalMinutes"/> and <see cref="FirstDelayMinutes"/>: one day.</summary>
+    public const int MaxMinutes = 1440;
+
+    /// <summary>Minimum for <see cref="HistoryRows"/>.</summary>
+    public const int MinHistoryRows = 10;
+
+    /// <summary>Minutes between scheduled syncs; 0 turns the schedule off, otherwise 5 to 1440.</summary>
+    public int IntervalMinutes { get; set; } = 30;
+
+    /// <summary>Minutes after startup of the first scheduled attempt when none is recorded; 0 to 1440.</summary>
+    public int FirstDelayMinutes { get; set; } = 2;
+
+    /// <summary>Rows kept in <c>qb_list_syncs</c>; at least 10.</summary>
+    public int HistoryRows { get; set; } = 200;
 }

@@ -79,6 +79,8 @@ builder.Services.AddOptions<AppSettings>()
     .ValidateOnStart();
 // M12 §14.2: an https-only BaseUrl (loopback excepted) is checked at startup, so the key is never sent in clear text.
 builder.Services.AddSingleton<IValidateOptions<AppSettings>, OpenRouterOptionsValidator>();
+// M14 §11: QuickBooks:ListSync values the schedule cannot honour stop startup.
+builder.Services.AddSingleton<IValidateOptions<AppSettings>, ListSyncOptionsValidator>();
 
 const string CorsPolicyName = "QbAutopostCallers";
 
@@ -193,6 +195,12 @@ builder.Services.AddSingleton<IQbSdkProbe>(sp =>
         ? new QbSdkProbe(s.QuickBooks.QbXmlVersion)
         : new UnavailableQbSdkProbe(s.QuickBooks.QbXmlVersion, $"the QuickBooks gateway is {mode.ToString().ToLowerInvariant()}, not the Desktop SDK");
 });
+// M14 §6: scheduled syncs must never start QuickBooks, so on Windows with the SDK they check the process first;
+// every other mode (simulated company, unavailable) answers open.
+builder.Services.AddSingleton<IQbPresence>(sp =>
+    sp.GetRequiredService<QbConnection>().Mode == QbConnectionMode.Sdk && OperatingSystem.IsWindows()
+        ? new QbPresence()
+        : new AlwaysOpenQbPresence());
 // One instance, registered twice: the interface for everything that posts, the concrete type for the connection test
 // (FR-A-4 needs its own timeout and the lock-wait event). Two instances would mean two locks and two sessions.
 builder.Services.AddSingleton(sp =>
@@ -271,13 +279,19 @@ builder.Services.AddSingleton<SavedRequestPoster>();
 // T-914 (FR-A-7): the same StatementReader the job uses, so a validate and the job it predicts cannot disagree.
 builder.Services.AddSingleton<FolderValidator>();
 builder.Services.AddSingleton<JobPipeline>();
+// M14 §3.4, §9: the store and source of the QuickBooks lists are registered below, beside the database wiring.
 builder.Services.AddSingleton<QbListSync>();
+// M14 §5: the scheduled sync's due time and in-flight handle; JobWorker runs it, the v2 lists routes read it.
+builder.Services.AddSingleton(sp => new ListSyncSchedule(
+    sp.GetRequiredService<IOptions<AppSettings>>().Value.QuickBooks.ListSync,
+    sp.GetRequiredService<IQbListsSource>(),
+    sp.GetRequiredService<IClock>()));
 builder.Services.AddSingleton<BatchUndo>();
 builder.Services.AddSingleton<QbHealth>();
 builder.Services.AddSingleton(sp =>
 {
     var s = sp.GetRequiredService<IOptions<AppSettings>>().Value;
-    return new RulesEditor(s.Company.RulesFile, s.Paths.QbLists);
+    return new RulesEditor(s.Company.RulesFile, sp.GetRequiredService<IQbListsSource>());
 });
 builder.Services.AddSingleton<IJobProcessor, JobRunner>();
 builder.Services.AddSingleton<JobAdmission>();
@@ -291,7 +305,13 @@ var database = builder.Configuration.GetSection("Database").Get<DatabaseSettings
 var auth = builder.Configuration.GetSection("Auth").Get<AuthSettings>() ?? new AuthSettings();
 if (database.Configured)
 {
-    builder.Services.AddQbAutopostData(database.ConnectionString, database.CommandTimeoutSeconds);
+    var listSync = builder.Configuration.GetSection("QuickBooks:ListSync").Get<ListSyncSettings>() ?? new ListSyncSettings();
+    builder.Services.AddQbAutopostData(database.ConnectionString, database.CommandTimeoutSeconds, listSync.HistoryRows);
+
+    // M14 §3, §9: database mode. One source is both the store and the reader; qb-lists.json is only imported (§3.3).
+    builder.Services.AddSingleton<DbQbListsSource>();
+    builder.Services.AddSingleton<IQbListsStore>(sp => sp.GetRequiredService<DbQbListsSource>());
+    builder.Services.AddSingleton<IQbListsSource>(sp => sp.GetRequiredService<DbQbListsSource>());
 
     // T-1009 (spec 11.2, 11.3): Identity's stores need a scoped context; the pool still hands it out and takes it back.
     builder.Services.AddScoped(sp => sp.GetRequiredService<IDbContextFactory<QbAutopostDbContext>>().CreateDbContext());
@@ -323,6 +343,11 @@ if (database.Configured)
 else
 {
     builder.Services.AddSingleton<ISavedRequestStore, DisabledSavedRequestStore>();
+
+    // M14 §3.4: file mode, qb-lists.json is the current lists.
+    builder.Services.AddSingleton(sp => new FileQbLists(sp.GetRequiredService<PipelineOptions>().QbListsFile));
+    builder.Services.AddSingleton<IQbListsStore>(sp => sp.GetRequiredService<FileQbLists>());
+    builder.Services.AddSingleton<IQbListsSource>(sp => sp.GetRequiredService<FileQbLists>());
 }
 
 // T-1111: the dashboard v2 reads and the audit feed are served by the same store instance, whichever one is
@@ -437,6 +462,13 @@ try
     // Spec §6: before the worker starts (hosted services start in app.Run), no job may remain active.
     var recovered = app.Services.GetRequiredService<StartupRecovery>().Run();
     app.Logger.LogInformation("Startup recovery: {Count} interrupted job(s) closed", recovered);
+
+    // M14 §3.3, §9: import qb-lists.json if the database has no lists, then load them, before Kestrel binds. A database
+    // error is logged inside and leaves empty lists; it does not stop startup.
+    if (database.Configured)
+    {
+        await app.Services.GetRequiredService<DbQbListsSource>().InitializeAsync(app.Lifetime.ApplicationStopping);
+    }
 
     app.Lifetime.ApplicationStarted.Register(() =>
         app.Logger.LogInformation("QbAutopost ready, listening on {Urls}", string.Join(", ", app.Urls)));

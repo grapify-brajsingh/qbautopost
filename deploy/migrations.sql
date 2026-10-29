@@ -808,3 +808,44 @@ BEGIN
     END IF;
 END $EF$;
 COMMIT;
+
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261029154406_QbListSyncs') THEN
+    CREATE TABLE qb_list_syncs (
+        id bigint GENERATED ALWAYS AS IDENTITY,
+        trigger text NOT NULL,
+        requested_by text,
+        started_utc timestamp with time zone NOT NULL,
+        finished_utc timestamp with time zone NOT NULL,
+        outcome text NOT NULL,
+        reason text,
+        error text,
+        accounts integer,
+        vendors integer,
+        customers integer,
+        missing_in_rules jsonb,
+        lists jsonb,
+        CONSTRAINT pk_qb_list_syncs PRIMARY KEY (id)
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261029154406_QbListSyncs') THEN
+    CREATE INDEX ix_qb_list_syncs_outcome_id ON qb_list_syncs (outcome, id DESC);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261029154406_QbListSyncs') THEN
+    INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+    VALUES ('20261029154406_QbListSyncs', '8.0.33');
+    END IF;
+END $EF$;
+COMMIT;
