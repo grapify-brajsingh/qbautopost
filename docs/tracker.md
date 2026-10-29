@@ -29,6 +29,7 @@ Status legend: `todo` · `doing` · `done` · `blocked` · `ready-for-human`
 | M11 | Dashboard API v2 under `/api/v2` | 17 | 17 | **agent work done** (branch `feature/dashboard-api-v2`): T-1101…T-1116 done; T-1117 ready-for-human [server] (deploy script, runbook section 11, checklist; a person verifies on the server) — contract is `docs/saved-requests-dashboard-v2.md`, plan `docs/saved-requests-dashboard-v2-plan.md` |
 | M12 | Home, upload and OpenRouter (R-10…R-14) | 15 | 14 | **in progress** (branch `feature/m12-home-upload-openrouter`): agent work done (T-1201…T-1214 done); T-1215 ready-for-human ([server], a person verifies on the QuickBooks server) — contract is `docs/dashboard-api-m12.md`, plan `docs/dashboard-api-m12-plan.md` |
 | M13 | Dashboard integration fixes (R-15, R-7.3, client aborts) and local Docker stack | 5 | 5 | **agent work done** (branch `feature/dashboard-integration`) — contract is `docs/dashboard-integration-m13.md`, plan `docs/dashboard-integration-m13-plan.md` |
+| M14 | QuickBooks list sync in PostgreSQL, scheduled on the job worker, v2 sync route | 10 | 1 | **in progress** (branch `feature/m14-qb-list-sync`) — contract is `docs/qb-list-sync-m14.md`, plan `docs/qb-list-sync-m14-plan.md` |
 
 ## M0 — Bootstrap
 
@@ -324,6 +325,23 @@ Contract: `docs/dashboard-integration-m13.md` (found by running the dashboard en
 | T-1303 | Linux Dockerfile for the local integration stack; runbook note | §5 | `Dockerfile`, `.dockerignore`, `docs/runbook.md` (section 13) | `docker build` via `D:\qb_post_react\docker-compose.integration.yml`; stack healthy; dashboard `e2e-integration` 13 passed | done | Development + simulated QuickBooks only; secrets from `QBAUTOPOST__*` |
 | T-1304 | Client abort answered 499 and logged at Information, not 500 at Error | §4a | `src/QbAutopost.Api/Logging/{ClientAbortMiddleware,RequestLog}.cs`, `src/QbAutopost.Api/Program.cs`, `tests/QbAutopost.Api.Tests/Logging/ClientAbortTests.cs` | `ClientAbortTests` (4; level test red then green); live stack after a full e2e run: 0 `responded 5xx`, 24 `responded 499` | done | Post-by-id disconnect tests unchanged and green |
 
+## M14 — QuickBooks list sync (`/api/v2`, PostgreSQL, scheduled)
+
+Contract: `docs/qb-list-sync-m14.md` (owner request 2026-10-29: Sync now button, 30-minute background sync, lists in the database; requirement R-16 in `D:\qb_post_react\docs\api-requirements-for-dashboard.md`). Plan: `docs/qb-list-sync-m14-plan.md`. No v1 change, no new package, no new hosted service.
+
+| ID | Task | Spec | Files | Verified by | Status | Notes |
+|---|---|---|---|---|---|---|
+| T-1400 | Tracker M14, Q-119…Q-121, Decisions D-1…D-4, ADR-0012, CLAUDE.md timer wording | §0, §13, §14 | `docs/tracker.md`, `docs/adr/0012-qb-lists-in-postgres-scheduled-sync.md`, `docs/adr/README.md`, `CLAUDE.md`, `docs/CLAUDE.md` | Docs only; `OperatorDocsTests` green | done | |
+| T-1401 | List query asks only for the fields used | §10 | `src/QbAutopost.Core/QbXml/QbListQuery.cs`, `tests/fixtures/qbxml/list-query.golden.xml`, `tests/fixtures/qbxml/list-response-full.xml`, `tests/fixtures/qbxml/list-response-trimmed.xml`, `tests/QbAutopost.Core.Tests/QbXml/QbListQueryTests.cs` | Golden test red then green; full-vs-trimmed parse-equality test | todo | |
+| T-1402 | Core: `IQbListsSource`/`IQbListsStore`/`IQbPresence`, `ListSyncRun`, `QbListSync.SyncAsync(trigger, requestedBy, ct)`, file implementations, readers switched | §4, §9 | see plan | `QbListSyncTests` red then green | todo | |
+| T-1403 | Data: `qb_list_syncs`, `EfQbListsStore`, migration, `migrations.sql`, grants | §3 | see plan | `QbListSyncStoreTests` (Testcontainers) red then green | todo | |
+| T-1404 | Api wiring: DB source when `Database:ConnectionString` is set, else file; startup import; `QuickBooks:ListSync` settings | §3, §11 | see plan | Wiring tests red then green | todo | |
+| T-1405 | `IQbPresence` Windows implementation and fake | §6 | see plan | Interface tests with the fake; builds on Linux | todo | |
+| T-1406 | Scheduled sync inside `JobWorker` | §5 | see plan | `ScheduledListSyncTests` red then green | todo | |
+| T-1407 | v2 GET additions and `POST /api/v2/quickbooks/lists/sync`; v1 recorded as `api` | §7, §8 | see plan | `V2QbListsSyncTests`, scope matrix, v1 pin and OpenAPI drift green | todo | |
+| T-1408 | Startup log line, readiness text, runbook | §12, §13 | see plan | Startup log test; `OperatorDocsTests` green | todo | |
+| T-1409 | [server] checklist A-10 on the QuickBooks machine | §15 | `docs/testing/T-1409.server-checklist.md` | A person on the server | todo | [server]: implement against fakes, set `ready-for-human`, stop |
+
 ## Questions raised during implementation
 
 | # | Task | Question | Conservative choice taken | Answer (human) |
@@ -447,6 +465,9 @@ Contract: `docs/dashboard-integration-m13.md` (found by running the dashboard en
 | Q-116 | T-1301 | Should the single-user v2 answers also carry `rowVersion`? | No: they carry the `ETag` header, and `UserView` is shared with v1 (M13 spec §3.3) | |
 | Q-117 | T-1302 | Should the audit CSV gain a subject-user column for user events? | No: R-7.6 fixes the columns | |
 | Q-118 | T-1304 | Is `Api:RateLimits:DefaultPerMinute` = 120 enough for the dashboard (Home makes ~22 calls per load)? | Unchanged; measure on the server; the dashboard's Home moves to `GET /dashboard/summary` (R-11) | |
+| Q-119 | M14 spec | Keep writing `qb-lists.json` when the database is configured? | No: one source of truth; the file is the no-database fallback only | |
+| Q-120 | M14 spec | Who may press Sync now? | Editors and admins (`requests:edit`): the people who see "not in QuickBooks" and fix rows. Viewers see the status only | |
+| Q-121 | M14 spec | Should a dashboard sync be an audit-feed event? | No: it moves no money and changes no statement; `qb_list_syncs` keeps who and when | |
 
 ## Decisions
 
@@ -500,6 +521,12 @@ Contract: `docs/dashboard-integration-m13.md` (found by running the dashboard en
 | 2026-10-29 | **Ruling R16 (M12 controller)**: ship the spec §6.3 fallback now as `Extraction:StrictSchema` (bool, default true); checklist B1 says set it false if OpenRouter rejects strict mode | Spec already authorises the fallback, so a switch avoids an emergency code change — cost if wrong: one more config key. |
 | 2026-10-29 | **Ruling R17 (M12 controller)**: timeToPost excludes statements whose start time is after the post time (client-supplied email.receivedUtc in the future), with a tracker row | Hold, don't guess; negative waits would skew median/p90 — cost: such statements vanish from the figure. |
 | 2026-10-29 | **Ruling R18 (M12 controller)**: top-level body fields on an upload save (dryRun, allowModelAccounts) get a tracker note only, no code change (see the M12 final-review note) | The dashboard doesn't send them. Cost if wrong: a future dashboard field silently dropped when rows are unchanged |
+| 2026-10-29 | **M14 D-1 (owner)**: the synced QuickBooks lists are stored in PostgreSQL, not only in `qb-lists.json` (ADR-0012) | The dashboard data already lives there; a history of syncs (who, when, result, error) drives the "last synced" display; client names leave the disk |
+| 2026-10-29 | **M14 D-2 (owner)**: a scheduled sync every 30 minutes, run by the existing single `JobWorker`: no new hosted service, no `System.Threading.Timer` | ADR-0003 single worker keeps the one-QuickBooks-call-at-a-time rule; the schedule cannot interleave with a job |
+| 2026-10-29 | **M14 D-3 (owner)**: the dashboard gets a Sync now button (v2 route `POST /api/v2/quickbooks/lists/sync`) | People who see "not in QuickBooks" must be able to refresh without waiting for the interval |
+| 2026-10-29 | **M14 D-4 (owner)**: names are not fetched from QuickBooks on demand | A live call is 3–7 s, fails when QuickBooks is closed or showing a dialog, and queues in front of posts (ADR-0012 trade-off table) |
+| 2026-10-29 | **M14 CLAUDE.md wording**: the Don't bullet now reads "…background timers beyond the single `JobWorker` (which also runs the scheduled QuickBooks list sync, M14)." in `CLAUDE.md` and `docs/CLAUDE.md` | Keeps the one-worker rule true now that the worker also owns the schedule (D-2) |
+
 ## Blockers
 
 | Date | Task | Blocker | Owner | Resolved |
@@ -625,3 +652,4 @@ Contract: `docs/dashboard-integration-m13.md` (found by running the dashboard en
 | 2026-10-29 | 82 | T-1215 | Runbook section 12 (upload/extraction settings, health, ICU and build-on-Windows rule, troubleshooting) and `docs/testing/T-1215.server-checklist.md` (migrate, key, Q-108, time zone, sample upload, n8n comparison, save/post/Home, Docker and Hermes gone, no PDF kept). Docs only; row set to ready-for-human |
 | 2026-10-29 | 83 | M12 final review | Whole-branch review fixes: key-scrub job test can fail (echoing fake handler, audit + log sink, 8-char fragments; RED with scrub disabled), `SocketsHttpHandler` with 10 min pooled-connection lifetime, `Extraction:StrictSchema` (R16), `OpenRouter:Enabled` in the disabled reason, multipart 413 only for the body limit (header/line limits, Kestrel 400, truncated body → 400), 504 detail names the timeout that fired, timeToPost excludes future starts (R17, Q-115), Kestrel limit at `Api:MaxRequestBodyBytes` while extraction is off; tracker Q-113 answered, rulings R3–R18 in Decisions, R18 and email-save notes; checklist B1/B2. `dotnet build -warnaserror` 0 warnings; `dotnet test` green: Core 1231, Api 1508, Data 474 (1 skipped) |
 | 2026-10-29 | 84 | T-1300…T-1304 | M13 from the dashboard's end-to-end run against `/api/v2` in Docker: R-15 `rowVersion` on v2 user rows, R-7.3 subject `email`/`displayName` on user events (read time, one batched lookup), Linux `Dockerfile` + runbook section 13 (local stack only), client aborts answered 499 at Information. `dotnet build -warnaserror` 0 warnings; `dotnet test` Core 1231, Api 1515, Data 478 passed, 1 skipped (perf, opt-in); dashboard `e2e-integration` 13 passed against this API |
+| 2026-10-29 | 85 | T-1400 | M14 docs and decisions: tracker M14 row and section (T-1400…T-1409), Q-119…Q-121, Decisions D-1…D-4 and the CLAUDE.md wording, ADR-0012, timer rule in `CLAUDE.md` and `docs/CLAUDE.md`. Docs only. |
