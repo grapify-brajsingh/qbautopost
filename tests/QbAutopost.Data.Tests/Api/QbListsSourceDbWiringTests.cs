@@ -115,4 +115,109 @@ public sealed class QbListsSourceDbWiringTests(PostgresFixture postgres) : IClas
             TestDatabase.Release(connectionString);
         }
     }
+
+    private static ListSyncRun Run(ListSyncOutcome outcome, int minute) => new()
+    {
+        Trigger = ListSyncTrigger.Schedule,
+        StartedUtc = new DateTime(2026, 10, 29, 10, minute, 0, DateTimeKind.Utc),
+        FinishedUtc = new DateTime(2026, 10, 29, 10, minute, 1, DateTimeKind.Utc),
+        Outcome = outcome,
+        Reason = outcome == ListSyncOutcome.Ok ? null : ListSyncReasons.QuickBooksNotOpen,
+    };
+
+    private static QbLists Synced(string name, int minute) => new()
+    {
+        SyncedUtc = new DateTime(2026, 10, 29, 10, minute, 0, DateTimeKind.Utc),
+        Accounts = [new QbAccount { Name = name }],
+    };
+
+    private static DbQbListsSource NewSource(string connectionString, ListLogger<DbQbListsSource> log, string listsFile)
+    {
+        var services = new ServiceCollection().AddQbAutopostData(connectionString, 30).BuildServiceProvider();
+        return new DbQbListsSource(
+            services.GetRequiredService<EfQbListsStore>(),
+            new PipelineOptions { CompanyName = "c", RulesFile = "r", LedgerFile = "l", QbListsFile = listsFile },
+            new FixedClock(),
+            log);
+    }
+
+    [PostgresFact]
+    public async Task Should_KeepCurrentAndUpdateLastAttempt_When_FailedOrSkippedRunIsRecorded()
+    {
+        var connectionString = await postgres.CreateDatabaseAsync();
+        await TestDatabase.MigrateAsync(connectionString);
+        try
+        {
+            var source = NewSource(connectionString, new ListLogger<DbQbListsSource>(), "missing.json");
+            await source.RecordAsync(Run(ListSyncOutcome.Ok, 0), Synced("A", 0), default);
+
+            await source.RecordAsync(Run(ListSyncOutcome.Failed, 5), null, default);
+            Assert.Equal(["A"], source.Current.Accounts.Select(a => a.Name));
+            Assert.Equal(ListSyncOutcome.Failed, source.LastAttempt!.Outcome);
+
+            await source.RecordAsync(Run(ListSyncOutcome.Skipped, 10), null, default);
+            Assert.Equal(["A"], source.Current.Accounts.Select(a => a.Name));
+            Assert.Equal(ListSyncOutcome.Skipped, source.LastAttempt!.Outcome);
+        }
+        finally
+        {
+            TestDatabase.Release(connectionString);
+        }
+    }
+
+    [PostgresFact]
+    public async Task Should_NotMoveCurrentBackwards_When_OlderOkRunIsRecordedLate()
+    {
+        var connectionString = await postgres.CreateDatabaseAsync();
+        await TestDatabase.MigrateAsync(connectionString);
+        try
+        {
+            var source = NewSource(connectionString, new ListLogger<DbQbListsSource>(), "missing.json");
+            await source.RecordAsync(Run(ListSyncOutcome.Ok, 20), Synced("New", 20), default);
+
+            await source.RecordAsync(Run(ListSyncOutcome.Ok, 10), Synced("Old", 10), default);
+
+            Assert.Equal(["New"], source.Current.Accounts.Select(a => a.Name));
+        }
+        finally
+        {
+            TestDatabase.Release(connectionString);
+        }
+    }
+
+    [Fact]
+    public async Task Should_LogWarningAndRethrow_When_DatabaseWriteFails()
+    {
+        var log = new ListLogger<DbQbListsSource>();
+        var source = NewSource("Host=127.0.0.1;Port=1;Database=x;Username=u;Password=p;Timeout=2;Command Timeout=2;Pooling=false", log, "missing.json");
+
+        await Assert.ThrowsAnyAsync<Exception>(() => source.RecordAsync(Run(ListSyncOutcome.Ok, 0), Synced("A", 0), default));
+
+        Assert.Single(log.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
+        Assert.Null(source.LastAttempt);
+        Assert.Null(source.Current.SyncedUtc);
+    }
+
+    [Fact]
+    public async Task Should_StartWithEmptyListsAndLogError_When_ImportFileCannotBeRead()
+    {
+        var log = new ListLogger<DbQbListsSource>();
+        var dir = Directory.CreateTempSubdirectory();
+        try
+        {
+            // A directory where the file should be: File.Exists is false, so use an unreadable (invalid) file instead.
+            var bad = Path.Combine(dir.FullName, "qb-lists.json");
+            File.WriteAllText(bad, "{ not json");
+            var source = NewSource("Host=127.0.0.1;Port=1;Database=x;Username=u;Password=p;Timeout=2;Command Timeout=2;Pooling=false", log, bad);
+
+            await source.InitializeAsync(default);
+
+            Assert.Null(source.Current.SyncedUtc);
+            Assert.Contains(log.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Error || e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
+        }
+        finally
+        {
+            dir.Delete(true);
+        }
+    }
 }

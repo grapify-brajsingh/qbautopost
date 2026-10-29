@@ -30,9 +30,9 @@ public sealed class DbQbListsSource(
     /// </summary>
     public async Task InitializeAsync(CancellationToken ct)
     {
-        var fileLists = ReadFileLists();
         try
         {
+            var fileLists = ReadFileLists();
             if (fileLists is not null && await store.ImportIfEmptyAsync(fileLists, clock.UtcNow, ct))
             {
                 log.LogInformation(
@@ -64,8 +64,13 @@ public sealed class DbQbListsSource(
             throw;
         }
 
-        var replace = run.Outcome == ListSyncOutcome.Ok && lists is not null;
-        Swap(s => new State(replace ? lists! : s.Lists, run));
+        // Current never moves backwards: a slower, older sync finishing late must not replace newer lists.
+        Swap(s =>
+        {
+            var replace = run.Outcome == ListSyncOutcome.Ok && lists is not null
+                && (s.Lists.SyncedUtc is null || lists.SyncedUtc is null || lists.SyncedUtc > s.Lists.SyncedUtc);
+            return new State(replace ? lists! : s.Lists, run);
+        });
     }
 
     public Task<ListSyncRun?> LastAttemptAsync(CancellationToken ct) => Task.FromResult(LastAttempt);

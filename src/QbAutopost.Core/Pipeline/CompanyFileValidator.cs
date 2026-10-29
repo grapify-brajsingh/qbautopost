@@ -174,6 +174,14 @@ public sealed class CompanyFileValidator(PipelineOptions options, IQbGateway gat
     // M14 §9: asks the source, so it is right whether the lists live in qb-lists.json or in the database.
     private CompanyFileCheck ListsSynced()
     {
+        // File mode: the answer is byte-identical to what v1 gave before M14.
+        if (lists is Store.FileQbLists)
+        {
+            return File.Exists(options.QbListsFile)
+                ? new CompanyFileCheck("listsSynced", true, Warning, options.QbListsFile)
+                : new CompanyFileCheck("listsSynced", false, Warning, $"{options.QbListsFile} not found; run POST /api/v1/quickbooks/lists/sync");
+        }
+
         DateTime? synced;
         try
         {
@@ -185,7 +193,7 @@ public sealed class CompanyFileValidator(PipelineOptions options, IQbGateway gat
         }
 
         return synced is not null
-            ? new CompanyFileCheck("listsSynced", true, Warning, $"lists synced {synced:yyyy-MM-dd HH:mm} UTC")
+            ? new CompanyFileCheck("listsSynced", true, Warning, $"lists synced {synced.Value.ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture)}")
             : new CompanyFileCheck("listsSynced", false, Warning, "no lists synced yet; run POST /api/v1/quickbooks/lists/sync");
     }
 
