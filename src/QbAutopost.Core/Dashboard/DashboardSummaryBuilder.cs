@@ -49,10 +49,15 @@ public static class DashboardSummaryBuilder
         return (rows, amount);
     }
 
+    /// <summary>
+    /// Ruling R17 (tracker Q-115): a statement whose start is after its post time (a client-sent <c>email.receivedUtc</c>
+    /// in the future) is left out, and <c>statements</c> counts only the included ones; null when none is left.
+    /// </summary>
     private static TimeToPost? TimeToPostOf(IReadOnlyList<PostTimeFact> times)
     {
-        if (times.Count == 0) return null;
-        var minutes = times
+        var included = times.Where(t => t.ReceivedUtc <= t.PostedUtc).ToList();
+        if (included.Count == 0) return null;
+        var minutes = included
             .Select(t => (int)Math.Floor((t.PostedUtc - t.ReceivedUtc).TotalMinutes))
             .Order()
             .ToList();
