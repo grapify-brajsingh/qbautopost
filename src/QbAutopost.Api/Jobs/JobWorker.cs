@@ -32,6 +32,9 @@ public sealed class JobWorker(
     /// <summary>§12: who a scheduled attempt is "by" in its log line (it has no requesting user).</summary>
     public const string ScheduledRequestedBy = "system";
 
+    /// <summary>The longest single wait for the due time; a longer one is taken in steps.</summary>
+    public static readonly TimeSpan MaxWait = TimeSpan.FromHours(1);
+
     private readonly Func<TimeSpan, CancellationToken, Task> _delay = delay ?? Task.Delay;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -50,12 +53,33 @@ public sealed class JobWorker(
                 return;
             }
 
+            var fallback = false;
             while (true)
             {
                 stoppingToken.ThrowIfCancellationRequested();
+
+                // At most MaxWait at a time: Task.Delay refuses more than ~24.8 days (a future FinishedUtc from a
+                // skewed clock gets there), and the loop re-checks the due time on every wake anyway.
                 var wait = schedule.TimeUntilDue() ?? TimeSpan.Zero;
-                Func<CancellationToken, Task>? deadline = wait > TimeSpan.Zero ? token => _delay(wait, token) : null;
-                if (await queue.RunNextAsync(item => RunOneAsync(item, stoppingToken), deadline, stoppingToken))
+                wait = wait > MaxWait ? MaxWait : wait;
+                var delayFor = fallback ? Task.Delay : _delay;
+                fallback = false;
+                Func<CancellationToken, Task>? deadline = wait > TimeSpan.Zero ? token => delayFor(wait, token) : null;
+                bool ran;
+                try
+                {
+                    ran = await queue.RunNextAsync(item => RunOneAsync(item, stoppingToken), deadline, stoppingToken);
+                }
+                catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+                {
+                    // A broken wait must not stop the worker. The next wait uses Task.Delay, so a delay that always
+                    // fails cannot spin the loop; the one after that tries the configured delay again.
+                    log.LogWarning(ex, "Scheduled list sync: the wait failed; waiting once with the built-in delay");
+                    fallback = true;
+                    continue;
+                }
+
+                if (ran)
                 {
                     continue; // re-check: another item may be waiting, and an attempt of any trigger moves the due time
                 }
@@ -82,7 +106,7 @@ public sealed class JobWorker(
     {
         using var scope = log.BeginScope(new Dictionary<string, object> { ["jobId"] = ScheduledSyncLabel });
         var warnOnFailure = schedule.LastKnownWasOk;
-        var before = schedule.RecordedLastAttempt;
+        var started = schedule.UtcNow;
         var attempt = schedule.BeginAttempt();
         var outcome = ListSyncOutcome.Failed;
         try
@@ -118,7 +142,10 @@ public sealed class JobWorker(
             catch (Exception ex)
             {
                 var recorded = schedule.RecordedLastAttempt;
-                var reason = !ReferenceEquals(recorded, before) && recorded?.Trigger == ListSyncTrigger.Schedule ? recorded.Reason : null;
+                // The row this attempt recorded: a scheduled failure that started no earlier than this attempt did.
+                var reason = recorded is { Trigger: ListSyncTrigger.Schedule, Outcome: ListSyncOutcome.Failed } r && r.StartedUtc >= started
+                    ? r.Reason
+                    : null;
                 LogNotOk(warnOnFailure, ListSyncOutcome.Failed, reason, ex.Message);
                 attempt.TrySetException(ex);
                 _ = attempt.Task.Exception; // observed: a joiner may never come

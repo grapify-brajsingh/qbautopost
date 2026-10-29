@@ -92,6 +92,9 @@ public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource s
         }
     }
 
+    /// <summary>The schedule's clock, so the worker times an attempt as <see cref="QbListSync"/> does.</summary>
+    internal DateTime UtcNow => clock.UtcNow;
+
     /// <summary>The source's newest recorded attempt (any trigger).</summary>
     internal ListSyncRun? RecordedLastAttempt => source.LastAttempt;
 

@@ -14,9 +14,18 @@ public sealed class ListSyncOptionsValidator : IValidateOptions<AppSettings>
             failures.Add($"QuickBooks:ListSync:IntervalMinutes must be 0 (schedule off) or at least {ListSyncSettings.MinIntervalMinutes}, not {s.IntervalMinutes}.");
         }
 
+        else if (s.IntervalMinutes > ListSyncSettings.MaxMinutes)
+        {
+            failures.Add($"QuickBooks:ListSync:IntervalMinutes must be at most {ListSyncSettings.MaxMinutes} (one day), not {s.IntervalMinutes}.");
+        }
+
         if (s.FirstDelayMinutes < 0)
         {
             failures.Add($"QuickBooks:ListSync:FirstDelayMinutes must be 0 or more, not {s.FirstDelayMinutes}.");
+        }
+        else if (s.FirstDelayMinutes > ListSyncSettings.MaxMinutes)
+        {
+            failures.Add($"QuickBooks:ListSync:FirstDelayMinutes must be at most {ListSyncSettings.MaxMinutes} (one day), not {s.FirstDelayMinutes}.");
         }
 
         if (s.HistoryRows < ListSyncSettings.MinHistoryRows)

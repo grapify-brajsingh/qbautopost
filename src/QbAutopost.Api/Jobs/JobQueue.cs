@@ -101,7 +101,8 @@ public sealed class JobQueue
     /// "do not wait": only an item already in the channel is run.
     /// <para>
     /// An item that arrives together with the deadline still runs (a job always goes before the scheduled sync). The
-    /// deadline is handed a token that is cancelled once the wait is over, and must honour it.
+    /// deadline is handed a token that is cancelled once the wait is over, and must honour it. A deadline that faults,
+    /// or is cancelled by anything but this wait, throws <see cref="InvalidOperationException"/> (it is not "due").
     /// </para>
     /// </summary>
     public async Task<bool> RunNextAsync(
@@ -118,7 +119,11 @@ public sealed class JobQueue
             {
                 var ready = _channel.Reader.WaitToReadAsync(wait.Token).AsTask();
                 var due = deadline(wait.Token);
-                await Task.WhenAny(ready, due);
+                var first = await Task.WhenAny(ready, due);
+
+                // A deadline that ended first without running to completion (faulted, or cancelled by something other
+                // than this wait) is broken: it is not "due", and reporting it as such would sync on every pass.
+                var broken = first == due && !due.IsCompletedSuccessfully && !ct.IsCancellationRequested;
                 wait.Cancel();
 
                 // The deadline's own faults are observed here; only the channel wait is awaited to its end.
@@ -133,12 +138,14 @@ public sealed class JobQueue
                 }
 
                 ct.ThrowIfCancellationRequested();
-                if (due.IsFaulted)
+                if (broken)
                 {
-                    await due; // a broken deadline is the worker's error, not "nothing to do"
+                    throw new InvalidOperationException("The wait for the scheduled list sync failed.", due.Exception?.GetBaseException());
                 }
             }
 
+            // Nothing waiting now: the caller runs the sync, and an item that arrives after this read waits behind it
+            // (at most one sync, spec §5.7).
             if (!_channel.Reader.TryRead(out item))
             {
                 return false;

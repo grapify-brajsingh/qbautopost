@@ -65,6 +65,29 @@ public sealed class QbListsSourceWiringTests : IDisposable
         Assert.Contains("QuickBooks:ListSync:IntervalMinutes", ex.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("QuickBooks:ListSync:IntervalMinutes")]
+    [InlineData("QuickBooks:ListSync:FirstDelayMinutes")]
+    public void Should_NameTheKey_When_AMinutesSettingIsAboveOneDay(string key)
+    {
+        var settings = new AppSettings();
+        if (key.EndsWith("IntervalMinutes", StringComparison.Ordinal))
+        {
+            settings.QuickBooks.ListSync.IntervalMinutes = 1441;
+        }
+        else
+        {
+            settings.QuickBooks.ListSync.FirstDelayMinutes = 1441;
+        }
+
+        var result = new ListSyncOptionsValidator().Validate(null, settings);
+
+        Assert.False(result.Succeeded);
+        var failure = Assert.Single(result.Failures!);
+        Assert.Contains(key, failure, StringComparison.Ordinal);
+        Assert.Contains("1440", failure, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Should_FailStartup_When_HistoryRowsIsBelowTen()
     {
@@ -94,6 +117,9 @@ public sealed class QbListsSourceWiringTests : IDisposable
     [InlineData(-5, 2, 200, false)]
     [InlineData(30, -1, 200, false)]
     [InlineData(30, 2, 9, false)]
+    [InlineData(1440, 1440, 200, true)]
+    [InlineData(1441, 2, 200, false)]
+    [InlineData(30, 1441, 200, false)]
     public void Should_ValidateListSyncSettings_When_Checked(int interval, int firstDelay, int history, bool valid)
     {
         var settings = new AppSettings

@@ -48,8 +48,8 @@ public sealed class ScheduledListSyncTests : IDisposable
     private QbListSync Sync(IQbGateway? gateway = null, IQbListsStore? lists = null) =>
         Workers.Sync(_dir.Path, gateway ?? _gateway, _clock, lists ?? _lists);
 
-    private ListSyncSchedule Schedule(int intervalMinutes = 30, IQbListsSource? source = null) =>
-        new(new ListSyncSettings { IntervalMinutes = intervalMinutes, FirstDelayMinutes = 2 }, source ?? _lists, _clock);
+    private ListSyncSchedule Schedule(int intervalMinutes = 30, IQbListsSource? source = null, int firstDelayMinutes = 2) =>
+        new(new ListSyncSettings { IntervalMinutes = intervalMinutes, FirstDelayMinutes = firstDelayMinutes }, source ?? _lists, _clock);
 
     private JobWorker Worker(ListSyncSchedule schedule, QbListSync? sync = null, Func<TimeSpan, CancellationToken, Task>? delay = null) =>
         new(_queue, _processor, _store, _log, schedule, sync ?? Sync(), _presence, delay ?? _delay.Delay);
@@ -179,6 +179,117 @@ public sealed class ScheduledListSyncTests : IDisposable
         Assert.Equal(0, _processor.QueriesSeen); // the job ran before the sync
         Assert.Single(_gateway.Queries); // and the sync followed once the queue was empty
         Assert.Equal(0, _queue.Outstanding);
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Should_RunAJobQueuedDuringAnotherJobFirst_When_TheSyncBecameDueMeanwhile()
+    {
+        var releaseA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var aStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var queriesAtB = -1;
+        _processor.Hold = item =>
+        {
+            if (item.JobId == "a")
+            {
+                aStarted.TrySetResult();
+                return releaseA.Task;
+            }
+
+            queriesAtB = _gateway.Queries.Count;
+            return Task.CompletedTask;
+        };
+        using var worker = Worker(Schedule());
+        await worker.StartAsync(CancellationToken.None);
+        await _delay.NextAsync();
+
+        _queue.Enqueue(new JobWorkItem("a", JobAction.Analyse));
+        await aStarted.Task.WaitAsync(Patience); // A holds the worker
+        _clock.UtcNow += TimeSpan.FromMinutes(3); // the sync is now due
+        _queue.Enqueue(new JobWorkItem("b", JobAction.Analyse));
+        releaseA.TrySetResult();
+        await _delay.NextAsync(); // the sync has run and the worker waits again
+
+        Assert.Equal(["a:Analyse", "b:Analyse"], _processor.Seen);
+        Assert.Equal(0, queriesAtB); // B ran before any gateway query
+        Assert.Single(_gateway.Queries);
+    }
+
+    [Fact]
+    public async Task Should_RunTheWaitingItemBeforeTheSync_When_TheSyncIsDueAtOnce()
+    {
+        // FirstDelay 0: due the moment the worker starts, and an item is already waiting — no race, no wait at all.
+        _processor.OnProcess = () => _processor.QueriesSeen = _gateway.Queries.Count;
+        _queue.Enqueue(new JobWorkItem("a", JobAction.Analyse));
+        using var worker = Worker(Schedule(firstDelayMinutes: 0));
+        await worker.StartAsync(CancellationToken.None);
+
+        var next = await _delay.NextAsync();
+
+        Assert.Equal(["a:Analyse"], _processor.Seen);
+        Assert.Equal(0, _processor.QueriesSeen);
+        Assert.Single(_gateway.Queries);
+        Assert.Equal(Interval, next.Wait);
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Should_WaitAtMostOneHourAtATime_When_TheDueTimeIsFarAway()
+    {
+        await RecordAsync(_lists, Start.AddDays(100)); // a clock skewed far into the future
+        using var worker = Worker(Schedule(intervalMinutes: 60 * 24 * 100));
+        await worker.StartAsync(CancellationToken.None);
+
+        var first = await _delay.NextAsync();
+        var second = await ElapseAsync(first); // an early wake: re-checks and waits again
+
+        Assert.Equal(JobWorker.MaxWait, first.Wait);
+        Assert.Equal(JobWorker.MaxWait, second.Wait);
+        Assert.Empty(_gateway.Requests);
+        Assert.False(worker.ExecuteTask!.IsCompleted);
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Should_NotThrow_When_TheRealDelayIsGivenAHugeInterval()
+    {
+        await RecordAsync(_lists, Start.AddYears(5));
+        using var worker = Worker(Schedule(intervalMinutes: int.MaxValue / 2), delay: Task.Delay);
+        await worker.StartAsync(CancellationToken.None);
+        _queue.Enqueue(new JobWorkItem("a", JobAction.Analyse));
+
+        await UntilAsync(() => _processor.Seen.Count == 1);
+
+        Assert.False(worker.ExecuteTask!.IsCompleted); // Task.Delay above ~24.8 days would have thrown
+        await worker.StopAsync(CancellationToken.None).WaitAsync(Patience);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Should_KeepRunning_When_TheDelayFaultsOrIsCancelledByItself(bool cancelled)
+    {
+        var calls = 0;
+        using var worker = Worker(Schedule(), delay: (wait, ct) =>
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+            {
+                return cancelled ? Task.FromCanceled(new CancellationToken(true)) : Task.FromException(new InvalidOperationException("broken delay"));
+            }
+
+            return _delay.Delay(wait, ct);
+        });
+        await worker.StartAsync(CancellationToken.None);
+        await UntilAsync(() => _log.Entries.Any(e => e.Level == LogLevel.Warning && e.Message.Contains("wait failed", StringComparison.Ordinal)));
+
+        // The worker now waits on its fallback (the real delay); a job still wakes it, then it waits on the delay again.
+        _queue.Enqueue(new JobWorkItem("a", JobAction.Analyse));
+        var next = await _delay.NextAsync();
+
+        Assert.Equal(["a:Analyse"], _processor.Seen);
+        Assert.False(worker.ExecuteTask!.IsCompleted);
+        Assert.Empty(_gateway.Requests); // a broken wait is not "due"
+        Assert.Equal(FirstDelay, next.Wait);
         await worker.StopAsync(CancellationToken.None);
     }
 
@@ -357,9 +468,14 @@ public sealed class ScheduledListSyncTests : IDisposable
     [Fact]
     public async Task Should_StopPromptly_When_TheHostStopsDuringTheWait()
     {
-        using var worker = Worker(Schedule(), delay: Task.Delay); // the real delay: two minutes away
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var worker = Worker(Schedule(), delay: (wait, ct) =>
+        {
+            waiting.TrySetResult();
+            return Task.Delay(wait, ct); // the real delay: two minutes away
+        });
         await worker.StartAsync(CancellationToken.None);
-        await Task.Delay(50);
+        await waiting.Task.WaitAsync(Patience);
 
         await worker.StopAsync(CancellationToken.None).WaitAsync(Patience);
 
@@ -500,15 +616,21 @@ public sealed class ScheduledListSyncTests : IDisposable
             }
         }
 
-        public Task ProcessAsync(JobWorkItem item, CancellationToken ct)
+        /// <summary>Awaited before the item is recorded: a test can hold one job on the worker.</summary>
+        public Func<JobWorkItem, Task>? Hold { get; set; }
+
+        public async Task ProcessAsync(JobWorkItem item, CancellationToken ct)
         {
+            if (Hold is { } hold)
+            {
+                await hold(item);
+            }
+
             OnProcess?.Invoke();
             lock (_gate)
             {
                 _seen.Add($"{item.JobId}:{item.Action}");
             }
-
-            return Task.CompletedTask;
         }
     }
 }

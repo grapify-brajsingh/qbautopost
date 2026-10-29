@@ -317,13 +317,16 @@ public sealed class ListSyncSettings
     /// <summary>Minimum for a non-zero <see cref="IntervalMinutes"/>.</summary>
     public const int MinIntervalMinutes = 5;
 
+    /// <summary>Maximum for <see cref="IntervalMinutes"/> and <see cref="FirstDelayMinutes"/>: one day.</summary>
+    public const int MaxMinutes = 1440;
+
     /// <summary>Minimum for <see cref="HistoryRows"/>.</summary>
     public const int MinHistoryRows = 10;
 
-    /// <summary>Minutes between scheduled syncs; 0 turns the schedule off, otherwise at least 5.</summary>
+    /// <summary>Minutes between scheduled syncs; 0 turns the schedule off, otherwise 5 to 1440.</summary>
     public int IntervalMinutes { get; set; } = 30;
 
-    /// <summary>Minutes after startup of the first scheduled attempt when none is recorded; 0 or more.</summary>
+    /// <summary>Minutes after startup of the first scheduled attempt when none is recorded; 0 to 1440.</summary>
     public int FirstDelayMinutes { get; set; } = 2;
 
     /// <summary>Rows kept in <c>qb_list_syncs</c>; at least 10.</summary>
