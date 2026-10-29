@@ -18,6 +18,8 @@ public sealed class QbAutopostDbContext(DbContextOptions<QbAutopostDbContext> op
 
     public DbSet<StatementExtractionEntity> StatementExtractions => Set<StatementExtractionEntity>();
 
+    public DbSet<QbListSyncEntity> QbListSyncs => Set<QbListSyncEntity>();
+
     /// <summary>The read-only view <c>audit_events</c> (T-1106).</summary>
     public DbSet<AuditEventRow> AuditEvents => Set<AuditEventRow>();
 
