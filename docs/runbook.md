@@ -170,7 +170,7 @@ of the key — never the key itself. Issue one with:
 ```
 
 It prints the key **once** and stores only the hash; it cannot be recovered, only replaced. The caller sends it as
-`X-Api-Key: <key>` on every request. (`Authorization: Bearer` is *not* accepted by this build — tracker Q-67.)
+`X-Api-Key: <key>` on every request. API keys are sent only in `X-Api-Key`; an API key in `Authorization: Bearer` is *not* accepted by this build (tracker Q-67). `Authorization: Bearer` carries only a dashboard user's access token (§11).
 
 | Scope | Lets the caller |
 |---|---|
@@ -354,6 +354,8 @@ they were, and the next attempt is a full interval later.
 ```powershell
 $token = "<access token from a dashboard sign-in>"
 Invoke-RestMethod http://127.0.0.1:5080/api/v2/quickbooks/lists -Headers @{ Authorization = "Bearer $token" }
+# or, with an API key ($key holds lists:read or qb:read):
+Invoke-RestMethod http://127.0.0.1:5080/api/v2/quickbooks/lists -Headers @{ 'X-Api-Key' = $key }
 ```
 
 Besides the names it returns:
@@ -382,6 +384,8 @@ restores the schedule.
 
 ```powershell
 Invoke-RestMethod -Method Post http://127.0.0.1:5080/api/v2/quickbooks/lists/sync -Headers @{ Authorization = "Bearer $token" }
+# or, with an API key that holds qb:read:
+Invoke-RestMethod -Method Post http://127.0.0.1:5080/api/v2/quickbooks/lists/sync -Headers @{ 'X-Api-Key' = $key }
 ```
 
 Who may call it: a dashboard user with `requests:edit` (editors and admins; viewers do not see the button), or an API
