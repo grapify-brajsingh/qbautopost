@@ -107,6 +107,28 @@ public sealed class ReadinessChecksTests : IDisposable
         Assert.Contains("unreadable", lists.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Should_WarnWithoutThrowing_When_QbListsAccessIsDenied()
+    {
+        var settings = Ready();
+
+        var view = Readiness.Evaluate(settings, workerStarted: true, new DeniedLists());
+
+        Assert.True(view.Ok);
+        var lists = Check(view, "qb-lists");
+        Assert.False(lists.Ok);
+        Assert.Equal(Readiness.Warning, lists.Severity);
+        Assert.Contains("unreadable", lists.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>A lists file the API's account may not read (an ACL, or a file locked by another account).</summary>
+    private sealed class DeniedLists : QbAutopost.Core.Abstractions.IQbListsSource
+    {
+        public QbAutopost.Core.Models.QbLists Current => throw new UnauthorizedAccessException("Access to the path is denied.");
+
+        public QbAutopost.Core.Pipeline.ListSyncRun? LastAttempt => null;
+    }
+
     private sealed class StubLists(QbAutopost.Core.Models.QbLists current, QbAutopost.Core.Pipeline.ListSyncRun? last) : QbAutopost.Core.Abstractions.IQbListsSource
     {
         public QbAutopost.Core.Models.QbLists Current => current;

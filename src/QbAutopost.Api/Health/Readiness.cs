@@ -74,9 +74,9 @@ public static class Readiness
                 : $"{(s.Database.Configured ? "database" : s.Paths.QbLists)}; lists from {Hm(synced)}";
             return new ReadinessCheck("qb-lists", true, Warning, message);
         }
-        catch (Exception ex) when (ex is System.Text.Json.JsonException or IOException or InvalidDataException)
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or IOException or InvalidDataException or UnauthorizedAccessException)
         {
-            // A corrupt or truncated file must not turn a health poll into a 500.
+            // A corrupt, truncated or access-denied file must not turn a health poll into a 500.
             return new ReadinessCheck("qb-lists", false, Warning, $"{s.Paths.QbLists} is unreadable; run POST /api/v1/quickbooks/lists/sync");
         }
     }
