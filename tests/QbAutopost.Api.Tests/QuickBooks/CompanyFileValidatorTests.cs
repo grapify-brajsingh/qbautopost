@@ -34,7 +34,8 @@ public sealed class CompanyFileValidatorTests : IDisposable
                 BackupFolder = backupFolder ?? string.Empty,
                 BackupMaxAgeHours = backupMaxAgeHours,
             },
-            gateway);
+            gateway,
+            new QbAutopost.Core.Store.FileQbLists(_dir.Combine("qb-lists.json")));
 
     private static CompanyFileCheck Check(CompanyFileValidation result, string name) =>
         Assert.Single(result.Checks, c => c.Name == name);
