@@ -195,6 +195,12 @@ builder.Services.AddSingleton<IQbSdkProbe>(sp =>
         ? new QbSdkProbe(s.QuickBooks.QbXmlVersion)
         : new UnavailableQbSdkProbe(s.QuickBooks.QbXmlVersion, $"the QuickBooks gateway is {mode.ToString().ToLowerInvariant()}, not the Desktop SDK");
 });
+// M14 §6: scheduled syncs must never start QuickBooks, so on Windows with the SDK they check the process first;
+// every other mode (simulated company, unavailable) answers open.
+builder.Services.AddSingleton<IQbPresence>(sp =>
+    sp.GetRequiredService<QbConnection>().Mode == QbConnectionMode.Sdk && OperatingSystem.IsWindows()
+        ? new QbPresence()
+        : new AlwaysOpenQbPresence());
 // One instance, registered twice: the interface for everything that posts, the concrete type for the connection test
 // (FR-A-4 needs its own timeout and the lock-wait event). Two instances would mean two locks and two sessions.
 builder.Services.AddSingleton(sp =>
