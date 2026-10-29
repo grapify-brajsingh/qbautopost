@@ -23,7 +23,7 @@ public sealed class PocModeApiTests : IDisposable
         var host = _factory.WithWebHostBuilder(b => b.ConfigureAppConfiguration((_, config) =>
             config.AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Hermes:Enabled"] = "false",
+                ["OpenRouter:Enabled"] = "false",
                 ["Company:RulesFile"] = rulesFile,
             })));
         var client = host.CreateClient();

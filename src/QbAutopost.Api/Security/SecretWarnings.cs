@@ -8,7 +8,7 @@ namespace QbAutopost.Api.Security;
 public static class SecretWarnings
 {
     /// <summary>Settings that are secrets whatever they contain.</summary>
-    private static readonly string[] AlwaysSecret = ["Auth:Jwt:SigningKey", "Auth:BootstrapAdmin:Password"];
+    private static readonly string[] AlwaysSecret = ["Auth:Jwt:SigningKey", "Auth:BootstrapAdmin:Password", "OpenRouter:ApiKey"];
 
     private const string ConnectionStringKey = "Database:ConnectionString";
 

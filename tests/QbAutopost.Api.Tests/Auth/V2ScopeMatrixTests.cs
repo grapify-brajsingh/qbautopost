@@ -35,10 +35,27 @@ public sealed class V2ScopeMatrixTests(Host host) : IClassFixture<Host>
     public void Should_RequireSameScope_When_V2RouteCalled(string method, string relative)
     {
         // Routes that exist under /api/v2 only (the audit feed, T-1114) have no v1 twin: theirs is closed to admin.
-        if (relative.StartsWith("/audit-events", StringComparison.Ordinal))
+        if (relative.StartsWith("/audit-events", StringComparison.Ordinal)
+            || relative.StartsWith("/dashboard/summary", StringComparison.Ordinal))
         {
             Assert.Equal(ApiScopes.Admin, ApiRoutes.ScopeFor(method, V1 + relative));
             Assert.Equal(ApiScopes.RequestsRead, ApiRoutes.ScopeFor(method, V2 + relative));
+            return;
+        }
+
+        // T-1212b: the PDF upload is v2-only too, so its v1 form stays admin; the v2 form is requests:submit.
+        if (relative.StartsWith("/statement-extractions", StringComparison.Ordinal))
+        {
+            Assert.Equal(ApiScopes.Admin, ApiRoutes.ScopeFor(method, V1 + relative));
+            Assert.Equal(ApiScopes.RequestsSubmit, ApiRoutes.ScopeFor(method, V2 + relative));
+            return;
+        }
+
+        // T-1212b: v2's /health carries the upload switch for the dashboard, so it needs a user or a monitor; v1's is keyless.
+        if (relative == "/health")
+        {
+            Assert.Null(ApiRoutes.ScopeFor(method, V1 + relative));
+            Assert.Equal(ApiScopes.AnyOf(ApiScopes.RequestsRead, ApiScopes.HealthRead), ApiRoutes.ScopeFor(method, V2 + relative));
             return;
         }
 
@@ -53,7 +70,7 @@ public sealed class V2ScopeMatrixTests(Host host) : IClassFixture<Host>
     [Theory]
     [InlineData("GET", V2 + "/jobs")]
     [InlineData("POST", V2 + "/jobs")]
-    [InlineData("GET", V2 + "/health")]
+    [InlineData("POST", V2 + "/health")]
     [InlineData("GET", V2 + "/health/ready")]
     [InlineData("GET", V2 + "/reference")]
     [InlineData("POST", V2 + "/quickbooks/lists/sync")]

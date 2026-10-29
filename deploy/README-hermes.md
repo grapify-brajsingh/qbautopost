@@ -1,5 +1,10 @@
 # Hermes on the QuickBooks server
 
+> **OBSOLETE (T-1203, ADR-0011).** QbAutopost no longer uses Hermes: all model calls go to OpenRouter over HTTPS
+> and Docker is not needed on the server. Stop and disable the Hermes container (`docker compose down` in
+> `deploy/hermes`). This page and `deploy/hermes/` stay only until they are removed (tracker Q-109). Follow
+> `docs/runbook.md` for the OpenRouter setup.
+
 QbAutopost reads statements and invoices through Hermes, an OpenAI-compatible API (`/v1/chat/completions`)
 running in Docker on the same server (spec §4). This page sets it up. The operator guide is `docs/runbook.md`.
 

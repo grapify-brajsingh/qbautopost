@@ -2,6 +2,9 @@
 
   <PropertyGroup>
     <RootNamespace>QbAutopost.Api</RootNamespace>
+    <!-- T-1212a (Ruling R4, Q-112): IANA zone ids (Asia/Kolkata) resolve on Windows only through ICU; Directory.Build.props
+         turns it off. Linux reads tzdata without ICU, and forcing ICU there would abort the host when libicu is missing. -->
+    <InvariantGlobalization Condition="$([MSBuild]::IsOSPlatform('Windows'))">false</InvariantGlobalization>
   </PropertyGroup>
 
   <ItemGroup>
@@ -10,6 +13,14 @@
     <Content Update="wwwroot\openapi.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <!-- T-1109 (dashboard v2 spec 15): the v2 document, beside the v1 one. -->
     <Content Update="wwwroot\openapi-v2.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- T-1212b (dashboard-api-m12 6.3): the upload's prompt, schema and version travel inside the assembly, so the
+         text that runs is the text the hash test pinned. -->
+    <None Remove="Extraction\extraction-prompt.json" />
+    <Content Remove="Extraction\extraction-prompt.json" />
+    <EmbeddedResource Include="Extraction\extraction-prompt.json" LogicalName="QbAutopost.Api.Extraction.extraction-prompt.json" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(Configuration)' == 'Debug'">

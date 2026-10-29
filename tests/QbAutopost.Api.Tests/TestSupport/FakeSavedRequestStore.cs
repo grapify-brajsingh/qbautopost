@@ -58,39 +58,56 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestStore
 
             var id = _nextRequestId++;
             var payload = request.Payload.Clone();
-            var record = new SavedRequest(
-                id, SavedRequestStatus.Pending, request.Source,
-                request.Read.Request?.Reference, SavedRequestColumns.ControlTotalOf(request.Read), request.Read.Request?.Transactions.Count ?? 0,
-                1, request.OriginalBody, Sha256(request.OriginalBody), request.CanonicalSha256, request.IdempotencyKey,
-                NeedsAttention(request.Read, request.Snapshot),
-                request.Duplicate.Of, request.Duplicate.Reasons.ToList(), null, null,
-                request.Snapshot, request.Snapshot.ValidatedUtc, null, null,
-                request.NowUtc, request.CreatedBy, request.NowUtc, request.CreatedBy, 1, payload, null)
-            {
-                Metadata = Copy(request.Metadata),
-                SkipCount = SavedRequestColumns.SkipCountOf(payload),
-            };
-            record = WithSnapshotV2(record, request.Read.Readable, request.SnapshotV2 ?? request.Snapshot);
-            _requests[id] = record;
+            var record = Insert(id, request, 1, upload: null);
             _versions[id] =
             [
                 new SavedRequestVersion(
                     _nextVersionId++, id, 1, payload, request.Read.Readable, request.Read.Errors.ToList(), [], null,
                     request.NowUtc, request.CreatedBy),
             ];
-            _fingerprints[id] = request.RowFingerprints.ToHashSet(StringComparer.Ordinal);
-            _attempts[id] = [];
-            _events[id] = [];
-            AddEvent(id, SavedRequestEvents.Created, null, request.NowUtc, request.CreatedBy);
-            if (request.Duplicate.Flagged)
-            {
-                AddEvent(
-                    id, SavedRequestEvents.FlaggedDuplicate,
-                    new JsonObject { ["of"] = request.Duplicate.Of, ["reasons"] = ToArray(request.Duplicate.Reasons) },
-                    request.NowUtc, request.CreatedBy);
-            }
-
+            AddCreatedEvents(id, request, createdDetail: request.Metadata.ReceivedDetail());
             return Task.FromResult(new CreateResult(CreateKind.Created, View(record)));
+        }
+    }
+
+    /// <summary>
+    /// Stores a new pending request built from <paramref name="request"/> at <paramref name="currentVersion"/>, with
+    /// empty attempts and events and no versions; the caller adds those. Call only inside the lock.
+    /// </summary>
+    private SavedRequest Insert(long id, NewSavedRequest request, int currentVersion, UploadMeta? upload)
+    {
+        var payload = request.Payload.Clone();
+        var record = new SavedRequest(
+            id, SavedRequestStatus.Pending, request.Source,
+            request.Read.Request?.Reference, SavedRequestColumns.ControlTotalOf(request.Read), request.Read.Request?.Transactions.Count ?? 0,
+            currentVersion, request.OriginalBody, Sha256(request.OriginalBody), request.CanonicalSha256, request.IdempotencyKey,
+            NeedsAttention(request.Read, request.Snapshot),
+            request.Duplicate.Of, request.Duplicate.Reasons.ToList(), null, null,
+            request.Snapshot, request.Snapshot.ValidatedUtc, null, null,
+            request.NowUtc, request.CreatedBy, request.NowUtc, request.CreatedBy, 1, payload, null)
+        {
+            Metadata = Copy(request.Metadata),
+            SkipCount = SavedRequestColumns.SkipCountOf(payload),
+            Upload = upload,
+        };
+        record = WithSnapshotV2(record, request.Read.Readable, request.SnapshotV2 ?? request.Snapshot);
+        _requests[id] = record;
+        _fingerprints[id] = request.RowFingerprints.ToHashSet(StringComparer.Ordinal);
+        _attempts[id] = [];
+        _events[id] = [];
+        return record;
+    }
+
+    /// <summary>The <c>created</c> event, then the <c>flagged-duplicate</c> one when the save was flagged. Call only inside the lock.</summary>
+    private void AddCreatedEvents(long id, NewSavedRequest request, JsonNode? createdDetail)
+    {
+        AddEvent(id, SavedRequestEvents.Created, createdDetail, request.NowUtc, request.CreatedBy);
+        if (request.Duplicate.Flagged)
+        {
+            AddEvent(
+                id, SavedRequestEvents.FlaggedDuplicate,
+                new JsonObject { ["of"] = request.Duplicate.Of, ["reasons"] = ToArray(request.Duplicate.Reasons) },
+                request.NowUtc, request.CreatedBy);
         }
     }
 

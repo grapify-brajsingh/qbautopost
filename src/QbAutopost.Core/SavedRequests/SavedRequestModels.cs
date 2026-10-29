@@ -156,6 +156,8 @@ public sealed record SavedRequest(
 
     /// <summary>How many <c>audit_events</c> rows the request has (spec 8.4). Filled by <see cref="ISavedRequestV2Store.GetV2Async"/> only.</summary>
     public int HistoryCount { get; init; }
+    /// <summary>The upload columns (dashboard-api-m12 7.4), or null when the request was not saved from an upload.</summary>
+    public UploadMeta? Upload { get; init; }
 }
 
 /// <summary>What a v2 list row and detail show of the last post (spec 9.1; built by <see cref="PostSummaries.Of"/>).</summary>
@@ -208,6 +210,8 @@ public sealed record SavedRequestSummary(
 
     /// <summary>How many <c>audit_events</c> rows the request has (spec 8.4).</summary>
     public int HistoryCount { get; init; }
+    /// <summary>The upload columns (dashboard-api-m12 7.4); filled by v2 lists only.</summary>
+    public UploadMeta? Upload { get; init; }
 }
 
 public sealed record SavedRequestVersion(

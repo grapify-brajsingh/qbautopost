@@ -1,0 +1,10 @@
+{
+  "is_bank_statement": true,
+  "reference": "Statement 2026-08",
+  "transactions": [
+    { "externalId": "row-1", "kind": "Deposit", "date": "2026-08-03", "amount": 2450.00, "account": "Chase Checking - 4521", "lineAccount": "Merchant Card Deposits", "memo": "CARD SETTLEMENT 0803", "last4": null, "payee": "Bankcard Merchant Services", "checkNo": null },
+    { "externalId": "row-2", "kind": "Check", "date": "2026-08-05", "amount": 318.40, "account": "Chase Checking - 4521", "lineAccount": "Supplies & Materials", "memo": "POS PURCHASE RESTAURANT DEPOT", "last4": "7788", "payee": "Restaurant Depot", "checkNo": null },
+    { "externalId": "row-3", "kind": "Check", "date": "2026-08-12", "amount": 1200.00, "account": "Chase Checking - 4521", "lineAccount": "Rent Expense", "memo": "CHECK 1043", "last4": null, "payee": "Harbor Properties", "checkNo": "1043" },
+    { "externalId": "row-4", "kind": "Check", "date": "2026-08-31", "amount": 15.00, "account": "Chase Checking - 4521", "lineAccount": "Bank Service Charges", "memo": "MONTHLY SERVICE FEE", "last4": null, "payee": "Bank Fees", "checkNo": null }
+  ]
+}

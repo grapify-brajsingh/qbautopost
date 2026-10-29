@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
@@ -8,6 +9,7 @@ using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Database;
 using QbAutopost.Api.Endpoints;
 using QbAutopost.Api.Endpoints.V2;
+using QbAutopost.Api.Extraction;
 using QbAutopost.Api.Health;
 using QbAutopost.Api.Hosting;
 using QbAutopost.Api.Jobs;
@@ -32,6 +34,11 @@ using QbAutopost.Data;
 using QbAutopost.Data.Entities;
 using QbAutopost.QuickBooks;
 
+// T-1212a (Ruling R4, Q-112): Windows builds run with ICU so IANA zone ids (Asia/Kolkata) resolve. ICU also brings real
+// cultures, so every thread is pinned to the invariant one and formatting stays exactly what invariant mode gave.
+CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
+CultureInfo.DefaultThreadCurrentUICulture = CultureInfo.InvariantCulture;
+
 // T-901 (api-v1 §12): read appsettings.json from the exe's folder, not the working directory (server defect 1).
 // The environment is read from the variable because the host does not exist yet; the test host keeps its own root.
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
@@ -54,7 +61,11 @@ builder.WebHost.ConfigureKestrel((context, kestrel) =>
 {
     var api = context.Configuration.GetSection("Api").Get<ApiSettings>() ?? new ApiSettings();
     kestrel.AddServerHeader = false;
-    kestrel.Limits.MaxRequestBodySize = api.MaxRequestBodyBytes;
+    // T-1212b (dashboard-api-m12 6.1): with the upload on, the server limit is the larger of the two; RequestSizeMiddleware
+    // sets each request's own limit, so every route but the upload stays at Api:MaxRequestBodyBytes. With the upload off,
+    // Kestrel stays at Api:MaxRequestBodyBytes (M12 final review).
+    var extraction = context.Configuration.GetSection("Extraction").Get<ExtractionSettings>() ?? new ExtractionSettings();
+    kestrel.Limits.MaxRequestBodySize = RequestSizeMiddleware.KestrelLimit(api, extraction);
     if (api.Tls.Configured)
     {
         kestrel.ConfigureHttpsDefaults(https => https.ServerCertificate = TlsCertificate.Load(api.Tls));
@@ -64,7 +75,10 @@ builder.WebHost.ConfigureKestrel((context, kestrel) =>
 var contentRoot = builder.Environment.ContentRootPath;
 builder.Services.AddOptions<AppSettings>()
     .Bind(builder.Configuration)
-    .PostConfigure(s => s.ResolvePaths(contentRoot));
+    .PostConfigure(s => s.ResolvePaths(contentRoot))
+    .ValidateOnStart();
+// M12 §14.2: an https-only BaseUrl (loopback excepted) is checked at startup, so the key is never sent in clear text.
+builder.Services.AddSingleton<IValidateOptions<AppSettings>, OpenRouterOptionsValidator>();
 
 const string CorsPolicyName = "QbAutopostCallers";
 
@@ -114,21 +128,25 @@ builder.Services.AddSingleton<IJobStore, JobStore>();
 builder.Services.AddSingleton<JobQueue>();
 builder.Services.AddSingleton(sp =>
 {
-    var h = sp.GetRequiredService<IOptions<AppSettings>>().Value.Hermes;
+    var h = sp.GetRequiredService<IOptions<AppSettings>>().Value.OpenRouter;
     return new HermesOptions
     {
         BaseUrl = h.BaseUrl,
         ApiKey = h.ApiKey,
         Model = h.Model,
         Timeout = TimeSpan.FromSeconds(h.TimeoutSeconds),
+        Referer = h.Referer,
+        Title = h.Title,
     };
 });
 // HermesOptions.Timeout bounds each call; the HttpClient's own 100 s default would cut the 120 s budget short.
-// A singleton reader holds its HermesClient, so the handler is never rotated (Hermes is a fixed loopback address).
+// A singleton reader holds its HermesClient, so the factory never rotates its handler; OpenRouter is a remote host
+// whose DNS can change, so the primary handler recycles its pooled connections every 10 minutes instead.
 builder.Services.AddHttpClient<HermesClient>(http => http.Timeout = Timeout.InfiniteTimeSpan)
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(10) })
     .SetHandlerLifetime(Timeout.InfiniteTimeSpan);
-// T-806: Hermes:Enabled=false runs without any AI (POC): nothing is sent to a model, the requirement is read by regex.
-static bool HermesEnabled(IServiceProvider sp) => sp.GetRequiredService<IOptions<AppSettings>>().Value.Hermes.Enabled;
+// T-806 / M12: OpenRouter:Enabled=false runs without any AI (POC): nothing is sent to a model, the requirement is read by regex.
+static bool HermesEnabled(IServiceProvider sp) => sp.GetRequiredService<IOptions<AppSettings>>().Value.OpenRouter.Enabled;
 builder.Services.AddSingleton<IHermesClient>(sp => new LoggingHermesClient(
     HermesEnabled(sp) ? sp.GetRequiredService<HermesClient>() : new DisabledHermesClient(),
     sp.GetRequiredService<ILogger<LoggingHermesClient>>()));
@@ -144,6 +162,15 @@ builder.Services.AddSingleton<IOcr>(sp =>
     return ocr.Enabled ? new TesseractOcr(ocr.TessDataPath) : new DisabledOcr();
 });
 builder.Services.AddSingleton<StatementLlmExtractor>();
+// T-1212b (dashboard-api-m12 6): the PDF upload. The prompt file is embedded and loaded once (a broken one stops
+// startup, below); the limiter is in memory and per user; the model call goes through the same IHermesClient as jobs.
+builder.Services.AddSingleton(_ => ExtractionPrompt.Load());
+builder.Services.AddSingleton(sp =>
+{
+    var options = sp.GetRequiredService<IOptions<AppSettings>>();
+    return new ExtractionLimiter(() => options.Value.Extraction.MaxPerUserPerHour);
+});
+builder.Services.AddSingleton<StatementExtractionService>();
 builder.Services.AddSingleton<StatementReader>();
 builder.Services.AddSingleton<InvoiceExtractor>();
 builder.Services.AddSingleton<AccountChooser>();
@@ -302,6 +329,9 @@ else
 // registered as ISavedRequestStore (EF Core, disabled, or a test's fake), so a swap of that one swaps these too.
 builder.Services.AddSingleton<ISavedRequestV2Store>(sp => Program.StoreAs<ISavedRequestV2Store>(sp));
 builder.Services.AddSingleton<ISavedRequestAuditStore>(sp => Program.StoreAs<ISavedRequestAuditStore>(sp));
+// T-1209: the extraction records (dashboard-api-m12 6.6), the same store instance again.
+builder.Services.AddSingleton<QbAutopost.Core.Extraction.IUploadStore>(sp => Program.StoreAs<QbAutopost.Core.Extraction.IUploadStore>(sp));
+builder.Services.AddSingleton<QbAutopost.Core.Dashboard.IDashboardSummaryStore>(sp => Program.StoreAs<QbAutopost.Core.Dashboard.IDashboardSummaryStore>(sp));
 
 // T-1009 (spec 10.11): CallerMiddleware resolves this only once the database gate is Ready, so without a database
 // (no Identity registered) a Bearer request answers 503 before anything asks for UserManager.
@@ -378,8 +408,23 @@ try
 
     // Saved-requests spec 4.2: names the key, never the value, of a secret read from a settings file.
     SecretWarnings.Warn(app.Configuration, app.Logger);
+    LegacyHermesSection.Warn(app.Configuration, app.Logger);
+
+    // T-1212a (Ruling R4, Q-112): the dashboard's tz parameters need IANA ids. Windows needs ICU (1903+ / Server 2019+);
+    // Linux reads tzdata. Said once at startup rather than discovered as a 400 on the Home page.
+    if (!QbAutopost.Core.Dashboard.DateBounds.TryZone("Asia/Kolkata", out _))
+    {
+        app.Logger.LogWarning(
+            "IANA time zone ids do not resolve on this machine (Asia/Kolkata not found): the dashboard's tz parameters "
+            + "will answer 400 for every zone but UTC. On Windows this needs ICU (Windows 10 1903+ / Server 2019+); on "
+            + "Linux, the tzdata package.");
+    }
 
     app.Services.GetRequiredService<PromptLibrary>();
+    var extractionPrompt = app.Services.GetRequiredService<ExtractionPrompt>();
+    app.Logger.LogInformation(
+        "Statement extraction: {State}, prompt {PromptVersion}",
+        ExtractionState.Of(settings), extractionPrompt.PromptVersion);
     app.Logger.LogInformation("Hermes prompts loaded from {PromptFolder}", Path.Combine(AppContext.BaseDirectory, PromptLibrary.DefaultFolder));
 
     // With Ocr:Enabled the engine loads now, so missing language data stops startup rather than failing a job.
@@ -456,6 +501,8 @@ try
     v2.MapUserEndpoints(ApiFlavor.V2);
     v2.MapSavedRequestEndpoints(ApiFlavor.V2);
     v2.MapAuditEventEndpoints();
+    v2.MapDashboardSummaryEndpoints();
+    v2.MapStatementExtractionEndpoints();
     v2.MapQuickBooksEndpoints(ApiFlavor.V2);
     v2.MapHealthEndpoints(ApiFlavor.V2);
     if (settings.Api.Reference.Enabled)

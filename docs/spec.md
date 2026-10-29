@@ -9,7 +9,7 @@ This document is the contract. If code and this document disagree, the document 
 
 ## 1. Purpose
 
-A single .NET 8 application that runs on the QuickBooks Desktop server and turns a **job folder** — a requirement text plus bank/credit-card statements and optional invoices — into posted QuickBooks transactions (Checks, Credit Card Charges/Credits, Deposits), using Hermes AI for the parts that need reading and judgment, and deterministic code for everything that involves money.
+A single .NET 8 application that runs on the QuickBooks Desktop server and turns a **job folder** — a requirement text plus bank/credit-card statements and optional invoices — into posted QuickBooks transactions (Checks, Credit Card Charges/Credits, Deposits), using a model (OpenRouter) for the parts that need reading and judgment, and deterministic code for everything that involves money.
 
 It replaces this manual procedure, which today arrives as an email:
 
@@ -62,14 +62,14 @@ Transactions Type > Deposit
 | Gate | A hard validation that holds only what failed (G1–G5). |
 | Held | A line/statement that will not be posted until a person acts. |
 | Ledger | `ledger.json`: every posted line with its `TxnID` and fingerprint. |
-| Hermes | The Hermes Agent container's OpenAI-compatible API on `127.0.0.1:8642`. |
+| Model | The OpenAI-compatible chat API at OpenRouter (`https://openrouter.ai/api/v1`), reached through `IHermesClient` (type names keep the old name, tracker Q-109). Hermes, the former local container on `127.0.0.1:8642`, is superseded by ADR-0011. |
 | SDK | QuickBooks Desktop SDK, `QBXMLRP2.RequestProcessor` COM object, qbXML payloads. |
 
 ## 4. Deployment context
 
 - Windows server hosting QuickBooks Desktop Pro/Premier/Accountant (qbXML 13.0 assumed; 16.0 on 2023+).
 - The app runs in an **interactive session** (Task Scheduler at logon of an auto-logon account), never as a Windows Service. Process bitness matches QuickBooks (x64 for 2022+, x86 older).
-- Hermes runs in Docker on the same server (WSL 2 + Docker Engine on Windows Server; Docker Desktop on Windows 10/11). Port 8642 published on `127.0.0.1` only; `API_SERVER_KEY` required.
+- The model is OpenRouter, reached over outbound HTTPS from the server (ADR-0011, owner decision M-5). Nothing model-related runs locally and Docker is not needed. The key is the environment variable `OpenRouter__ApiKey` of the service account. Statement and invoice text leaves the server for OpenRouter.
 - The app **MUST** build and its Core tests **MUST** run on any OS (Linux/macOS dev box, CI). Only the `QbAutopost.QuickBooks` project touches COM and is Windows-only at runtime.
 
 ## 5. Folder contract
@@ -175,8 +175,8 @@ Each FR lists behaviour, then acceptance criteria. "Held" always means: removed 
 ### FR-1 Folder validation
 See §5 F1–F5. Runs synchronously inside `POST /api/v1/jobs`, and on its own in `POST /api/v1/jobs/validate` (FR-A-7).
 
-### FR-2 Requirement → job spec (Hermes T1) + gate G2
-- Send `requirement.txt` to Hermes with prompt `spec`. Parse into `JobSpec` (schema §9.1).
+### FR-2 Requirement → job spec (model T1) + gate G2
+- Send `requirement.txt` to the model (OpenRouter) with prompt `spec`. Parse into `JobSpec` (schema §9.1).
 - Placeholder handling: a company value of `Company` (the template's placeholder) is ignored and `Settings.Company.Name` is used.
 - If T1 fails validation twice, fall back to the deterministic `RegexSpecParser` from the POC (types + last-four by regex) and record `spec.json.source = "regex-fallback"`.
 - **G2 MUST hold the job (`failed`) when:** no kinds resolved; a stated last-four has no statement file; a statement file's last-four is not stated in the requirement *and* not registered in `rules.json` accounts.
@@ -185,7 +185,7 @@ See §5 F1–F5. Runs synchronously inside `POST /api/v1/jobs`, and on its own i
 ### FR-3 Statement extraction
 - `.csv` → `CsvStatementParser` (POC logic, layouts from `rules.json.CsvLayouts`; unknown layout → statement held, reason `unknown-csv-layout`).
 - `.xlsx` → `XlsxStatementParser`: first worksheet → rows of strings → same layout logic as CSV.
-- `.pdf` → `PdfText` (PdfPig). If extracted text per page < 40 characters → page is scanned → `Ocr` (Tesseract, `Settings.Ocr.Enabled`; if disabled → statement held, reason `scanned-pdf-ocr-disabled`). Text → Hermes T2 (schema §9.2) → rows.
+- `.pdf` → `PdfText` (PdfPig). If extracted text per page < 40 characters → page is scanned → `Ocr` (Tesseract, `Settings.Ocr.Enabled`; if disabled → statement held, reason `scanned-pdf-ocr-disabled`). Text → model T2 (schema §9.2) → rows.
 - Every row becomes a `StatementLine`; `Amount` positive; `Direction` from sign/columns; `Date` parsed with the layout's format, else invariant `DateOnly.TryParse`.
 - Writes `output/statements/<file>.rows.json` `{ file, last4, kind, layout|"hermes-t2", rows[], reconcile }`.
 - AC: the POC sample CSVs produce 7 and 4 rows respectively; a fixture PDF text file produces the same rows as its expected JSON.
@@ -196,8 +196,8 @@ See §5 F1–F5. Runs synchronously inside `POST /api/v1/jobs`, and on its own i
 - CSV/XLSX without balance and without totals: gate passes with message `not-verifiable` and the statement is flagged `reconcile.verified = false` (posting still allowed — *assumed*).
 - **MUST:** a statement that fails G1 is held whole; other statements continue.
 
-### FR-5 Invoices (Hermes T3) + matching
-- Each file in `invoices\` → text (PdfText/Ocr; images → Ocr) → Hermes T3 → `InvoiceFacts` (schema §9.3).
+### FR-5 Invoices (model T3) + matching
+- Each file in `invoices\` → text (PdfText/Ocr; images → Ocr) → model T3 → `InvoiceFacts` (schema §9.3).
 - Matching: candidate lines with `|line.Amount − invoice.Total| ≤ 0.005` and `|days| ≤ Rules.InvoiceMatchDays` (default 5). One candidate → match. Several → prefer same-direction (vendor↔debit, customer↔credit), then highest payee similarity ≥ `Rules.FuzzyThreshold`; ties → no match, reason `ambiguous`.
 - A matched invoice sets `MappedTxn.InvoiceRef` and supplies `Payee` (if the line has none) and Tier 3 account evidence.
 - Unmatched invoices → `result.json.unmatchedInvoices[]`.

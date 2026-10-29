@@ -1,4 +1,6 @@
 using System.Text.Json.Nodes;
+using QbAutopost.Core.Dashboard;
+using QbAutopost.Core.Extraction;
 using QbAutopost.Core.SavedRequests;
 using QbAutopost.Core.SavedRequests.Audit;
 
@@ -9,7 +11,8 @@ namespace QbAutopost.Api.Database;
 /// <c>RequireDatabase</c> filter answers 503 before any store call, so nothing reaches this; a route that forgot the
 /// filter fails loudly rather than pretending to save.
 /// </summary>
-public sealed class DisabledSavedRequestStore : ISavedRequestStore, ISavedRequestAuditStore, ISavedRequestV2Store
+public sealed class DisabledSavedRequestStore : ISavedRequestStore, ISavedRequestAuditStore, ISavedRequestV2Store, IUploadStore,
+    IDashboardSummaryStore
 {
     private static InvalidOperationException Off() =>
         new("The saved-requests database is not configured (Database:ConnectionString is empty).");
@@ -65,4 +68,21 @@ public sealed class DisabledSavedRequestStore : ISavedRequestStore, ISavedReques
     public Task<SavedRequestStatsV2> StatsV2Async(CancellationToken ct) => throw Off();
 
     public Task<IReadOnlyList<OtherPush>> OtherUnpostedPushesAsync(long id, CancellationToken ct) => throw Off();
+
+    public Task CreateExtractionAsync(StatementExtraction extraction, CancellationToken ct) => throw Off();
+
+    public Task<int> DeleteExpiredExtractionsAsync(DateTime nowUtc, CancellationToken ct) => throw Off();
+
+    public Task<StatementExtraction?> GetExtractionAsync(Guid id, CancellationToken ct) => throw Off();
+
+    public Task<UploadSaveResult> SaveUploadAsync(NewUploadSave save, CancellationToken ct) => throw Off();
+
+    public Task<IReadOnlyList<UploadDuplicateCandidate>> UploadDuplicateCandidatesAsync(
+        string sha256, DateTime sinceUtc, CancellationToken ct) => throw Off();
+
+    public Task<IReadOnlyList<EventFact>> EventFactsAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct) => throw Off();
+
+    public Task<IReadOnlyList<PostedFact>> PostedFactsAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct) => throw Off();
+
+    public Task<IReadOnlyList<PostTimeFact>> PostTimeFactsAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct) => throw Off();
 }

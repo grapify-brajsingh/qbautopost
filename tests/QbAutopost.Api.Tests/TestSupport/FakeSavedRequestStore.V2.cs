@@ -33,6 +33,12 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestV2Store
             if (query.MinTotal is { } min) rows = rows.Where(r => r.ControlTotal is { } t && t >= min);
             if (query.MaxTotal is { } max) rows = rows.Where(r => r.ControlTotal is { } t && t <= max);
             if (query.HasErrors is { } hasErrors) rows = rows.Where(r => HasErrors(r) == hasErrors);
+            if (query.ReceivedFromUtc is { } receivedFromUtc) rows = rows.Where(r => ReceivedUtc(r) >= receivedFromUtc);
+            if (query.ReceivedToUtc is { } receivedToUtc) rows = rows.Where(r => ReceivedUtc(r) < receivedToUtc);
+            if (query.CreatedFromUtc is { } createdFromUtc) rows = rows.Where(r => r.CreatedUtc >= createdFromUtc);
+            if (query.CreatedToUtc is { } createdToUtc) rows = rows.Where(r => r.CreatedUtc < createdToUtc);
+            if (query.PostedFromUtc is { } postedFromUtc) rows = rows.Where(r => PostedUtcOf(r) is { } at && at >= postedFromUtc);
+            if (query.PostedToUtc is { } postedToUtc) rows = rows.Where(r => PostedUtcOf(r) is { } at && at < postedToUtc);
 
             var ordered = OrderV2(rows, query.Base.Sort).ToList();
             var size = Math.Max(1, query.Base.PageSize);
@@ -97,23 +103,30 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestV2Store
         ProblemCount = r.ProblemCount,
         PostSummary = PostSummaries.Of(r.Status, r.PostId, _attempts[r.Id]),
         HistoryCount = HistoryCount(r.Id),
+
+        Upload = r.Upload,
     };
 
     private static DateTime ReceivedUtc(SavedRequest r) => r.Metadata.EmailReceivedUtc ?? r.CreatedUtc;
 
     private static bool HasErrors(SavedRequest r) => r.ProblemCount > 0 || r.NeedsAttentionV2;
 
-    /// <summary>The v2 additions to <c>q</c>: the email subject (contains) and, when <paramref name="q"/> without dashes is 1-32 hex digits, the push id prefix.</summary>
+    /// <summary>The v2 additions to <c>q</c>: the email subject and the upload file name (contains) and, when <paramref name="q"/> without dashes is 1-32 hex digits, the push id prefix.</summary>
     private static bool MatchesV2(SavedRequest r, string q) =>
         (r.Metadata.EmailSubject?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+        || (r.Upload?.FileName.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
         || (SavedRequestSearch.PushIdHexPrefix(q) is { } prefix
             && (r.Metadata.PushId?.ToString("N").StartsWith(prefix, StringComparison.Ordinal) ?? false));
 
-    private static IEnumerable<SavedRequest> OrderV2(IEnumerable<SavedRequest> rows, string sort)
+    private IEnumerable<SavedRequest> OrderV2(IEnumerable<SavedRequest> rows, string sort)
     {
         var descending = sort.StartsWith('-');
         return sort.TrimStart('-') switch
         {
+            // T-1211: no post time last in both directions, then id desc.
+            "posted" => descending
+                ? rows.OrderBy(r => PostedUtcOf(r) is null).ThenByDescending(PostedUtcOf).ThenByDescending(r => r.Id)
+                : rows.OrderBy(r => PostedUtcOf(r) is null).ThenBy(PostedUtcOf).ThenByDescending(r => r.Id),
             "received" => descending
                 ? rows.OrderByDescending(ReceivedUtc).ThenByDescending(r => r.Id)
                 : rows.OrderBy(ReceivedUtc).ThenBy(r => r.Id),

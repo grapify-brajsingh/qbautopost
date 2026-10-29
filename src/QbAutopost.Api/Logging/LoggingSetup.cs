@@ -80,7 +80,7 @@ public static class LoggingSetup
 
     /// <summary>Configured keys, plus every configuration value whose key looks like a secret (e.g. a provider key from the environment).</summary>
     public static IEnumerable<string?> SecretValues(IConfiguration configuration, AppSettings settings) =>
-        new[] { settings.Api.ApiKey, settings.Hermes.ApiKey }
+        new[] { settings.Api.ApiKey, settings.OpenRouter.ApiKey }
             .Concat(configuration.AsEnumerable()
                 .Where(kv => SecretScrubber.IsSecretName(kv.Key.Split(':')[^1]))
                 .Select(kv => kv.Value));

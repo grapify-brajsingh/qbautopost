@@ -103,7 +103,7 @@ public sealed class QuickBooksFlowApiTests : IDisposable
                 ["Paths:QbLists"] = Dir.Combine("data", "qb-lists.json"),
                 ["Paths:Logs"] = Dir.Combine("data", "logs"),
                 ["Paths:JobIndex"] = Dir.Combine("data", "jobs.json"),
-                ["Hermes:BaseUrl"] = "http://hermes.invalid:8642",
+                ["OpenRouter:BaseUrl"] = "https://hermes.invalid:8642",
                 ["QuickBooks:Fake"] = "true",
             }));
             builder.ConfigureTestServices(services =>

@@ -1,6 +1,6 @@
 # CLAUDE.md — QbAutopost.Api
 
-Single .NET 8 app that turns a job folder (requirement text + bank/card statements + invoices) into posted QuickBooks Desktop transactions, using Hermes AI (OpenAI-compatible API at `http://127.0.0.1:8642`) for reading and judgment and deterministic code for money.
+Single .NET 8 app that turns a job folder (requirement text + bank/card statements + invoices) into posted QuickBooks Desktop transactions, using a model through OpenRouter (OpenAI-compatible API at `https://openrouter.ai/api/v1`) for reading and judgment and deterministic code for money.
 
 ## Read first
 - `docs/spec.md` — the contract. FR-x sections are acceptance criteria. Spec wins over code.
@@ -16,7 +16,7 @@ dotnet run --project src/QbAutopost.Api
 Test fixtures live in `tests/fixtures/`; the sample job is `samples/jobs/2026-08-tropicana`.
 
 ## Hard rules
-1. **No test may contact a real QuickBooks or Hermes.** Use `FakeQbGateway` and `FakeHermesClient`. `dotnet test` must pass on Linux.
+1. **No test may contact a real QuickBooks or OpenRouter.** Use `FakeQbGateway` and `FakeHermesClient`. `dotnet test` must pass on Linux.
 2. **COM only in `src/QbAutopost.QuickBooks`.** Nothing in `QbAutopost.Core` may reference `System.Runtime.InteropServices` COM types or `Type.GetTypeFromProgID`. Guard Windows-only code with `[SupportedOSPlatform("windows")]` and `OperatingSystem.IsWindows()`.
 3. **The model never computes money.** Amounts come from parsed files or from T2 rows that passed the reconcile gate (G1). Never "fix" a total in code to make a gate pass.
 4. **Hold, don't guess.** If the spec is silent, choose the behaviour that posts less (hold the line, fail the job), add a row to `docs/tracker.md › Questions`, mark the code `// SPEC-GAP T-xxx`.

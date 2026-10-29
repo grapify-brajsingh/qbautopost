@@ -43,6 +43,43 @@
     }
   ],
   "paths": {
+    "/api/v2/health": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "operationId": "getAppHealthV2",
+        "summary": "Liveness from in-process state, with the model client and the PDF upload switch.",
+        "description": "The v1 `GET /api/v1/health` body plus two entries (dashboard-api-m12 §8, §14.1): `model` (`enabled` or `disabled`, and the job model `OpenRouter:Model`) and `extraction` (`disabled` while `Extraction:Enabled` is false; `misconfigured` when it is on but `OpenRouter:Enabled` is false or no key is set; otherwise `configured`). Read from settings only: it never calls OpenRouter and never shows the key. Either `requests:read` (any dashboard user, to show or hide the upload) or `health:read` satisfies it. The v1 route is unchanged.",
+        "x-required-scope": "requests:read|health:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The process is up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppHealthV2"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
     "/api/v2/health/database": {
       "get": {
         "tags": [
@@ -968,7 +1005,7 @@
         ],
         "operationId": "saveRequest",
         "summary": "Save a validate-and-post body for a person to review and post.",
-        "description": "Saved-requests §6.1. The body is exactly the validate-and-post body; nothing is posted. Over `Api:MaxRequestBodyBytes` answers `413` and anything that is not one JSON object `400 not-a-json-object`; neither is stored. Every JSON object is stored, its original body byte for byte, even when it cannot be read (`needsAttention: true`, the JSON path in `validation.errors`) or when validation refuses it (`dryRun`, `allowModelAccounts`, control-total mismatch, too many rows) or holds rows. When validation cannot run (rules file missing, lists unreadable) the snapshot is `unavailable` and the save still succeeds. A request that looks like another one is flagged (`duplicate`), never refused. `createdBy` and `updatedBy` come from the caller, never the body. Treat any `201` as success. v2 (dashboard v2 §5, §7.1): rows without an `externalId` get `row-<n>` in version 1, while `GET …/original` keeps the exact bytes; `email` and `pushId` are read from the body as received; the canonical hash ignores `email`, `pushId` and `post: true`. Repeats are checked in order: `Idempotency-Key` (its rules alone when it matches), then `pushId`.",
+        "description": "Saved-requests §6.1. The body is exactly the validate-and-post body; nothing is posted. Over `Api:MaxRequestBodyBytes` answers `413` and anything that is not one JSON object `400 not-a-json-object`; neither is stored. Every JSON object is stored, its original body byte for byte, even when it cannot be read (`needsAttention: true`, the JSON path in `validation.errors`) or when validation refuses it (`dryRun`, `allowModelAccounts`, control-total mismatch, too many rows) or holds rows. When validation cannot run (rules file missing, lists unreadable) the snapshot is `unavailable` and the save still succeeds. A request that looks like another one is flagged (`duplicate`), never refused. `createdBy` and `updatedBy` come from the caller, never the body. Treat any `201` as success. v2 (dashboard v2 §5, §7.1): rows without an `externalId` get `row-<n>` in version 1, while `GET …/original` keeps the exact bytes; `email` and `pushId` are read from the body as received; the canonical hash ignores `email`, `pushId` and `post: true`. Repeats are checked in order: `Idempotency-Key` (its rules alone when it matches), then `pushId`. Upload (dashboard-api-m12 §7.2): a body with `upload: { extractionId }` saves a reviewed PDF upload, and only a signed-in user may send one (an API key gets `403`). Version 1 is the extraction's rows with the body's `reference` and `controlTotal` (note `Read from {fileName}`); version 2 is the body, written only when its `transactions` differ from version 1's (note `Reviewed before saving`, its `changes` the ordinary change list). Read errors, validation, duplicates and the hash use the current version. The `upload` columns come from the extraction record, never from the body. A matching `Idempotency-Key` replay is answered first; any other save of an already-saved extraction is `409 extraction-already-saved`.",
         "x-required-scope": "requests:submit",
         "security": [
           {
@@ -1038,7 +1075,7 @@
             }
           },
           "400": {
-            "description": "`not-a-json-object`: the body is not one JSON object (or not UTF-8); nothing was saved. `invalid-request`: the `Idempotency-Key` is too long.",
+            "description": "`not-a-json-object`: the body is not one JSON object (or not UTF-8); nothing was saved. `invalid-request`: the `Idempotency-Key` is too long. `invalid-request`: `upload` with `email` or `pushId` (an upload has neither), or `upload.extractionId` that is not a UUID.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1048,7 +1085,7 @@
             }
           },
           "409": {
-            "description": "`idempotency-key-reused`: this source used the key for a different body. `push-id-reused`: the `pushId` is held by another request with a different body (`savedRequestId`, `publicRef` name it). Nothing was saved.",
+            "description": "`idempotency-key-reused`: this source used the key for a different body. `push-id-reused`: the `pushId` is held by another request with a different body (`savedRequestId`, `publicRef` name it). Nothing was saved. `extraction-already-saved`: the `upload.extractionId` was saved before; `savedRequestId` and `publicRef` name that request. Nothing new was saved.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1058,8 +1095,31 @@
                     },
                     {
                       "$ref": "#/components/schemas/PushIdReusedProblem"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ExtractionAlreadySavedProblem"
                     }
                   ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: the `upload.extractionId` belongs to another user (the plain v2 not-found problem, revealing nothing). Nothing was saved.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "`extraction-expired`: the `upload.extractionId` is unknown or its record expired (24 h after extraction); an expired record is deleted. Upload the PDF again. Nothing was saved.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -1098,7 +1158,7 @@
         ],
         "operationId": "listSavedRequests",
         "summary": "List saved requests, filtered and paged.",
-        "description": "Saved-requests §6.5 with dashboard v2 §9.2: v1's parameters plus `receivedFrom`, `receivedTo`, `emailFrom`, `reference`, `minTotal`, `maxTotal`, `hasErrors` and the sorts `received`, `total` and `rows`, all combined with AND. `needsAttention`, `hasErrors` and the rows' flags use the v2 judgement (§5.3). Every value is checked: an unknown `status` or `sort`, a flag that is not `true`/`false`, a date that is not `yyyy-MM-dd`, a total that is not an invariant decimal, `minTotal` above `maxTotal`, or a page outside its range answers `400 invalid-request`.",
+        "description": "Saved-requests §6.5 with dashboard v2 §9.2: v1's parameters plus `receivedFrom`, `receivedTo`, `emailFrom`, `reference`, `minTotal`, `maxTotal`, `hasErrors` the sorts `received`, `total` and `rows`, and (dashboard-api-m12 §5) `postedFrom`, `postedTo`, `tz` and the sort `posted`, all combined with AND. `needsAttention`, `hasErrors` and the rows' flags use the v2 judgement (§5.3). Every value is checked: an unknown `status` or `sort`, a flag that is not `true`/`false`, a date that is neither `yyyy-MM-dd` nor an instant with an offset, an unknown `tz`, a total that is not an invariant decimal, `minTotal` above `maxTotal`, or a page outside its range answers `400 invalid-request`.",
         "x-required-scope": "requests:read",
         "security": [
           {
@@ -1157,20 +1217,20 @@
             "name": "createdFrom",
             "in": "query",
             "required": false,
-            "description": "Created on or after this date (UTC).",
+            "description": "Created on or after this date. Inclusive: from the start of the day. A plain date is a UTC day, or with `tz` a local day in that zone; an ISO 8601 instant with an offset (`2026-10-27T00:00:00+05:30`, write `+` as `%2B`) is used as is and ignores `tz`.",
             "schema": {
               "type": "string",
-              "format": "date"
+              "description": "`yyyy-MM-dd` or an ISO 8601 instant with an offset."
             }
           },
           {
             "name": "createdTo",
             "in": "query",
             "required": false,
-            "description": "Created on or before this date (UTC).",
+            "description": "Created on or before this date. A date covers the whole day; an instant is exclusive. A plain date is a UTC day, or with `tz` a local day in that zone; an ISO 8601 instant with an offset (`2026-10-27T00:00:00+05:30`, write `+` as `%2B`) is used as is and ignores `tz`.",
             "schema": {
               "type": "string",
-              "format": "date"
+              "description": "`yyyy-MM-dd` or an ISO 8601 instant with an offset."
             }
           },
           {
@@ -1186,20 +1246,49 @@
             "name": "receivedFrom",
             "in": "query",
             "required": false,
-            "description": "Received on or after this date (UTC): the email's `receivedUtc`, else the save time.",
+            "description": "Received on or after this date: the email's `receivedUtc`, else the save time. Inclusive: from the start of the day. A plain date is a UTC day, or with `tz` a local day in that zone; an ISO 8601 instant with an offset (`2026-10-27T00:00:00+05:30`, write `+` as `%2B`) is used as is and ignores `tz`.",
             "schema": {
               "type": "string",
-              "format": "date"
+              "description": "`yyyy-MM-dd` or an ISO 8601 instant with an offset."
             }
           },
           {
             "name": "receivedTo",
             "in": "query",
             "required": false,
-            "description": "Received on or before this date (UTC), as `receivedFrom`.",
+            "description": "Received on or before this date, as `receivedFrom`. A date covers the whole day; an instant is exclusive. A plain date is a UTC day, or with `tz` a local day in that zone; an ISO 8601 instant with an offset (`2026-10-27T00:00:00+05:30`, write `+` as `%2B`) is used as is and ignores `tz`.",
             "schema": {
               "type": "string",
-              "format": "date"
+              "description": "`yyyy-MM-dd` or an ISO 8601 instant with an offset."
+            }
+          },
+          {
+            "name": "postedFrom",
+            "in": "query",
+            "required": false,
+            "description": "Posted on or after this day or instant: the list's `postSummary.postedUtc` (the latest posted or partial attempt's finish, or the resolve time of a request resolved to posted). A request with no post never matches when `postedFrom` or `postedTo` is sent. A plain date is a UTC day, or with `tz` a local day in that zone; an ISO 8601 instant with an offset (`2026-10-27T00:00:00+05:30`, write `+` as `%2B`) is used as is and ignores `tz`.",
+            "schema": {
+              "type": "string",
+              "description": "`yyyy-MM-dd` or an ISO 8601 instant with an offset."
+            }
+          },
+          {
+            "name": "postedTo",
+            "in": "query",
+            "required": false,
+            "description": "Posted on or before this day (the whole day), or before this instant (exclusive), as `postedFrom`. A plain date is a UTC day, or with `tz` a local day in that zone; an ISO 8601 instant with an offset (`2026-10-27T00:00:00+05:30`, write `+` as `%2B`) is used as is and ignores `tz`.",
+            "schema": {
+              "type": "string",
+              "description": "`yyyy-MM-dd` or an ISO 8601 instant with an offset."
+            }
+          },
+          {
+            "name": "tz",
+            "in": "query",
+            "required": false,
+            "description": "An IANA time zone id (`Asia/Kolkata`). Makes a plain date in `createdFrom`, `createdTo`, `receivedFrom`, `receivedTo`, `postedFrom` and `postedTo` a local day in this zone. Without it a plain date is a UTC day, as before. An unknown, blank or space-padded id answers `400 invalid-request`.",
+            "schema": {
+              "type": "string"
             }
           },
           {
@@ -1253,7 +1342,7 @@
             "name": "sort",
             "in": "query",
             "required": false,
-            "description": "Default `-created`; a leading `-` is descending. `received` is the email's received time, else the save time; `total` is `controlTotal` (no total last); `rows` is `transactionCount`. Ties are broken by id.",
+            "description": "Default `-created`; a leading `-` is descending. `received` is the email's received time, else the save time; `total` is `controlTotal` (no total last); `rows` is `transactionCount`. Ties are broken by id. `posted` is `postSummary.postedUtc`; requests without a post sort last in both directions, then by id descending.",
             "schema": {
               "type": "string",
               "enum": [
@@ -1268,7 +1357,9 @@
                 "total",
                 "-total",
                 "rows",
-                "-rows"
+                "-rows",
+                "posted",
+                "-posted"
               ]
             }
           },
@@ -2936,6 +3027,274 @@
           }
         }
       }
+    },
+    "/api/v2/dashboard/summary": {
+      "get": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "getDashboardSummary",
+        "summary": "The Home page figures for a time range.",
+        "description": "Dashboard-api-m12 §4. `counts` and `previous` equal the audit feed's `total` for `received`, `posted`, `post-failed` and `discarded` over the same range (`post-failed` includes `partial`). `posted` is money that reached QuickBooks: the entries and the sum of `posted[].amount` in the stored result of each attempt that finished `posted` or `partial` in the range; amounts are JSON numbers with two decimals. `timeToPost` measures minutes from received to posted for each request whose post time is in the range (nearest rank, rounded down) and is `null` when there is none. `series` has one entry per local day (or Monday-started week) in `tz` overlapping the range, empty ones included, clipped to the range, so it sums to `counts`. Nothing here names a person.",
+        "x-required-scope": "requests:read",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "description": "Inclusive. An ISO 8601 instant with an offset (`2026-10-01T00:00:00+05:30`; write `+` as `%2B` in a URL).",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "description": "Exclusive; after `from` and at most 366 days after it. Same format as `from`.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "compareFrom",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive start of the compare range for `previous`, `previousRows` and `previousAmount`. Sent with `compareTo` or not at all.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "compareTo",
+            "in": "query",
+            "required": false,
+            "description": "Exclusive end of the compare range; after `compareFrom` and at most 366 days after it.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "bucket",
+            "in": "query",
+            "required": false,
+            "description": "`day` (default) or `week` (weeks start on Monday).",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "day",
+                "week"
+              ],
+              "default": "day"
+            }
+          },
+          {
+            "name": "tz",
+            "in": "query",
+            "required": false,
+            "description": "An IANA time zone id (default `UTC` when absent). Buckets are local days in this zone, and `range` is rendered in it. An unknown, blank or space-padded id answers `400 invalid-request`.",
+            "schema": {
+              "type": "string",
+              "default": "UTC"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid-request`: `from` or `to` missing; a value that is not an instant with an offset; `to` not after `from` (or `compareTo` not after `compareFrom`); a range over 366 days; only one of `compareFrom`/`compareTo`; an unknown `bucket` or `tz`; a parameter given twice.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/statement-extractions": {
+      "post": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "createStatementExtraction",
+        "summary": "Read one uploaded statement PDF into rows for review; nothing is saved as a statement.",
+        "description": "Dashboard-api-m12 §6 (R-13). The PDF's text (PdfPig, no OCR) is sent to the model through OpenRouter with the prompt, schema and model of `extraction-prompt.json` (`promptVersion`) and `Extraction:Model`. The reply is tidied with no defaults: a field the model did not return stays absent, `kind` is `Deposit` only when the model said deposit, `amount` is made positive and omitted when not a number, `externalId` is renumbered `row-1`, `row-2`, ..., `reference` is the model's or null, and `controlTotal` is **always null** (the user types it). Possible duplicates warn and never block. The PDF and its text are discarded: only an extraction record (file name, size, SHA-256, page count, model, prompt version, tidied payload) is kept for `Extraction:RecordHours` (24) unless saved. Requires a signed-in **user** with `requests:submit` (editor or admin); an API key gets `403` whatever its scopes. Checks run in this order and none stores anything or calls the model: `503 extraction-unavailable`, `400 invalid-request`, `413 file-too-large` (bytes), `415 not-a-pdf` (no `%PDF-` prefix, or it cannot be opened), `422 pdf-protected`, `413 file-too-large` (pages), `422 no-text`, `429 too-many-extractions`.",
+        "x-required-scope": "requests:submit",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The statement PDF, at most `Extraction:MaxBytes` (10 485 760) bytes and `Extraction:MaxPages` (50) pages. Its name is stored as untrusted text (path parts, control and invisible characters removed, at most 255 characters). Any other part is ignored."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Read. `possibleDuplicates` lists at most 5 saved requests, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementExtraction"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid-request`: not `multipart/form-data`, no part named `file`, or more than one.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "413": {
+            "description": "`file-too-large`: the body or the file is over `Extraction:MaxBytes`, or the PDF has more than `Extraction:MaxPages` pages; the detail names the limit.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`not-a-pdf`: the file does not start with `%PDF-`, or it cannot be opened as a PDF.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`pdf-protected`: encrypted or password-protected. `no-text`: \"This PDF has no readable text. It may be a scan.\" `not-a-bank-statement`: \"This PDF doesn't look like a bank or card statement.\" (no record is kept).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too-many-extractions`: this user already has an extraction in flight (`Retry-After: 30`), or started `Extraction:MaxPerUserPerHour` (20) in the last hour (`Retry-After`: seconds until the oldest leaves the window).",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds to wait."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`extraction-failed`: OpenRouter answered with an error (not retried), or with JSON that does not match the schema twice. Nothing was stored; try again.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`extraction-unavailable`: `Extraction:Enabled` or `OpenRouter:Enabled` is false, or no key is set. `database-unavailable`: the database is not ready (`Retry-After: 30`).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`extraction-timeout`: no answer within `Extraction:TimeoutSeconds` (120). Nothing was stored.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3205,7 +3564,7 @@
           },
           "detail": {
             "nullable": true,
-            "description": "Action-specific, or null."
+            "description": "Action-specific, or null. For `received` (dashboard-api-m12 §7.5): `{ \"source\": \"upload\", \"fileName\": \"…\" }` for a saved upload, `{ \"source\": \"email\" }` for a v2 save that carried email metadata, `null` for every other save and for older rows."
           }
         }
       },
@@ -4512,8 +4871,51 @@
           }
         }
       },
+      "SavedRequestUploadInput": {
+        "type": "object",
+        "nullable": true,
+        "description": "Dashboard-api-m12 §7.2: the extraction this save is a reviewed upload of. Only `extractionId` is read; any other field (such as `fileName`) is ignored, since the upload columns come from the extraction record. Not allowed with `email` or `pushId`; only a signed-in user may send it.",
+        "required": [
+          "extractionId"
+        ],
+        "properties": {
+          "extractionId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "From `POST /statement-extractions`."
+          }
+        }
+      },
+      "SavedRequestUpload": {
+        "type": "object",
+        "nullable": true,
+        "description": "Dashboard-api-m12 §7.4: the PDF the request was saved from, copied from the extraction record at save and never changed; `null` for a request not saved from an upload (whose `email` is then also `null`).",
+        "properties": {
+          "fileName": {
+            "type": "string"
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Lower-case hex SHA-256 of the PDF bytes."
+          },
+          "model": {
+            "type": "string"
+          },
+          "promptVersion": {
+            "type": "string"
+          },
+          "extractedUtc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "SavedRequestSaveBody": {
-        "description": "Dashboard v2 §5: the validate-and-post body, plus the optional `email` and `pushId`. Both are read from the body as received, kept in the original body and version 1, and left out of the canonical hash and change list (§7).",
+        "description": "Dashboard v2 §5: the validate-and-post body, plus the optional `email` and `pushId`. Both are read from the body as received, kept in the original body and version 1, and left out of the canonical hash and change list (§7). Dashboard-api-m12 §7.2: also the optional `upload`, metadata in the same way (left out of binding, the canonical hash and the change list).",
         "allOf": [
           {
             "$ref": "#/components/schemas/SyncPostRequest"
@@ -4529,6 +4931,9 @@
                 "format": "uuid",
                 "nullable": true,
                 "description": "Dashboard v2 §5.2: the sender's id for this push. A UUID is stored and returned lower case with dashes. Anything else is saved, flagged (`$.pushId: not a UUID`, `needsAttention: true`, never cleared) and stays postable. The same `pushId` with the same body answers `200` with the existing record; with a different body `409 push-id-reused`."
+              },
+              "upload": {
+                "$ref": "#/components/schemas/SavedRequestUploadInput"
               }
             }
           }
@@ -4536,6 +4941,26 @@
       },
       "PushIdReusedProblem": {
         "description": "Dashboard v2 §5.2: `push-id-reused`. Names the request that holds the `pushId`.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "savedRequestId": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "publicRef": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "ExtractionAlreadySavedProblem": {
+        "description": "Dashboard-api-m12 §7.2: `extraction-already-saved`. Names the request the extraction was saved into.",
         "allOf": [
           {
             "$ref": "#/components/schemas/Problem"
@@ -5396,7 +5821,7 @@
       },
       "SavedRequestSummaryV2": {
         "type": "object",
-        "description": "Dashboard v2 §9.1: the v1 row (§6.5) with `needsAttention` and `validation` from the v2 judgement, plus `pushId`, `email`, `historyCount`, `validationSummary`, `postSummary` and `skipCount`.",
+        "description": "Dashboard v2 §9.1: the v1 row (§6.5) with `needsAttention` and `validation` from the v2 judgement, plus `pushId`, `email`, `historyCount`, `validationSummary`, `postSummary` and `skipCount`. Dashboard-api-m12 §7.4: plus `upload`.",
         "properties": {
           "id": {
             "type": "integer",
@@ -5518,6 +5943,9 @@
             "type": "integer",
             "format": "int32",
             "description": "Rows of the current version sent with `post: false`."
+          },
+          "upload": {
+            "$ref": "#/components/schemas/SavedRequestUpload"
           }
         }
       },
@@ -5546,7 +5974,7 @@
       },
       "SavedRequestDetailV2": {
         "type": "object",
-        "description": "Dashboard v2 §9.1: the v1 detail (§6.2) with `needsAttention`, `validation` (its `versionNumber` is the version judged, §10 4.3) and `readErrors` from the v2 judgement, plus the list row's additions, `otherUnpostedPushes` and `ledgerBatch`.",
+        "description": "Dashboard v2 §9.1: the v1 detail (§6.2) with `needsAttention`, `validation` (its `versionNumber` is the version judged, §10 4.3) and `readErrors` from the v2 judgement, plus the list row's additions, `otherUnpostedPushes` and `ledgerBatch`. Dashboard-api-m12 §7.4: plus `upload`.",
         "properties": {
           "id": {
             "type": "integer",
@@ -5684,6 +6112,9 @@
           },
           "ledgerBatch": {
             "$ref": "#/components/schemas/SavedRequestLedgerBatch"
+          },
+          "upload": {
+            "$ref": "#/components/schemas/SavedRequestUpload"
           }
         }
       },
@@ -5914,6 +6345,430 @@
           },
           "ledgerBatch": {
             "$ref": "#/components/schemas/LedgerBatchV2"
+          }
+        }
+      },
+      "DashboardSummaryCounts": {
+        "type": "object",
+        "required": [
+          "received",
+          "posted",
+          "postFailed",
+          "discarded"
+        ],
+        "properties": {
+          "received": {
+            "type": "integer"
+          },
+          "posted": {
+            "type": "integer"
+          },
+          "postFailed": {
+            "type": "integer"
+          },
+          "discarded": {
+            "type": "integer"
+          }
+        }
+      },
+      "DashboardSummary": {
+        "type": "object",
+        "required": [
+          "range",
+          "counts",
+          "previous",
+          "posted",
+          "timeToPost",
+          "series"
+        ],
+        "properties": {
+          "range": {
+            "type": "object",
+            "required": [
+              "from",
+              "to",
+              "tz",
+              "bucket"
+            ],
+            "description": "The request, echoed with `from` and `to` rendered in `tz` with its offset.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "tz": {
+                "type": "string"
+              },
+              "bucket": {
+                "type": "string",
+                "enum": [
+                  "day",
+                  "week"
+                ]
+              }
+            }
+          },
+          "counts": {
+            "$ref": "#/components/schemas/DashboardSummaryCounts"
+          },
+          "previous": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DashboardSummaryCounts"
+              }
+            ],
+            "nullable": true,
+            "description": "The compare range's counts; `null` when no compare range was sent."
+          },
+          "posted": {
+            "type": "object",
+            "required": [
+              "rows",
+              "amount",
+              "previousRows",
+              "previousAmount"
+            ],
+            "properties": {
+              "rows": {
+                "type": "integer",
+                "description": "Entries of `posted[]` over the posted and partial attempts that finished in the range."
+              },
+              "amount": {
+                "type": "number",
+                "description": "Never rounded: stored amounts have 2 decimals, so 2 are written (`248391.27`, `60.00`); invariant, a `.` before the decimals."
+              },
+              "previousRows": {
+                "type": "integer",
+                "nullable": true,
+                "description": "As `rows`, for the compare range; `null` without one."
+              },
+              "previousAmount": {
+                "type": "number",
+                "nullable": true,
+                "description": "As `amount` (never rounded; 2 decimals), for the compare range; `null` without one."
+              }
+            }
+          },
+          "timeToPost": {
+            "type": "object",
+            "nullable": true,
+            "description": "`null` when no request has a post time in the range.",
+            "required": [
+              "medianMinutes",
+              "p90Minutes",
+              "statements"
+            ],
+            "properties": {
+              "medianMinutes": {
+                "type": "integer"
+              },
+              "p90Minutes": {
+                "type": "integer"
+              },
+              "statements": {
+                "type": "integer"
+              }
+            }
+          },
+          "series": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "start",
+                "received",
+                "posted",
+                "postFailed"
+              ],
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "format": "date",
+                  "description": "The bucket's local date in `tz` (the Monday for weeks)."
+                },
+                "received": {
+                  "type": "integer"
+                },
+                "posted": {
+                  "type": "integer"
+                },
+                "postFailed": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      },
+      "AppHealthV2": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "example": "healthy"
+          },
+          "version": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "process": {
+            "type": "object",
+            "properties": {
+              "bitness": {
+                "type": "string",
+                "example": "x64"
+              },
+              "startedUtc": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "uptimeSeconds": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "windowsSession": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          },
+          "quickbooksGateway": {
+            "type": "string",
+            "enum": [
+              "sdk",
+              "simulated",
+              "unavailable",
+              "test"
+            ]
+          },
+          "hermes": {
+            "type": "string",
+            "enum": [
+              "enabled",
+              "disabled"
+            ]
+          },
+          "worker": {
+            "type": "object",
+            "properties": {
+              "running": {
+                "type": "boolean"
+              },
+              "activeJobId": {
+                "type": "string",
+                "nullable": true
+              },
+              "queueDepth": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          },
+          "model": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "enabled",
+                  "disabled"
+                ]
+              },
+              "name": {
+                "type": "string",
+                "description": "`OpenRouter:Model`, the model for job calls.",
+                "example": "~google/gemini-pro-latest"
+              }
+            }
+          },
+          "extraction": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "configured",
+              "misconfigured"
+            ]
+          }
+        },
+        "description": "`GET /api/v2/health`: the v1 health body plus `model` and `extraction`."
+      },
+      "StatementExtraction": {
+        "type": "object",
+        "description": "Dashboard-api-m12 §6.8.",
+        "properties": {
+          "extractionId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Send it as `upload.extractionId` when saving the reviewed rows."
+          },
+          "file": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "sizeBytes": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "sha256": {
+                "type": "string",
+                "description": "Lower-case hex of the uploaded bytes."
+              },
+              "pageCount": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          },
+          "model": {
+            "type": "string",
+            "description": "`Extraction:Model` as configured.",
+            "example": "~google/gemini-pro-latest"
+          },
+          "promptVersion": {
+            "type": "string",
+            "example": "2026-10-28.api-1"
+          },
+          "extractedUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresUtc": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Unsaved records are deleted after this."
+          },
+          "isBankStatement": {
+            "type": "boolean",
+            "description": "Always true in a `200`."
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "reference": {
+                "type": "string",
+                "nullable": true
+              },
+              "controlTotal": {
+                "type": "number",
+                "nullable": true,
+                "description": "Always null: the API never computes it."
+              },
+              "transactions": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/StatementExtractionRow"
+                }
+              }
+            }
+          },
+          "possibleDuplicates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatementExtractionDuplicate"
+            }
+          }
+        }
+      },
+      "StatementExtractionRow": {
+        "type": "object",
+        "description": "One tidied row. Only `externalId` and `kind` are always present; every other field appears only when the model returned it (no defaults).",
+        "required": [
+          "externalId",
+          "kind"
+        ],
+        "properties": {
+          "externalId": {
+            "type": "string",
+            "example": "row-1"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "Deposit",
+              "Check"
+            ]
+          },
+          "date": {
+            "type": "string",
+            "description": "As the model wrote it; meant to be `yyyy-MM-dd`, checked when saved."
+          },
+          "amount": {
+            "type": "number",
+            "description": "Positive, as transcribed; never computed or rounded."
+          },
+          "account": {
+            "type": "string"
+          },
+          "lineAccount": {
+            "type": "string"
+          },
+          "memo": {
+            "type": "string"
+          },
+          "last4": {
+            "type": "string"
+          },
+          "payee": {
+            "type": "string"
+          },
+          "checkNo": {
+            "type": "string"
+          }
+        }
+      },
+      "StatementExtractionDuplicate": {
+        "type": "object",
+        "description": "A saved request this upload may duplicate (§6.7). A warning only.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "publicRef": {
+            "type": "string",
+            "example": "SR-000118"
+          },
+          "reference": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "example": "pending"
+          },
+          "receivedUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "email",
+              "upload",
+              "other"
+            ]
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "same-file",
+                "same-reference",
+                "overlapping-rows"
+              ]
+            }
           }
         }
       }

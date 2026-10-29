@@ -697,3 +697,114 @@ BEGIN
     END IF;
 END $EF$;
 COMMIT;
+
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028175732_DashboardM12') THEN
+    ALTER TABLE saved_requests ADD upload_extracted_utc timestamp with time zone;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028175732_DashboardM12') THEN
+    ALTER TABLE saved_requests ADD upload_extraction_id uuid;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028175732_DashboardM12') THEN
+    ALTER TABLE saved_requests ADD upload_file_name text;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028175732_DashboardM12') THEN
+    ALTER TABLE saved_requests ADD upload_model text;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028175732_DashboardM12') THEN
+    ALTER TABLE saved_requests ADD upload_prompt_version text;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028175732_DashboardM12') THEN
+    ALTER TABLE saved_requests ADD upload_sha256 text;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028175732_DashboardM12') THEN
+    ALTER TABLE saved_requests ADD upload_size_bytes bigint;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028175732_DashboardM12') THEN
+    CREATE TABLE statement_extractions (
+        id uuid NOT NULL,
+        user_id text NOT NULL,
+        file_name text NOT NULL,
+        size_bytes bigint NOT NULL,
+        sha256 text NOT NULL,
+        page_count integer NOT NULL,
+        model text NOT NULL,
+        prompt_version text NOT NULL,
+        payload jsonb NOT NULL,
+        extracted_utc timestamp with time zone NOT NULL,
+        expires_utc timestamp with time zone NOT NULL,
+        saved_request_id bigint,
+        CONSTRAINT pk_statement_extractions PRIMARY KEY (id),
+        CONSTRAINT fk_statement_extractions_saved_requests_saved_request_id FOREIGN KEY (saved_request_id) REFERENCES saved_requests (id) ON DELETE RESTRICT
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028175732_DashboardM12') THEN
+    CREATE INDEX ix_saved_requests_upload_sha256 ON saved_requests (upload_sha256);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028175732_DashboardM12') THEN
+    CREATE INDEX ix_saved_request_events_kind_at ON saved_request_events (kind, at_utc DESC);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028175732_DashboardM12') THEN
+    CREATE INDEX ix_statement_extractions_expires ON statement_extractions (expires_utc) WHERE saved_request_id IS NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028175732_DashboardM12') THEN
+    CREATE INDEX ix_statement_extractions_saved_request_id ON statement_extractions (saved_request_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261028175732_DashboardM12') THEN
+    INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+    VALUES ('20261028175732_DashboardM12', '8.0.33');
+    END IF;
+END $EF$;
+COMMIT;

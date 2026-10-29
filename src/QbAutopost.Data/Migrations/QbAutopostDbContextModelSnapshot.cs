@@ -660,6 +660,34 @@ namespace QbAutopost.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_utc");
 
+                    b.Property<DateTime?>("UploadExtractedUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("upload_extracted_utc");
+
+                    b.Property<Guid?>("UploadExtractionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("upload_extraction_id");
+
+                    b.Property<string>("UploadFileName")
+                        .HasColumnType("text")
+                        .HasColumnName("upload_file_name");
+
+                    b.Property<string>("UploadModel")
+                        .HasColumnType("text")
+                        .HasColumnName("upload_model");
+
+                    b.Property<string>("UploadPromptVersion")
+                        .HasColumnType("text")
+                        .HasColumnName("upload_prompt_version");
+
+                    b.Property<string>("UploadSha256")
+                        .HasColumnType("text")
+                        .HasColumnName("upload_sha256");
+
+                    b.Property<long?>("UploadSizeBytes")
+                        .HasColumnType("bigint")
+                        .HasColumnName("upload_size_bytes");
+
                     b.Property<DateTime?>("ValidatedUtc")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("validated_utc");
@@ -694,6 +722,9 @@ namespace QbAutopost.Data.Migrations
 
                     b.HasIndex("Reference")
                         .HasDatabaseName("ix_saved_requests_reference");
+
+                    b.HasIndex("UploadSha256")
+                        .HasDatabaseName("ix_saved_requests_upload_sha256");
 
                     b.HasIndex("Source", "IdempotencyKey")
                         .IsUnique()
@@ -747,6 +778,10 @@ namespace QbAutopost.Data.Migrations
 
                     b.HasIndex("SavedRequestId")
                         .HasDatabaseName("ix_saved_request_events_saved_request_id");
+
+                    b.HasIndex("Kind", "AtUtc")
+                        .IsDescending(false, true)
+                        .HasDatabaseName("ix_saved_request_events_kind_at");
 
                     b.ToTable("saved_request_events", (string)null);
                 });
@@ -812,6 +847,75 @@ namespace QbAutopost.Data.Migrations
                         .HasDatabaseName("ix_saved_request_versions_saved_request_id_number");
 
                     b.ToTable("saved_request_versions", (string)null);
+                });
+
+            modelBuilder.Entity("QbAutopost.Data.Entities.StatementExtractionEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("ExpiresUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_utc");
+
+                    b.Property<DateTime>("ExtractedUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("extracted_utc");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("file_name");
+
+                    b.Property<string>("Model")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("model");
+
+                    b.Property<int>("PageCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("page_count");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("payload");
+
+                    b.Property<string>("PromptVersion")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("prompt_version");
+
+                    b.Property<long?>("SavedRequestId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("saved_request_id");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("sha256");
+
+                    b.Property<long>("SizeBytes")
+                        .HasColumnType("bigint")
+                        .HasColumnName("size_bytes");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_statement_extractions");
+
+                    b.HasIndex("ExpiresUtc")
+                        .HasDatabaseName("ix_statement_extractions_expires")
+                        .HasFilter("saved_request_id IS NULL");
+
+                    b.HasIndex("SavedRequestId")
+                        .HasDatabaseName("ix_statement_extractions_saved_request_id");
+
+                    b.ToTable("statement_extractions", (string)null);
                 });
 
             modelBuilder.Entity("QbAutopost.Data.Entities.UserAuditEntity", b =>
@@ -953,6 +1057,15 @@ namespace QbAutopost.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_saved_request_versions_saved_requests_saved_request_id");
+                });
+
+            modelBuilder.Entity("QbAutopost.Data.Entities.StatementExtractionEntity", b =>
+                {
+                    b.HasOne("QbAutopost.Data.Entities.SavedRequestEntity", null)
+                        .WithMany()
+                        .HasForeignKey("SavedRequestId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_statement_extractions_saved_requests_saved_request_id");
                 });
 
             modelBuilder.Entity("QbAutopost.Data.Entities.UserAuditEntity", b =>

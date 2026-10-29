@@ -14,7 +14,7 @@ public sealed class DisabledHermesClientTests
             client.CompleteJsonAsync<SpecAnswer>(new HermesRequest(HermesTask.Account, "system", "user"), CancellationToken.None));
 
         Assert.Equal(HermesTask.Account, ex.Task);
-        Assert.Contains("Hermes:Enabled", ex.Reason, StringComparison.Ordinal);
+        Assert.Contains("OpenRouter:Enabled", ex.Reason, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -23,6 +23,6 @@ public sealed class DisabledHermesClientTests
         var ping = await new DisabledHermesClient().PingAsync(CancellationToken.None);
 
         Assert.False(ping.Ok);
-        Assert.Contains("Hermes:Enabled", ping.Message, StringComparison.Ordinal);
+        Assert.Contains("OpenRouter:Enabled", ping.Message, StringComparison.Ordinal);
     }
 }

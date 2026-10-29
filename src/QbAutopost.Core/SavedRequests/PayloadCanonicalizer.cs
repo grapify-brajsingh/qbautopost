@@ -57,10 +57,10 @@ public static class PayloadCanonicalizer
         }
     }
 
-    // V2 (spec section 7): top-level email and pushId are not part of the request; a row's post is dropped only when it is
-    // literally true (a direct child of a transactions row, never a nested post elsewhere).
+    // V2 (spec section 7): top-level email, pushId and upload (dashboard-api-m12 7.2) are not part of the request; a row's
+    // post is dropped only when it is literally true (a direct child of a transactions row, never a nested post elsewhere).
     private static bool IsDroppedByV2(string path, JsonProperty p) =>
-        (path == "$" && p.Name is "email" or "pushId")
+        (path == "$" && p.Name is "email" or "pushId" or "upload")
         || (path == "$.transactions[*]" && p.Name == "post" && p.Value.ValueKind == JsonValueKind.True);
 
     private static bool IsMoneyPath(string path) => path is "$.controlTotal" or "$.transactions[*].amount";

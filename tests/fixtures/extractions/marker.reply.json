@@ -1,0 +1,7 @@
+{
+  "is_bank_statement": true,
+  "reference": "Marker statement",
+  "transactions": [
+    { "kind": "Deposit", "date": "2026-09-01", "amount": 10.00, "memo": "Counter deposit" }
+  ]
+}

@@ -29,6 +29,25 @@ public sealed record AppHealthView(
     string Hermes,
     WorkerView Worker);
 
+/// <summary>Dashboard-api-m12 14.1: the model client, named neutrally: <c>enabled</c> or <c>disabled</c>, and the job model.</summary>
+public sealed record ModelHealthView(string Status, string Name);
+
+/// <summary>
+/// <c>GET /api/v2/health</c> body (dashboard-api-m12 8, 14.1): the v1 body plus <c>model</c> and <c>extraction</c>
+/// (<c>disabled</c>, <c>configured</c> or <c>misconfigured</c>). Read from settings only; it never calls OpenRouter.
+/// </summary>
+public sealed record AppHealthV2View(
+    bool Ok,
+    string Status,
+    string Version,
+    string Environment,
+    ProcessView Process,
+    [property: JsonPropertyName("quickbooksGateway")] string QuickBooksGateway,
+    string Hermes,
+    WorkerView Worker,
+    ModelHealthView Model,
+    string Extraction);
+
 /// <summary>
 /// FR-A-1: liveness from in-process state only — no COM, no network, no company file — so a monitor may poll it every
 /// few seconds and still get an answer while a job holds the QuickBooks gateway.
@@ -56,11 +75,22 @@ public sealed class AppHealth(
             (long)(DateTime.UtcNow - ProcessStartedUtc).TotalSeconds,
             WindowsSession),
         QuickBooksGateway: connection.Mode.ToString().ToLowerInvariant(),
-        Hermes: settings.Value.Hermes.Enabled ? "enabled" : "disabled",
+        Hermes: settings.Value.OpenRouter.Enabled ? "enabled" : "disabled",
         Worker: new WorkerView(
             lifetime.ApplicationStarted.IsCancellationRequested,
             store.All().FirstOrDefault(j => JobStatusRules.IsActive(j.Status))?.JobId,
             queue.Depth));
+
+    /// <summary>T-1212b: the v2 body; the v1 one (<see cref="Now"/>) is unchanged.</summary>
+    public AppHealthV2View NowV2()
+    {
+        var v1 = Now();
+        var s = settings.Value;
+        return new AppHealthV2View(
+            v1.Ok, v1.Status, v1.Version, v1.Environment, v1.Process, v1.QuickBooksGateway, v1.Hermes, v1.Worker,
+            new ModelHealthView(s.OpenRouter.Enabled ? "enabled" : "disabled", s.OpenRouter.Model),
+            Extraction.ExtractionState.Of(s));
+    }
 
     /// <summary>Readiness (FR-A-2) shares the lifetime signal: the worker starts with the host.</summary>
     public ReadinessView Ready() =>

@@ -43,6 +43,7 @@ public sealed class SavedRequestConfiguration : IEntityTypeConfiguration<SavedRe
         builder.HasIndex(e => e.CanonicalSha256);
         builder.HasIndex(e => new { e.Source, e.IdempotencyKey }).IsUnique().HasFilter("idempotency_key IS NOT NULL");
         builder.HasIndex(e => e.PushId).IsUnique().HasFilter("push_id IS NOT NULL").HasDatabaseName("ux_saved_requests_push_id");
+        builder.HasIndex(e => e.UploadSha256).HasDatabaseName("ix_saved_requests_upload_sha256");
         builder.HasIndex(e => e.PushIdHex).HasOperators("text_pattern_ops").HasDatabaseName("ix_saved_requests_push_id_hex");
 
         // History is never deleted (§5.2): deleting a request that has rows below it is refused, not cascaded.

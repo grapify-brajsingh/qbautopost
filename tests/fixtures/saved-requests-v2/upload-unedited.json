@@ -1,0 +1,9 @@
+{
+  "reference": "Upload Chase 4521 2026-08",
+  "controlTotal": null,
+  "transactions": [
+    { "externalId": "row-1", "kind": "Check", "date": "2026-08-05", "amount": 184.32, "account": "Chase Checking 4521", "payee": "HOME DEPOT #6412", "memo": "HOME DEPOT #6412 PURCHASE", "last4": "4521" },
+    { "externalId": "row-2", "kind": "Check", "date": "2026-08-05", "amount": 99.10, "account": "Chase Checking 4521", "payee": "SHELL OIL 4491", "memo": "SHELL OIL 4491", "last4": "4521" },
+    { "externalId": "row-3", "kind": "Deposit", "date": "2026-08-07", "amount": 1250.00, "account": "Chase Checking 4521", "payee": "Bankcard Merchant Services", "memo": "BANKCARD SETTLEMENT", "last4": "4521" }
+  ]
+}

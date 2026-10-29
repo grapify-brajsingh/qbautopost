@@ -1,7 +1,7 @@
 # ADR-0005: Hermes over an OpenAI-compatible HTTP API with validated JSON
 
 **Date**: 2026-09-15 (backfilled on 2026-09-16 from spec.md §9)
-**Status**: accepted
+**Status**: accepted; the endpoint is superseded by ADR-0011 (the JSON contract still holds)
 **Deciders**: Braj (owner), Claude Code
 
 ## Context
