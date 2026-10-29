@@ -40,7 +40,7 @@ public sealed class OpenRouterJobTests : IDisposable
         return folder;
     }
 
-    private HttpClient RealClient(IDictionary<string, string?>? settings = null)
+    private HttpClient RealClient(IDictionary<string, string?>? settings = null, Serilog.Core.ILogEventSink? logs = null)
     {
         var all = new Dictionary<string, string?>
         {
@@ -65,6 +65,12 @@ public sealed class OpenRouterJobTests : IDisposable
                         ? new DisabledHermesClient()
                         : new HermesClient(new HttpClient(_handler) { Timeout = Timeout.InfiniteTimeSpan }, sp.GetRequiredService<HermesOptions>()),
                     sp.GetRequiredService<ILogger<LoggingHermesClient>>()));
+                if (logs is not null)
+                {
+                    // Every event, before any scrubbing, as ExtractionTestHost captures them.
+                    var logger = new Serilog.LoggerConfiguration().MinimumLevel.Verbose().Enrich.FromLogContext().WriteTo.Sink(logs).CreateLogger();
+                    services.AddSingleton<ILoggerFactory>(new Serilog.Extensions.Logging.SerilogLoggerFactory(logger, dispose: true));
+                }
             });
         });
         var client = host.CreateClient();
@@ -161,14 +167,41 @@ public sealed class OpenRouterJobTests : IDisposable
     [Fact]
     public async Task Should_ScrubKeyFromAuditCopies_When_JobRuns()
     {
-        QueueAnswers();
+        // The provider echoes the key back: in a 200 answer (T1, as an extra property the reader ignores) and in an
+        // error body (T2). Neither may reach the audit copies or the log.
+        _handler
+            .ReplyContentEchoingKey(key =>
+            {
+                var spec = JsonNode.Parse(FakeHermesClient.FixtureJson(HermesTask.Spec))!.AsObject();
+                spec["echo"] = "you sent " + key;
+                return spec.ToJsonString();
+            })
+            .ReplyStatusEchoingKey(System.Net.HttpStatusCode.Unauthorized, key => "{\"error\":{\"message\":\"bad key " + key + "\"}}")
+            .ReplyContent(FakeHermesClient.FixtureJson(HermesTask.Invoice));
+        var logs = new SavedRequests.ExtractionTestHost.CapturingSink();
         var folder = PdfJob(_real);
-        using var client = RealClient();
+        using var client = RealClient(logs: logs);
 
         await client.RunToEndAsync(folder);
 
+        Assert.Equal(3, _handler.Requests.Count);
         var audit = Directory.GetFiles(Output(folder, "hermes"));
         Assert.NotEmpty(audit);
-        Assert.All(audit, f => Assert.DoesNotContain(Key, File.ReadAllText(f), StringComparison.Ordinal));
+        var texts = audit.Select(File.ReadAllText).ToList();
+        var logText = logs.Text;
+        Assert.NotEmpty(logs.Events);
+        foreach (var fragment in Fragments(Key, 8))
+        {
+            Assert.All(texts, t => Assert.DoesNotContain(fragment, t, StringComparison.Ordinal));
+            Assert.DoesNotContain(fragment, logText, StringComparison.Ordinal);
+        }
+
+        // The echoes did arrive (so the checks above had something to catch) and were scrubbed in place.
+        Assert.Contains(texts, t => t.Contains("you sent ***", StringComparison.Ordinal));
+        Assert.Contains(texts, t => t.Contains("bad key ***", StringComparison.Ordinal));
     }
+
+    /// <summary>Every substring of <paramref name="key"/> of length <paramref name="length"/> (longer ones contain one).</summary>
+    private static IEnumerable<string> Fragments(string key, int length) =>
+        Enumerable.Range(0, key.Length - length + 1).Select(i => key.Substring(i, length));
 }

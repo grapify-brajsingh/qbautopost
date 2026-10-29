@@ -43,6 +43,22 @@ public sealed class FakeOpenRouterHandler : HttpMessageHandler
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
         }));
 
+    /// <summary>
+    /// A 200 chat completion whose content is <paramref name="content"/> built from the bearer token the request carried,
+    /// as a misbehaving provider might echo it back (a key-scrub test must be able to fail).
+    /// </summary>
+    public FakeOpenRouterHandler ReplyContentEchoingKey(Func<string, string> content) =>
+        Enqueue((request, _) => Task.FromResult(Ok(content(BearerOf(request)))));
+
+    /// <summary>A non-2xx reply whose body is <paramref name="body"/> built from the bearer token the request carried.</summary>
+    public FakeOpenRouterHandler ReplyStatusEchoingKey(HttpStatusCode status, Func<string, string> body) =>
+        Enqueue((request, _) => Task.FromResult(new HttpResponseMessage(status)
+        {
+            Content = new StringContent(body(BearerOf(request)), Encoding.UTF8, "application/json"),
+        }));
+
+    private static string BearerOf(HttpRequestMessage request) => request.Headers.Authorization?.Parameter ?? "";
+
     /// <summary>Never answers: waits until the request is cancelled (a timeout or a disconnect).</summary>
     public FakeOpenRouterHandler ReplyNever() =>
         Enqueue(async (_, ct) =>
