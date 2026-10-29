@@ -62,7 +62,10 @@ public static class Readiness
             if (current.SyncedUtc is not { } synced)
             {
                 var failed = last is { Outcome: not ListSyncOutcome.Ok } bad ? $" ({AttemptText(bad)})" : "";
-                return new ReadinessCheck("qb-lists", false, Warning, $"{s.Paths.QbLists} not found; run POST /api/v1/quickbooks/lists/sync{failed}");
+                var guidance = s.Database.Configured
+                    ? "no lists synced yet; run POST /api/v1/quickbooks/lists/sync or Sync now"
+                    : $"{s.Paths.QbLists} not found; run POST /api/v1/quickbooks/lists/sync";
+                return new ReadinessCheck("qb-lists", false, Warning, guidance + failed);
             }
 
             // Spec §9: ok, with the age and any failed or skipped newest attempt named in the text.

@@ -174,6 +174,19 @@ public sealed class ReadinessChecksTests : IDisposable
     }
 
     [Fact]
+    public void Should_NotNameTheFile_When_DatabaseModeAndNeverSynced()
+    {
+        var settings = Ready();
+        settings.Database.ConnectionString = "Host=db";
+
+        var lists = Check(Readiness.Evaluate(settings, workerStarted: true, new StubLists(QbAutopost.Core.Models.QbLists.Empty, null)), "qb-lists");
+
+        Assert.False(lists.Ok);
+        Assert.Contains("no lists synced yet; run POST /api/v1/quickbooks/lists/sync or Sync now", lists.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("qb-lists.json", lists.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Should_AddFailedAttempt_When_NeverSyncedAndLastAttemptFailed()
     {
         var failed = Attempt(QbAutopost.Core.Pipeline.ListSyncOutcome.Failed, "qb-status", new DateTime(2026, 10, 29, 9, 5, 0, DateTimeKind.Utc));

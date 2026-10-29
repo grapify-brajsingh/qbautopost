@@ -331,7 +331,7 @@ runs jobs, so a sync never overlaps a job or a post. Settings (§3.1; environmen
 - `QuickBooks:ListSync:IntervalMinutes` (default 30): minutes between syncs, 5 to 1440. `0` turns the schedule off.
 - `QuickBooks:ListSync:FirstDelayMinutes` (default 2): the first sync after the API starts, when no earlier attempt is known.
 - `QuickBooks:ListSync:HistoryRows` (default 200): how many attempts `qb_list_syncs` keeps (at least 10; the newest
-  successful row is always kept). About four days at the default.
+  successful row is always kept). At most about four days at the default (Sync now and skipped attempts count too).
 
 The startup log's `QuickBooks:` line shows what is in force, for example `list sync every 30 min (first after 2 min),
 lists in the database`, or `list sync schedule off`.
@@ -348,8 +348,15 @@ so a job submitted in that time waits and then runs normally; nothing is lost. C
 that fails this way is recorded as `failed` (reason `quickbooks-busy` or `quickbooks-unavailable`), the lists stay as
 they were, and the next attempt is a full interval later.
 
-**Reading the state.** `GET` the lists on the v2 API (`/api/v2`, the QuickBooks lists route; token with
-`requests:read`). Besides the names it returns:
+**Reading the state.** `GET /api/v2/quickbooks/lists` with a dashboard user's token, or with an API key that holds
+`lists:read` or `qb:read`:
+
+```powershell
+$token = "<access token from a dashboard sign-in>"
+Invoke-RestMethod http://127.0.0.1:5080/api/v2/quickbooks/lists -Headers @{ Authorization = "Bearer $token" }
+```
+
+Besides the names it returns:
 
 - `lastSync`: the newest attempt of any kind, with its outcome (`ok`, `failed`, `skipped`), reason, time, who asked
   (`requestedBy` for a person's Sync now) and a fixed message. With a database it survives restarts; with **no database
@@ -371,10 +378,27 @@ SELECT * FROM qb_list_syncs ORDER BY id DESC LIMIT 20;
 then change only when somebody syncs by hand (`POST /api/v1/quickbooks/lists/sync`, or Sync now). Setting it back to 30
 restores the schedule.
 
-**Sync now.** The dashboard's lists panel has a Sync now button. Editors and admins see it; a viewer does not (the route
-answers `403`). It refreshes the pickers on success. It answers `409` (`quickbooks-not-open`) when QuickBooks is closed
-in the API's session, `503` when QuickBooks is unavailable or busy, and `504` when the sync takes longer than
-`Api:SyncPostTimeoutSeconds` (the sync still finishes). Two people pressing it together cause one sync.
+**Sync now.** The dashboard's lists panel has a Sync now button; it calls `POST /api/v2/quickbooks/lists/sync`:
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:5080/api/v2/quickbooks/lists/sync -Headers @{ Authorization = "Bearer $token" }
+```
+
+Who may call it: a dashboard user with `requests:edit` (editors and admins; viewers do not see the button), or an API
+key with `qb:read`. A key's sync is recorded with trigger `api` and the key's client name; a person's with trigger
+`dashboard` and their user id. The route uses the **posting** rate-limit bucket. Two people pressing it together cause one
+sync; a press while the scheduled sync runs joins it. Answers:
+
+| Status | Code | Meaning |
+|---|---|---|
+| `200` | | Fresh lists, counts and `lastSync`; the pickers update |
+| `403` | | A viewer, or a key without `qb:read` |
+| `409` | `quickbooks-not-open` | QuickBooks is not running in the API's session; a `skipped` row is recorded |
+| `503` | `quickbooks-unavailable` | QuickBooks could not be reached |
+| `503` | `quickbooks-busy` | QuickBooks did not answer within `QuickBooks:BusyTimeoutSeconds` (a dialog, usually) |
+| `503` | `api-stopping` | The API is shutting down |
+| `502` | `qb-status` | QuickBooks answered with an error status |
+| `504` | `sync-timeout` | Longer than `Api:SyncPostTimeoutSeconds`; the sync keeps running and its `qb_list_syncs` row shows the result |
 
 ## 6. Exceptions: held and skipped lines
 
