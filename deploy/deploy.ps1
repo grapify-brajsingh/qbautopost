@@ -67,7 +67,10 @@ $postgresService = 'postgresql-x64-16'
 $script:AppMoved = $false
 $script:NewAppLive = $false
 $script:DashboardInstalled = $false
+$script:MigrationStarted = $false
 $script:BackupFolder = ''
+$script:OldCommit = ''
+$script:PreDeployDump = ''
 $script:Refusals = 0
 
 $logFile = ''
@@ -128,6 +131,9 @@ function Test-Preflight {
         Add-Refusal "the scheduled task '$taskName' does not exist (deploy\install-task.ps1)."
     }
     else {
+        if ($task.State -eq 'Disabled') {
+            Add-Refusal "the scheduled task '$taskName' is disabled: neither version could be started. Enable it first."
+        }
         # Compared by SID: the task may hold 'user' where the session has 'MACHINE\user'.
         $taskUser = [string] $task.Principal.UserId
         try {
@@ -272,10 +278,49 @@ function Wait-Ready {
     return $false
 }
 
+function Save-PreDeployDump {
+    # backup-postgres.ps1 names its dump by day, so a retry the same day replaces it, and it prunes that name. This copy
+    # keeps the state from before this migration under a name neither touches. It is never pruned.
+    $folder = Join-Path $script:BackupFolder 'postgres'
+    $source = @(Get-ChildItem -LiteralPath $folder -Filter 'qbautopost-*.dump' | Sort-Object LastWriteTime -Descending)
+    if ($source.Count -eq 0) { throw "No dump found in '$folder' after the backup." }
+    $target = Join-Path $folder ('pre-deploy-{0}-{1}.dump' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), $script:OldCommit)
+    $partial = $target + '.partial'
+    try {
+        Copy-Item -LiteralPath $source[0].FullName -Destination $partial -Force
+        if ((Get-Item -LiteralPath $partial).Length -ne $source[0].Length) { throw "The copy of '$($source[0].FullName)' is incomplete." }
+        Move-Item -LiteralPath $partial -Destination $target
+    }
+    catch {
+        Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+        throw
+    }
+    $script:PreDeployDump = $target
+    Say "Kept the pre-migration dump as '$target'."
+}
+
 function Write-MigrationWarning {
-    $dumps = 'the dump folder'
-    if ($script:BackupFolder) { $dumps = "'" + (Join-Path $script:BackupFolder 'postgres') + "'" }
-    Say "A migration is not undone. If the previous version cannot work with the current schema, restore this deploy's dump from $dumps." 'WRN'
+    if ($script:PreDeployDump) {
+        $dump = "'$($script:PreDeployDump)'"
+    }
+    elseif ($script:BackupFolder) {
+        # -Rollback: the dump belongs to the deploy being undone, not to this run.
+        $dump = "the newest pre-deploy-*.dump in '" + (Join-Path $script:BackupFolder 'postgres') + "'"
+    }
+    else {
+        # A rollback may run with no readable settings, and this line must not stop it from starting the API.
+        $dump = 'the newest pre-deploy-*.dump in the postgres folder under QuickBooks.BackupFolder'
+    }
+    Say "A migration is not undone. If the old version cannot work with the current schema, restore $dump." 'WRN'
+}
+
+function Write-RestoreResult([bool] $Restored) {
+    if ($Restored) {
+        Say 'Deploy failed, exit 1. The previous version is running and ready.' 'WRN'
+    }
+    else {
+        Say 'Deploy failed, exit 1. The previous version did NOT come back ready. Treat the API as down: read the lines above and the logs.' 'ERR'
+    }
 }
 
 function Start-Unchanged {
@@ -379,7 +424,7 @@ function Show-Plan {
         Say "Dry run: 3. would build the dashboard into '$dist' and publish the API for $Runtime into '$appNew', removing any leftover first."
         Say 'Dry run: 4. would ask for confirmation, unless -Yes.'
         Say "Dry run: 5. would stop $apiProcess and wait up to 30 s."
-        Say "Dry run: 6. would back up the database to '$($script:BackupFolder)', then apply the migrations."
+        Say "Dry run: 6. would back up the database to '$($script:BackupFolder)', keep a pre-deploy-*.dump copy, then apply the migrations."
         Say "Dry run: 7. would swap '$appLive' to '$appOld', '$appNew' to '$appLive', and install the dashboard."
     }
     Say "Dry run: 8. would start task '$taskName' and wait up to $ReadyWaitSeconds s for $ApiBaseUrl/api/v1/health/ready and its database check."
@@ -413,6 +458,7 @@ try {
         Invoke-Native 'git' @('pull', '--ff-only', 'origin', $Branch) $repo | Out-Null
         $new = @(Invoke-Native 'git' @('rev-parse', '--short', 'HEAD') $repo)[0]
         $commits[$repo] = "$old -> $new"
+        if ($repo -eq $apiRepo) { $script:OldCommit = $old }
         Say "$repo : $old -> $new"
         if ($repo -eq $apiRepo -and $old -ne $new) {
             # PowerShell is already running the old copy of this file.
@@ -452,10 +498,13 @@ try {
     Stop-Api
     Say 'Step 6: backing up, then migrating.'
     Invoke-DeployScript 'backup-postgres.ps1' @{ BackupFolder = $script:BackupFolder; LogDir = $logDir }
+    Save-PreDeployDump
+    $script:MigrationStarted = $true
     Invoke-DeployScript 'apply-migrations.ps1' @{ LogDir = $logDir }
 }
 catch {
     Say $_.Exception.Message 'ERR'
+    if ($script:MigrationStarted) { Write-MigrationWarning }
     Start-Unchanged
     exit 1
 }
@@ -474,7 +523,7 @@ try {
 }
 catch {
     Say "The swap failed: $($_.Exception.Message)" 'ERR'
-    [void] (Restore-Previous)
+    Write-RestoreResult (Restore-Previous)
     exit 1
 }
 
@@ -489,7 +538,7 @@ catch {
 }
 if (-not $ready) {
     Say 'The new version did not become ready; going back to the previous one.' 'ERR'
-    [void] (Restore-Previous)
+    Write-RestoreResult (Restore-Previous)
     exit 1
 }
 

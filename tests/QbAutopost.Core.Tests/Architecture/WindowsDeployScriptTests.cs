@@ -143,6 +143,51 @@ public sealed class WindowsDeployScriptTests
         AssertInOrder(FunctionBody("Start-Api"), "Stop-ScheduledTask", "Start-ScheduledTask");
     }
 
+    [Fact]
+    public void Should_KeepAPreDeployDumpBeforeMigrating_When_ReadingDeploy()
+    {
+        // A same-day retry overwrites qbautopost-yyyyMMdd.dump, and only that name is under the retention glob.
+        var save = FunctionBody("Save-PreDeployDump");
+
+        Assert.Contains("'pre-deploy-{0}-{1}.dump'", save, StringComparison.Ordinal);
+        Assert.Contains("yyyyMMdd-HHmmss", save, StringComparison.Ordinal);
+        Assert.Contains("$script:OldCommit", save, StringComparison.Ordinal);
+        AssertInOrder(MainFlow(), "backup-postgres.ps1", "Save-PreDeployDump", "apply-migrations.ps1");
+        Assert.Contains("$script:PreDeployDump", FunctionBody("Write-MigrationWarning"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_WarnAboutTheSchema_When_TheMigrationStepFails()
+    {
+        // apply-migrations.ps1 can fail after migrations are committed. A failed backup changed nothing and gets no warning.
+        AssertInOrder(
+            MainFlow(),
+            "$script:MigrationStarted = $true",
+            "apply-migrations.ps1",
+            "if ($script:MigrationStarted) { Write-MigrationWarning }",
+            "Start-Unchanged");
+    }
+
+    [Fact]
+    public void Should_EndWithTheOutcome_When_RestoringThePreviousVersion()
+    {
+        var main = MainFlow();
+        var outcome = FunctionBody("Write-RestoreResult");
+
+        Assert.DoesNotContain("[void] (Restore-Previous)", main, StringComparison.Ordinal);
+        var first = main.IndexOf("Write-RestoreResult (Restore-Previous)", StringComparison.Ordinal);
+        var last = main.LastIndexOf("Write-RestoreResult (Restore-Previous)", StringComparison.Ordinal);
+        Assert.True(first >= 0 && last > first, "both restore paths must report the outcome");
+        Assert.Contains("is running and ready", outcome, StringComparison.Ordinal);
+        Assert.Contains("Treat the API as down", outcome, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_RefuseADisabledTask_When_ReadingDeploy()
+    {
+        Assert.Contains("$task.State -eq 'Disabled'", FunctionBody("Test-Preflight"), StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("DryRunDefault")]
     [InlineData("New-NetFirewallRule")]
