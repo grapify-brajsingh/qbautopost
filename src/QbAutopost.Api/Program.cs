@@ -303,9 +303,9 @@ builder.Services.AddHostedService<JobWorker>();
 // InFlightRecovery finishes before Kestrel binds, so the saved-request routes never see a request still `posting`.
 var database = builder.Configuration.GetSection("Database").Get<DatabaseSettings>() ?? new DatabaseSettings();
 var auth = builder.Configuration.GetSection("Auth").Get<AuthSettings>() ?? new AuthSettings();
+var listSync = builder.Configuration.GetSection("QuickBooks:ListSync").Get<ListSyncSettings>() ?? new ListSyncSettings();
 if (database.Configured)
 {
-    var listSync = builder.Configuration.GetSection("QuickBooks:ListSync").Get<ListSyncSettings>() ?? new ListSyncSettings();
     builder.Services.AddQbAutopostData(database.ConnectionString, database.CommandTimeoutSeconds, listSync.HistoryRows);
 
     // M14 §3, §9: database mode. One source is both the store and the reader; qb-lists.json is only imported (§3.3).
@@ -344,8 +344,8 @@ else
 {
     builder.Services.AddSingleton<ISavedRequestStore, DisabledSavedRequestStore>();
 
-    // M14 §3.4: file mode, qb-lists.json is the current lists.
-    builder.Services.AddSingleton(sp => new FileQbLists(sp.GetRequiredService<PipelineOptions>().QbListsFile));
+    // M14 §3.4: file mode, qb-lists.json is the current lists. M15 §3 (Q-125): the history since start, capped in memory.
+    builder.Services.AddSingleton(sp => new FileQbLists(sp.GetRequiredService<PipelineOptions>().QbListsFile, listSync.HistoryRows));
     builder.Services.AddSingleton<IQbListsStore>(sp => sp.GetRequiredService<FileQbLists>());
     builder.Services.AddSingleton<IQbListsSource>(sp => sp.GetRequiredService<FileQbLists>());
 }

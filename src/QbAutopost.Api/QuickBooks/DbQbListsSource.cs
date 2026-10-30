@@ -75,6 +75,9 @@ public sealed class DbQbListsSource(
 
     public Task<ListSyncRun?> LastAttemptAsync(CancellationToken ct) => Task.FromResult(LastAttempt);
 
+    /// <summary>M15 §3.1: the history is read from the database on each call; it is not held in memory.</summary>
+    public Task<ListSyncPage> ListAttemptsAsync(ListSyncQuery query, CancellationToken ct) => store.ListAttemptsAsync(query, ct);
+
     private QbLists? ReadFileLists()
     {
         try

@@ -672,6 +672,9 @@ public sealed class ScheduledListSyncTests : IDisposable
         }
 
         public Task<ListSyncRun?> LastAttemptAsync(CancellationToken ct) => Task.FromResult<ListSyncRun?>(null);
+
+        public Task<ListSyncPage> ListAttemptsAsync(ListSyncQuery query, CancellationToken ct) =>
+            throw new InvalidOperationException("database down");
     }
 
     private sealed class RecordingProcessor : IJobProcessor

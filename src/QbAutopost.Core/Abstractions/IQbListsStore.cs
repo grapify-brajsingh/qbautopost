@@ -14,4 +14,10 @@ public interface IQbListsStore
 
     /// <summary>The newest attempt of any outcome; null when none is known.</summary>
     Task<ListSyncRun?> LastAttemptAsync(CancellationToken ct);
+
+    /// <summary>
+    /// M15 §3.1: attempts newest first, filtered, one page; total counts the filtered set. Never reads the error, the
+    /// names missing in the rules or the stored lists.
+    /// </summary>
+    Task<ListSyncPage> ListAttemptsAsync(ListSyncQuery query, CancellationToken ct);
 }

@@ -820,5 +820,7 @@ public sealed class V2QbListsSyncTests : IDisposable
         }
 
         public Task<ListSyncRun?> LastAttemptAsync(CancellationToken ct) => inner.LastAttemptAsync(ct);
+
+        public Task<ListSyncPage> ListAttemptsAsync(ListSyncQuery query, CancellationToken ct) => inner.ListAttemptsAsync(query, ct);
     }
 }

@@ -64,6 +64,55 @@ public sealed class EfQbListsStore(IDbContextFactory<QbAutopostDbContext> factor
             };
     }
 
+    /// <summary>
+    /// M15 §3.1: newest first, filtered, one page. A projection: <c>lists</c>, <c>error</c> and <c>missing_in_rules</c>
+    /// are never read. <see cref="ListSyncPage.CurrentId"/> is the newest Ok row of the whole table, whatever the filter.
+    /// </summary>
+    public async Task<ListSyncPage> ListAttemptsAsync(ListSyncQuery query, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var rows = db.QbListSyncs.AsNoTracking();
+        if (query.Triggers is not null)
+        {
+            var triggers = query.Triggers.ToList();
+            rows = rows.Where(r => triggers.Contains(r.Trigger));
+        }
+
+        if (query.Outcomes is not null)
+        {
+            var outcomes = query.Outcomes.ToList();
+            rows = rows.Where(r => outcomes.Contains(r.Outcome));
+        }
+
+        var total = await rows.CountAsync(ct);
+        var skip = (int)Math.Min(int.MaxValue, (long)(query.Page - 1) * query.PageSize);
+        var page = await rows.OrderByDescending(r => r.Id)
+            .Skip(skip)
+            .Take(query.PageSize)
+            .Select(r => new
+            {
+                r.Id, r.Trigger, r.RequestedBy, r.StartedUtc, r.FinishedUtc, r.Outcome, r.Reason, r.Accounts, r.Vendors, r.Customers,
+            })
+            .ToListAsync(ct);
+        var currentId = await db.QbListSyncs.Where(r => r.Outcome == ListSyncOutcome.Ok).MaxAsync(r => (long?)r.Id, ct);
+
+        var items = page.Select(r => new ListSyncAttempt(r.Id, new ListSyncRun
+        {
+            Trigger = r.Trigger,
+            RequestedBy = r.RequestedBy,
+            StartedUtc = r.StartedUtc,
+            FinishedUtc = r.FinishedUtc,
+            Outcome = r.Outcome,
+            Reason = r.Reason,
+            Accounts = r.Accounts,
+            Vendors = r.Vendors,
+            Customers = r.Customers,
+        })).ToList();
+        return new ListSyncPage(items, total, currentId);
+    }
+
     /// <summary>The <c>lists</c> of the newest Ok row; null when there is none.</summary>
     public async Task<QbLists?> LoadCurrentAsync(CancellationToken ct)
     {

@@ -252,6 +252,124 @@ public sealed class QbListSyncStoreTests(PostgresFixture postgres) : IClassFixtu
         Assert.Matches(@"GRANT SELECT, INSERT, DELETE ON qb_list_syncs TO qbautopost_app;", grants);
     }
 
+    // ---- M15 §3.1 (T-1501): the history ------------------------------------------------------------------------
+
+    private static ListSyncQuery All(int page = 1, int pageSize = 25) => new(null, null, page, pageSize);
+
+    [PostgresFact]
+    public async Task Should_ReturnEmptyPage_When_NoAttemptRecorded()
+    {
+        await using var db = await Db.CreateAsync(postgres);
+
+        var page = await db.Store().ListAttemptsAsync(All(), CancellationToken.None);
+
+        Assert.Empty(page.Items);
+        Assert.Equal(0, page.Total);
+        Assert.Null(page.CurrentId);
+    }
+
+    [PostgresFact]
+    public async Task Should_ReturnAttemptsNewestFirstWithCurrentOk_When_Listing()
+    {
+        await using var db = await Db.CreateAsync(postgres);
+        var store = db.Store();
+        await store.RecordAsync(OkRun(0, Lists("A")), Lists("A"), CancellationToken.None);
+        await store.RecordAsync(OkRun(30, Lists("B"), ListSyncTrigger.Dashboard, "user-9"), Lists("B"), CancellationToken.None);
+        await store.RecordAsync(SkippedRun(60), null, CancellationToken.None);
+
+        var page = await store.ListAttemptsAsync(All(), CancellationToken.None);
+
+        Assert.Equal(3, page.Total);
+        Assert.Equal(new long[] { 3, 2, 1 }, page.Items.Select(i => i.Id));
+        Assert.Equal(2, page.CurrentId);
+        var dashboard = page.Items[1].Run;
+        Assert.Equal((ListSyncTrigger.Dashboard, "user-9", ListSyncOutcome.Ok), (dashboard.Trigger, dashboard.RequestedBy, dashboard.Outcome));
+        Assert.Equal((2, 3, 1), (dashboard.Accounts, dashboard.Vendors, dashboard.Customers));
+        Assert.Equal(T0.AddMinutes(30), dashboard.StartedUtc);
+        Assert.Equal(T0.AddMinutes(30).AddSeconds(4), dashboard.FinishedUtc);
+        Assert.Equal(ListSyncReasons.QuickBooksNotOpen, page.Items[0].Run.Reason);
+    }
+
+    [PostgresFact]
+    public async Task Should_NeverCarryErrorOrMissingNames_When_Listing()
+    {
+        await using var db = await Db.CreateAsync(postgres);
+        var store = db.Store();
+        await store.RecordAsync(OkRun(0, Lists("A")), Lists("A"), CancellationToken.None);
+        await store.RecordAsync(FailedRun(30), null, CancellationToken.None);
+
+        var page = await store.ListAttemptsAsync(All(), CancellationToken.None);
+
+        Assert.All(page.Items, i => Assert.Null(i.Run.Error));
+        Assert.All(page.Items, i => Assert.Null(i.Run.MissingInRules));
+    }
+
+    [PostgresFact]
+    public async Task Should_FilterByTriggerAndOutcomeAndCountFilteredSet_When_SetsGiven()
+    {
+        await using var db = await Db.CreateAsync(postgres);
+        var store = db.Store();
+        await store.RecordAsync(OkRun(0, Lists("A"), ListSyncTrigger.Import), Lists("A"), CancellationToken.None);
+        await store.RecordAsync(OkRun(10, Lists("A")), Lists("A"), CancellationToken.None);
+        await store.RecordAsync(FailedRun(20), null, CancellationToken.None);
+        await store.RecordAsync(SkippedRun(30), null, CancellationToken.None);
+
+        var triggers = await store.ListAttemptsAsync(
+            new ListSyncQuery(new HashSet<ListSyncTrigger> { ListSyncTrigger.Schedule, ListSyncTrigger.Import }, null, 1, 25), CancellationToken.None);
+        var outcomes = await store.ListAttemptsAsync(
+            new ListSyncQuery(null, new HashSet<ListSyncOutcome> { ListSyncOutcome.Failed, ListSyncOutcome.Skipped }, 1, 25), CancellationToken.None);
+        var both = await store.ListAttemptsAsync(
+            new ListSyncQuery(new HashSet<ListSyncTrigger> { ListSyncTrigger.Schedule }, new HashSet<ListSyncOutcome> { ListSyncOutcome.Skipped }, 1, 25),
+            CancellationToken.None);
+
+        Assert.Equal(new long[] { 4, 2, 1 }, triggers.Items.Select(i => i.Id));
+        Assert.Equal(3, triggers.Total);
+        Assert.Equal(new long[] { 4, 3 }, outcomes.Items.Select(i => i.Id));
+        Assert.Equal(2, outcomes.Total);
+        Assert.Equal(4, Assert.Single(both.Items).Id);
+        Assert.Equal(2, outcomes.CurrentId);
+    }
+
+    [PostgresFact]
+    public async Task Should_ReturnOnePageAndFullTotal_When_Paged()
+    {
+        await using var db = await Db.CreateAsync(postgres);
+        var store = db.Store();
+        for (var i = 0; i < 5; i++)
+        {
+            await store.RecordAsync(SkippedRun(i), null, CancellationToken.None);
+        }
+
+        var second = await store.ListAttemptsAsync(All(page: 2, pageSize: 2), CancellationToken.None);
+        var past = await store.ListAttemptsAsync(All(page: 9, pageSize: 2), CancellationToken.None);
+
+        Assert.Equal(new long[] { 3, 2 }, second.Items.Select(i => i.Id));
+        Assert.Equal(5, second.Total);
+        Assert.Empty(past.Items);
+        Assert.Equal(5, past.Total);
+        Assert.Null(second.CurrentId);
+    }
+
+    [PostgresFact]
+    public async Task Should_ReadNeitherListsNorErrorNorMissingNames_When_Listing()
+    {
+        await using var db = await Db.CreateAsync(postgres);
+        var store = db.Store();
+        await store.RecordAsync(OkRun(0, Lists("A")), Lists("A"), CancellationToken.None);
+        await store.RecordAsync(FailedRun(30), null, CancellationToken.None);
+
+        // The app role may now read every column but these three: a query that reads one of them is refused.
+        await db.StringsAsync($"REVOKE SELECT ON qb_list_syncs FROM {PostgresFixture.AppRole}");
+        await db.StringsAsync(
+            "GRANT SELECT (id, trigger, requested_by, started_utc, finished_utc, outcome, reason, accounts, vendors, customers) "
+            + $"ON qb_list_syncs TO {PostgresFixture.AppRole}");
+
+        var page = await store.ListAttemptsAsync(All(), CancellationToken.None);
+        Assert.Equal(2, page.Total);
+        Assert.Equal(1, page.CurrentId);
+        await Assert.ThrowsAnyAsync<Exception>(() => store.LastAttemptAsync(CancellationToken.None));
+    }
+
     private sealed class RunComparer : IEqualityComparer<ListSyncRun?>
     {
         public bool Equals(ListSyncRun? x, ListSyncRun? y) =>
