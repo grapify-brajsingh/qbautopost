@@ -11,11 +11,13 @@
     4. Confirm, unless -Yes. Deploy when nobody is posting: an interrupted post is marked unknown on the next start.
     5. Stop the API.
     6. Back up the database, then migrate. A failure starts the old program again, untouched, and exits 1.
-    7. Swap: app becomes app.old, app.new becomes app, then the dashboard is installed.
+    7. Swap: app.old becomes app.old.prev, app becomes app.old, app.new becomes app, then the dashboard is installed.
     8. Start through the scheduled task QbAutopost (the API must run in the desktop session), then wait for
-       /api/v1/health/ready to answer 200 with its database check ok.
-    9. A failure at 7 or 8 puts the previous version back. A migration is not undone: the message names the dump.
-  -Rollback does steps 5, 9 and 8 for the previous version, after the same confirmation.
+       /api/v1/health/ready to answer 200 with its database check ok. Only then is app.old.prev deleted.
+    9. A failure at 7 or 8 puts the previous version back, and app.old.prev back as app.old. A migration is not undone:
+       the message names the dump.
+  -Rollback does steps 5, 9 and 8 for the previous version, after the same confirmation. It refuses without app.old:
+  a dashboard-only rollback is install-dashboard.ps1 -Rollback.
   The script changes only the app and dashboard folders, the two clones and the logs. It prints no secret.
   Use -WhatIf for a dry run: preflight failures are warnings, every step is printed and nothing is changed.
 
@@ -52,6 +54,7 @@ $liveSettings = Join-Path $Root 'appsettings.Production.json'
 $appLive = Join-Path $Root 'app'
 $appNew = Join-Path $Root 'app.new'
 $appOld = Join-Path $Root 'app.old'
+$appOldPrev = Join-Path $Root 'app.old.prev'
 $appFailed = Join-Path $Root 'app.failed'
 $dashboardLive = Join-Path $Root 'dashboard'
 $dashboardOld = Join-Path $Root 'dashboard.old'
@@ -64,6 +67,7 @@ $apiProcess = 'QbAutopost.Api'
 $postgresService = 'postgresql-x64-16'
 
 # What this run has replaced so far: Restore-Previous undoes these and nothing else.
+$script:OldParked = $false
 $script:AppMoved = $false
 $script:NewAppLive = $false
 $script:DashboardInstalled = $false
@@ -148,17 +152,29 @@ function Test-Preflight {
         }
     }
 
+    # Each read has its own try: under strict mode a missing section throws, and it must not blank the other value.
+    $clientsFile = ''
     if (Test-Path -LiteralPath $liveSettings) {
         try {
             $settings = Get-Content -Raw -LiteralPath $liveSettings | ConvertFrom-Json
-            $script:BackupFolder = [string] $settings.QuickBooks.BackupFolder
+            try { $script:BackupFolder = [string] $settings.QuickBooks.BackupFolder } catch { $script:BackupFolder = '' }
+            try { $clientsFile = [string] $settings.Paths.Clients } catch { $clientsFile = '' }
         }
         catch { $script:BackupFolder = '' }
     }
 
+    if (Test-Path -LiteralPath $appOldPrev) {
+        if (Test-Path -LiteralPath $appOld) {
+            Say "Found '$appOldPrev' from an interrupted run. It is older than '$appOld'; the next release deletes it." 'WRN'
+        }
+        else {
+            Say "Found '$appOldPrev' from an interrupted run, and no '$appOld': it is the previous version. The next release renames it back; for -Rollback, rename it to app.old by hand first." 'WRN'
+        }
+    }
+
     if ($Rollback) {
-        if (-not (Test-Path -LiteralPath $appOld) -and -not (Test-Path -LiteralPath $dashboardOld)) {
-            Add-Refusal "there is no previous version: neither '$appOld' nor '$dashboardOld' exists."
+        if (-not (Test-Path -LiteralPath $appOld)) {
+            Add-Refusal "there is no previous program: '$appOld' does not exist. A dashboard-only rollback is install-dashboard.ps1 -Rollback."
         }
     }
     else {
@@ -168,7 +184,7 @@ function Test-Preflight {
         if (Get-Command 'node' -ErrorAction SilentlyContinue) {
             try {
                 $nodeVersion = [string] (@(Invoke-Native 'node' @('--version') $here)[0])
-                if ($nodeVersion -notmatch '^v22\.') { Add-Refusal "node 22 is required; this is '$nodeVersion'." }
+                if ($nodeVersion -notmatch '^v(\d+)\.' -or [int] $Matches[1] -lt 22) { Add-Refusal "node 22 or newer is required; this is '$nodeVersion'." }
             }
             catch { Add-Refusal $_.Exception.Message }
         }
@@ -185,8 +201,15 @@ function Test-Preflight {
         if (-not (Test-Path -LiteralPath $liveSettings)) {
             Add-Refusal "'$liveSettings' does not exist."
         }
-        elseif ([string]::IsNullOrWhiteSpace($script:BackupFolder)) {
-            Add-Refusal "QuickBooks.BackupFolder is empty or unreadable in '$liveSettings'."
+        else {
+            if ([string]::IsNullOrWhiteSpace($script:BackupFolder)) {
+                Add-Refusal "QuickBooks.BackupFolder is empty or unreadable in '$liveSettings'."
+            }
+            # The default is relative to the program folder, so a swap would move the API callers' key hashes into app.old.
+            # IsPathRooted is not enough: it also accepts '\clients.json' and 'C:clients.json'.
+            if ($clientsFile -notmatch '^([A-Za-z]:[\\/]|[\\/]{2}[^\\/])') {
+                Add-Refusal "Paths.Clients in '$liveSettings' must be an absolute path, such as $Root\clients.json; it is '$clientsFile'."
+            }
         }
         foreach ($variable in 'QBAUTOPOST__Database__ConnectionString', 'QBAUTOPOST_MIGRATION_CONNECTION') {
             if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($variable))) {
@@ -248,6 +271,21 @@ function Start-Api {
     Start-ScheduledTask -TaskName $taskName | Out-Null
 }
 
+function Get-FailedChecks {
+    # The 'name: message' of every failed error check in a not-ready answer, or '' when there is none to read. Never throws:
+    # Wait-Ready must go on polling. Strict mode throws on a missing property, and most exceptions have no Response.
+    param([object] $WebError)
+    try {
+        $response = $WebError.PSObject.Properties['Response']
+        if (-not $response -or -not $response.Value) { return '' }
+        $reader = New-Object System.IO.StreamReader($response.Value.GetResponseStream())
+        try { $body = $reader.ReadToEnd() } finally { $reader.Dispose() }
+        $failed = @(($body | ConvertFrom-Json).checks | Where-Object { -not $_.ok -and $_.severity -eq 'error' })
+        return (($failed | ForEach-Object { '{0}: {1}' -f $_.name, $_.message }) -join '; ')
+    }
+    catch { return '' }
+}
+
 function Wait-Ready {
     # Ready means 200 and a database check with ok: true.
     $url = $ApiBaseUrl.TrimEnd('/') + '/api/v1/health/ready'
@@ -271,6 +309,8 @@ function Wait-Ready {
         catch {
             # Windows PowerShell throws on a 503 as well, so a not-ready answer lands here too.
             $last = $_.Exception.Message
+            $failedChecks = Get-FailedChecks $_.Exception
+            if ($failedChecks) { $last = $failedChecks }
         }
         Start-Sleep -Seconds 5
     }
@@ -343,6 +383,32 @@ function Start-Unchanged {
     }
 }
 
+function Clear-LeftoverPrevious {
+    # An interrupted run left app.old.prev. With app.old present it is the older of the two; alone, it is the previous version.
+    if (-not (Test-Path -LiteralPath $appOldPrev)) { return }
+    if (Test-Path -LiteralPath $appOld) {
+        Remove-Item -LiteralPath $appOldPrev -Recurse -Force
+        Say "Deleted the leftover '$appOldPrev'."
+    }
+    else {
+        Rename-Item -LiteralPath $appOldPrev -NewName 'app.old'
+        Say "Renamed the leftover '$appOldPrev' back to '$appOld'."
+    }
+}
+
+function Restore-ParkedOld {
+    # Puts back the app.old this run set aside, once app.old is free again. Logs a failure: it must not stop the restore.
+    if (-not $script:OldParked -or (Test-Path -LiteralPath $appOld)) { return }
+    try {
+        Rename-Item -LiteralPath $appOldPrev -NewName 'app.old'
+        $script:OldParked = $false
+        Say "Restored the earlier rollback target as '$appOld'."
+    }
+    catch {
+        Say "Could not rename '$appOldPrev' back to '$appOld': $($_.Exception.Message). Do it by hand." 'ERR'
+    }
+}
+
 function Restore-Previous {
     # Puts back what this run replaced and starts it. Returns $true when the previous version is ready.
     try {
@@ -360,8 +426,11 @@ function Restore-Previous {
         }
     }
     catch {
-        Say "Could not restore the program: $($_.Exception.Message). Check '$appLive' and '$appOld' by hand." 'ERR'
+        Say "Could not restore the program: $($_.Exception.Message). Check '$appLive', '$appOld' and '$appOldPrev' by hand." 'ERR'
         return $false
+    }
+    finally {
+        Restore-ParkedOld
     }
 
     # Only when this run installed it: otherwise dashboard.old is older than the live one. A failure here must not
@@ -425,10 +494,10 @@ function Show-Plan {
         Say 'Dry run: 4. would ask for confirmation, unless -Yes.'
         Say "Dry run: 5. would stop $apiProcess and wait up to 30 s."
         Say "Dry run: 6. would back up the database to '$($script:BackupFolder)', keep a pre-deploy-*.dump copy, then apply the migrations."
-        Say "Dry run: 7. would swap '$appLive' to '$appOld', '$appNew' to '$appLive', and install the dashboard."
+        Say "Dry run: 7. would rename '$appOld' to '$appOldPrev', '$appLive' to '$appOld', '$appNew' to '$appLive', and install the dashboard."
     }
     Say "Dry run: 8. would start task '$taskName' and wait up to $ReadyWaitSeconds s for $ApiBaseUrl/api/v1/health/ready and its database check."
-    if (-not $Rollback) { Say 'Dry run: 9. on a failure at 7 or 8, would put the previous version back and start it.' }
+    if (-not $Rollback) { Say "Dry run: 9. on a failure at 7 or 8, would put the previous version back and start it. Once ready, would delete '$appOldPrev'." }
     Say 'Dry run: nothing was changed.'
 }
 
@@ -487,6 +556,7 @@ try {
         Say 'Cancelled. Nothing live changed.' 'WRN'
         exit 1
     }
+    Clear-LeftoverPrevious
 }
 catch {
     Say "$($_.Exception.Message) Nothing live changed." 'ERR'
@@ -512,7 +582,11 @@ catch {
 try {
     Say 'Step 7: swapping.'
     if (Test-Path -LiteralPath $appLive) {
-        if (Test-Path -LiteralPath $appOld) { Remove-Item -LiteralPath $appOld -Recurse -Force }
+        # app is the rename a locked file fails, so app.old stays whole until it is through.
+        if (Test-Path -LiteralPath $appOld) {
+            Rename-Item -LiteralPath $appOld -NewName 'app.old.prev'
+            $script:OldParked = $true
+        }
         Rename-Item -LiteralPath $appLive -NewName 'app.old'
         $script:AppMoved = $true
     }
@@ -540,6 +614,16 @@ if (-not $ready) {
     Say 'The new version did not become ready; going back to the previous one.' 'ERR'
     Write-RestoreResult (Restore-Previous)
     exit 1
+}
+
+# A failure before this line still needs it as app.old. A failure of this delete is not a failed release.
+if (Test-Path -LiteralPath $appOldPrev) {
+    try {
+        Remove-Item -LiteralPath $appOldPrev -Recurse -Force
+    }
+    catch {
+        Say "Could not delete '$appOldPrev': $($_.Exception.Message) Delete it by hand; it may be incomplete now." 'WRN'
+    }
 }
 
 Say "Released: API $($commits[$apiRepo]), dashboard $($commits[$webRepo])."

@@ -188,6 +188,75 @@ public sealed class WindowsDeployScriptTests
         Assert.Contains("$task.State -eq 'Disabled'", FunctionBody("Test-Preflight"), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Should_KeepTheRollbackTargetUntilReady_When_Swapping()
+    {
+        // The rename of app is the one a locked file fails, so app.old is only set aside, and only removed once ready.
+        AssertInOrder(
+            MainFlow(),
+            "-NewName 'app.old.prev'",
+            "$script:OldParked = $true",
+            "-NewName 'app.old'",
+            "-NewName 'app'",
+            "Wait-Ready",
+            "Remove-Item -LiteralPath $appOldPrev");
+        Assert.DoesNotContain("Remove-Item -LiteralPath $appOld ", MainFlow(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_PutTheParkedVersionBack_When_RestoringThePrevious()
+    {
+        // In a finally: the rename of app can fail with nothing replaced, and Stop-Api can throw.
+        var restore = FunctionBody("Restore-Previous");
+        var parked = FunctionBody("Restore-ParkedOld");
+
+        AssertInOrder(restore, "Stop-Api", "finally", "Restore-ParkedOld", "Start-Api");
+        Assert.Contains("-NewName 'app.old'", parked, StringComparison.Ordinal);
+        Assert.Contains("$script:OldParked", parked, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_NoteALeftoverAndClearItBeforeStopping_When_AnEarlierRunWasInterrupted()
+    {
+        Assert.Contains("Test-Path -LiteralPath $appOldPrev", FunctionBody("Test-Preflight"), StringComparison.Ordinal);
+        Assert.Contains("from an interrupted run", FunctionBody("Test-Preflight"), StringComparison.Ordinal);
+        AssertInOrder(MainFlow(), "Clear-LeftoverPrevious", "Stop-Api", "-NewName 'app.old.prev'");
+    }
+
+    [Fact]
+    public void Should_RefuseARollbackWithoutTheOldProgram_When_ReadingDeploy()
+    {
+        var preflight = FunctionBody("Test-Preflight");
+
+        Assert.Contains("if ($Rollback) {\r\n        if (-not (Test-Path -LiteralPath $appOld)) {".ReplaceLineEndings(), preflight.ReplaceLineEndings(), StringComparison.Ordinal);
+        Assert.Contains("install-dashboard.ps1 -Rollback", preflight, StringComparison.Ordinal);
+        Assert.DoesNotContain("-not (Test-Path -LiteralPath $dashboardOld)", preflight, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_ReportTheFailedChecks_When_ReadyAnswers503()
+    {
+        var read = FunctionBody("Get-FailedChecks");
+
+        Assert.Contains("Get-FailedChecks $_.Exception", FunctionBody("Wait-Ready"), StringComparison.Ordinal);
+        Assert.Contains("GetResponseStream()", read, StringComparison.Ordinal);
+        Assert.Contains("-not $_.ok -and $_.severity -eq 'error'", read, StringComparison.Ordinal);
+        // Strict mode throws on $_.Exception.Response for an exception without it, which would end Wait-Ready.
+        Assert.Contains("PSObject.Properties['Response']", read, StringComparison.Ordinal);
+        AssertInOrder(read, "try {", "catch { return '' }");
+    }
+
+    [Fact]
+    public void Should_RefuseARelativeClientsPath_When_ReadingDeploy()
+    {
+        // Paths:Clients defaults to clients.json in the program folder, which the swap moves into app.old.
+        var preflight = FunctionBody("Test-Preflight");
+
+        Assert.Contains("$settings.Paths.Clients", preflight, StringComparison.Ordinal);
+        Assert.Contains("Paths.Clients in", preflight, StringComparison.Ordinal);
+        Assert.Contains("must be an absolute path", preflight, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("DryRunDefault")]
     [InlineData("New-NetFirewallRule")]

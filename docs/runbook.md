@@ -77,7 +77,7 @@ Copy `rules.json` (start from `samples/rules.json`) to `C:\qb-autopost\rules.jso
    - If a Hermes container still exists from before, stop and disable it (`docker compose down` in `deploy\hermes`, then disable the Docker service or the WSL distribution's autostart). **Docker is no longer needed** on this server.
    - Restart the API afterwards so it reads the variables, then check `GET /api/v1/health/hermes` (it now pings OpenRouter; section 8.1).
 2. `deploy/start-all.ps1` starts or verifies the PostgreSQL service, starts `C:\qb-autopost\app\QbAutopost.Api.exe` (`-AppExe`) unless it already runs, then waits for `GET /api/v1/health/ready` = 200. It no longer starts Docker or a model container. The script holds no key, so it can only call the two key-free routes (`/api/v1/health/hermes` needs `health:read` - use `scripts\qb-server-check.ps1 -Step health` for the dependency checks). Exit 0 = the API is ready; exit 1 = the API could not be started or never became ready. It writes `C:\qb-autopost\logs\start-all-yyyyMMdd.log` and never reads a key.
-3. `deploy/install-task.ps1` (run once as the auto-logon account, in an elevated PowerShell) registers the task `QbAutopost`: at logon of that account, 60 s delay, **interactive** session, limited rights, no password stored, no time limit, a second start ignored. Pass start-all options with `-StartAllArguments '-SkipPostgres'`; remove it with `-Unregister`.
+3. `deploy/install-task.ps1` (run once from an administrator's elevated PowerShell, with `-UserId '<MACHINE>\<account>'` when the auto-logon account is not an administrator) registers the task `QbAutopost`: at logon of that account, 60 s delay, **interactive** session, limited rights, no password stored, no time limit, a second start ignored. Pass start-all options with `-StartAllArguments '-SkipPostgres'`; remove it with `-Unregister`.
 4. Both scripts accept `-WhatIf` (prints what would happen, changes nothing). Test the task with `Start-ScheduledTask -TaskName QbAutopost`, then sign out and in once.
 
 ### 2.5 Going live and more than one company
@@ -922,7 +922,14 @@ step 12 passes. Upload is on from day one, knowing statement text goes to OpenRo
 
 **Before step 1.** `deploy.ps1` deploys `main` of both repos (the API and the dashboard), so `main` of each must hold the code to be deployed: committed, pushed and merged first. That is the owner's decision under each repo's commit rules; the script does not do it.
 
-1. Install Git, Node 22 and the .NET 8 SDK; sign in to GitHub; clone both repos into `C:\qb-autopost\src`.
+1. Install Git, Node 22 or newer and the .NET 8 SDK; sign in to GitHub; clone both repos into `C:\qb-autopost\src`, so the
+   folders are `qbautopost` and `qbpost_dashboard`:
+
+   ```
+   git clone <API repo URL> C:\qb-autopost\src\qbautopost
+   git clone <dashboard repo URL> C:\qb-autopost\src\qbpost_dashboard
+   ```
+
 2. Leave QuickBooks open on the company file, and keep it that way.
 3. Run `install-postgres.ps1` (10.2): it creates the database, roles, connection variables, JWT signing key and the daily
    backup task.
@@ -934,7 +941,8 @@ step 12 passes. Upload is on from day one, knowing statement text goes to OpenRo
 6. Set the secrets as environment variables: `QBAUTOPOST__Api__ApiKey`, the bootstrap admin email and password,
    `OpenRouter__ApiKey`, `OpenRouter__Enabled=true` and `Extraction__Enabled=true`. Remove the bootstrap password after the
    first sign-in (10.4). Verify upload with `docs/testing/T-1215.server-checklist.md`.
-7. Set up auto-logon for the account and run `install-task.ps1` as that account, elevated.
+7. Set up auto-logon for the account and run `install-task.ps1` from an administrator's elevated PowerShell, with
+   `-UserId '<MACHINE>\<account>'` when the account is not an administrator.
 8. Run `deploy.ps1` for the first version; because the dashboard folder is new, it starts the API after installing it.
 9. Approve the QuickBooks certificate dialog on the server's desktop as section 4 sets out (QuickBooks Admin login, then
    `scripts\qb-server-check.ps1`).
@@ -946,13 +954,13 @@ step 12 passes. Upload is on from day one, knowing statement text goes to OpenRo
 
 ### 14.2 Every release
 
-Run as the auto-logon account, at the desktop or over Remote Desktop (the API must run in that desktop session), in a
-normal PowerShell window, no elevation:
+Run from `C:\qb-autopost\src\qbautopost` as the auto-logon account, at the desktop or over Remote Desktop (the API must run
+in that desktop session), in a normal PowerShell window, no elevation:
 
 ```
 .\deploy\deploy.ps1 -WhatIf     # dry run: preflight problems are warnings, nothing changes
 .\deploy\deploy.ps1             # release; asks to confirm
-.\deploy\deploy.ps1 -Rollback   # previous version
+.\deploy\deploy.ps1 -Rollback   # previous version; refuses without app.old
 ```
 
 Other switches: `-Yes` (skip the confirmation), `-Runtime win-x86`, `-Branch`. Deploy when nobody is posting: an
@@ -963,6 +971,8 @@ previous version back.
   deletes them: clear old ones by hand.
 - **A rollback does not undo a migration.** The pre-deploy dump is the way back (restore per 10.5).
 - If `deploy.ps1` itself changed in the pull, it stops: run it again.
+- **`app.old.prev` left behind** means an interrupted run. The preflight says so; the next release clears it. Only when
+  `app.old` is missing and you need `-Rollback` now, rename `app.old.prev` to `app.old` by hand first.
 
 ### 14.3 nginx contract (the owner's work)
 

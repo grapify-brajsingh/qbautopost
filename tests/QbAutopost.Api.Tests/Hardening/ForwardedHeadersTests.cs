@@ -19,8 +19,9 @@ public sealed class ForwardedHeadersTests
     [Fact]
     public async Task Should_BlockOnlyTheGuessingClient_When_TrustIsOnAndPeerIsLoopback()
     {
-        var (_, second) = await GuessThenSecondClient("127.0.0.1", trust: true);
+        var (first, second) = await GuessThenSecondClient("127.0.0.1", trust: true);
 
+        Assert.Equal(HttpStatusCode.TooManyRequests, first);
         Assert.Equal(HttpStatusCode.Unauthorized, second);
     }
 
@@ -40,7 +41,10 @@ public sealed class ForwardedHeadersTests
         Assert.Equal(HttpStatusCode.TooManyRequests, second);
     }
 
-    /// <summary>Sends <see cref="Limit"/> + 1 bad keys as 10.0.0.1, then one as 10.0.0.2; returns the last answers of each.</summary>
+    /// <summary>
+    /// Sends <see cref="Limit"/> + 2 bad keys as 10.0.0.1, then one as 10.0.0.2; returns the last answers of each.
+    /// The brake trips on failure <see cref="Limit"/> + 1, which still answers 401, so the guess after it is the 429.
+    /// </summary>
     private static async Task<(HttpStatusCode First, HttpStatusCode Second)> GuessThenSecondClient(string peer, bool trust)
     {
         using var factory = new ApiFactory();
@@ -53,7 +57,7 @@ public sealed class ForwardedHeadersTests
         using var client = host.CreateClient();
 
         var first = HttpStatusCode.OK;
-        for (var i = 0; i <= Limit; i++)
+        for (var i = 0; i <= Limit + 1; i++)
         {
             first = await Send(client, "10.0.0.1");
         }

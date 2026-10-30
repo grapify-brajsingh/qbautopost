@@ -6,13 +6,15 @@
 .DESCRIPTION
   The task runs in the INTERACTIVE session of the auto-logon account, because the QuickBooks SDK needs a desktop
   session. It is never a Windows service, never "run whether the user is logged on or not", and stores no password.
-  Run it once, as that account, from an elevated PowerShell (registering a logon trigger needs administrator rights).
+  Run it once from an administrator's elevated PowerShell (registering a logon trigger needs administrator rights).
+  When that account is not an administrator, name it: -UserId 'MACHINE\account'.
   Use -WhatIf for a dry run: it prints the task it would register and changes nothing.
   Exit codes: 0 registered, removed or dry run; 1 start-all.ps1 not found or StartAllArguments contains -WhatIf.
 
 .EXAMPLE
   .\deploy\install-task.ps1 -WhatIf
   .\deploy\install-task.ps1
+  .\deploy\install-task.ps1 -UserId 'MACHINE\account'
   .\deploy\install-task.ps1 -StartAllArguments '-SkipPostgres'
   .\deploy\install-task.ps1 -Unregister
 #>

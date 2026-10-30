@@ -115,6 +115,7 @@ nothing), strict mode, a log under `C:\qb-autopost\logs`, exit 0 or 1, never pri
 | `C:\qb-autopost\src\qbpost_dashboard` | clone of the dashboard repo |
 | `C:\qb-autopost\appsettings.Production.json` | the server's own settings, outside the swapped folders |
 | `C:\qb-autopost\app`, `app.new`, `app.old` | live, staged and previous program |
+| `C:\qb-autopost\app.old.prev` | the older `app.old`, during a release only; a leftover means an interrupted run |
 | `C:\qb-autopost\dashboard`, `dashboard.old` | as `install-dashboard.ps1` |
 
 **Parameters**: `-Runtime win-x64|win-x86` (default `win-x64`), `-Branch` (default `main`, for both repos), `-Rollback`,
@@ -125,9 +126,12 @@ nothing), strict mode, a log under `C:\qb-autopost\logs`, exit 0 or 1, never pri
 1. **Preflight, changes nothing.** The script runs as the auto-logon account, at the desktop or over Remote Desktop (my
    call: the task, the API and the clones then share one account, with no elevation), and refuses any other account. The
    scheduled task `QbAutopost` must exist.
-   `git`, `node` 22, `npm` and the .NET 8 SDK are present; the PostgreSQL service exists;
-   `appsettings.Production.json` exists; `QBAUTOPOST__Database__ConnectionString` and
-   `QBAUTOPOST_MIGRATION_CONNECTION` are set; both clones have a clean tree.
+   `git`, `node` 22 or newer, `npm` and the .NET 8 SDK are present; the PostgreSQL service exists;
+   `appsettings.Production.json` exists and its `Paths:Clients` is an absolute path (otherwise a release moves the API
+   callers' key hashes into `app.old`); `QBAUTOPOST__Database__ConnectionString` and
+   `QBAUTOPOST_MIGRATION_CONNECTION` are set; both clones have a clean tree. A leftover `app.old.prev` is noted, not
+   refused: after the confirmation of step 4 a release deletes it when `app.old` exists, and otherwise renames it back to
+   `app.old`.
 2. **Fetch.** `git pull --ff-only` on `-Branch` in both clones. Print the old and new commit of each.
 3. **Build, API still live.** In the dashboard: `npm ci`, `npm run build`. In the API:
    `dotnet publish src/QbAutopost.Api -c Release -r <Runtime> --self-contained false -o C:\qb-autopost\app.new`, delete
@@ -138,14 +142,19 @@ nothing), strict mode, a log under `C:\qb-autopost\logs`, exit 0 or 1, never pri
 6. **Back up and migrate.** Run `backup-postgres.ps1 -BackupFolder <QuickBooks:BackupFolder from
    appsettings.Production.json>`, then `apply-migrations.ps1`. Failure restarts the old program,
    untouched, and exits 1.
-7. **Swap.** `app` becomes `app.old`, `app.new` becomes `app`, then `install-dashboard.ps1 -Source <dist>`.
+7. **Swap.** `app.old` becomes `app.old.prev`, `app` becomes `app.old`, `app.new` becomes `app`, then
+   `install-dashboard.ps1 -Source <dist>`. The rename of `app` is the one a locked file fails, so the only rollback
+   target is set aside, not deleted.
 8. **Start and check.** `Start-ScheduledTask -TaskName QbAutopost`, so the API runs in the desktop session, then wait for
-   `GET /api/v1/health/ready` = 200 and for its `database` check to be ok.
-9. **On failure at 8,** restore `app.old` and `install-dashboard.ps1 -Rollback`, start again, report it, exit 1. A
+   `GET /api/v1/health/ready` = 200 and for its `database` check to be ok. On a 503 the message names every failed check
+   of severity `error`. Once ready, delete `app.old.prev`; a failure of that delete is only a warning.
+9. **On failure at 7 or 8,** restore `app.old` and `install-dashboard.ps1 -Rollback`, rename `app.old.prev` back to
+   `app.old`, start again, report it, exit 1. A
    migration is not undone: migrations must stay compatible with the previous release, or the rollback needs a restore
    from the backup of step 6, which the message says.
 
-`-Rollback` alone does steps 5, 9 and 8 for the previous version.
+`-Rollback` alone does steps 5, 9 and 8 for the previous version. It refuses unless `app.old` exists; a dashboard-only
+rollback is `install-dashboard.ps1 -Rollback`.
 
 The script never touches `rules.json`, `ledger.json`, `clients.json`, the jobs, the company file, nginx, the firewall or
 any machine variable.
@@ -154,7 +163,7 @@ any machine variable.
 
 Added to the runbook as a new section, in this order:
 
-1. Install Git, Node 22 and the .NET 8 SDK; sign in to GitHub; clone both repos into `C:\qb-autopost\src`.
+1. Install Git, Node 22 or newer and the .NET 8 SDK; sign in to GitHub; clone both repos into `C:\qb-autopost\src`.
 2. Leave QuickBooks open on the company file, and keep it that way.
 3. Run `install-postgres.ps1` (section 10.2): it creates the database, roles, connection variables, JWT signing key and the
    daily backup task.
@@ -167,7 +176,8 @@ Added to the runbook as a new section, in this order:
    `OpenRouter__ApiKey`, `OpenRouter__Enabled=true` and `Extraction__Enabled=true`. Upload is on from day one by the
    owner's decision, knowing statement text goes to OpenRouter; without n8n it is the only way statements get in. Remove
    the bootstrap password after first sign-in (runbook 10.4). Verify upload with `docs/testing/T-1215.server-checklist.md`.
-7. Set up auto-logon for the account and run `install-task.ps1` as that account, elevated.
+7. Set up auto-logon for the account and run `install-task.ps1` from an administrator's elevated PowerShell, with
+   `-UserId '<MACHINE>\<account>'` when the account is not an administrator.
 8. Run `deploy.ps1` for the first version; because the dashboard folder is new, it starts the API after installing it.
 9. Approve the QuickBooks certificate dialog on the server's desktop, as runbook section 4 sets out (QuickBooks Admin
    login, then `scripts\qb-server-check.ps1`).
