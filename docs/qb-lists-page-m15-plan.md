@@ -56,5 +56,5 @@ Then from the dashboard repo: `npx playwright test -c playwright.integration.con
 - [x] T-1500 tracker
 - [x] T-1501 store
 - [x] T-1502 route
-- [ ] T-1503 seeded simulated company
+- [x] T-1503 seeded simulated company
 - [ ] T-1504 runbook, stack check

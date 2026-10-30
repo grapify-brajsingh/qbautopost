@@ -184,7 +184,8 @@ builder.Services.AddSingleton(sp =>
     return QbConnection.Create(
         sp.GetRequiredService<IOptions<AppSettings>>().Value,
         sp.GetRequiredService<IHostEnvironment>(),
-        step => sdkLog.LogInformation("QuickBooks SDK: {Step}", step));
+        step => sdkLog.LogInformation("QuickBooks SDK: {Step}", step),
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger<QbConnection>());
 });
 // T-903 (FR-A-3): the COM probe only where the SDK can exist; everywhere else an honest "unavailable" answer.
 builder.Services.AddSingleton<IQbSdkProbe>(sp =>
@@ -398,7 +399,11 @@ var app = builder.Build();
 try
 {
     var settings = app.Services.GetRequiredService<IOptions<AppSettings>>().Value;
-    StartupLog.Write(app.Logger, settings, app.Environment);
+    // M15 §4: in simulated mode the connection is made now, so its seed (or its one Warning) is part of the startup lines.
+    var simulated = QbConnection.SelectMode(settings.QuickBooks.Fake, OperatingSystem.IsWindows()) == QbConnectionMode.Simulated
+        ? app.Services.GetRequiredService<QbConnection>()
+        : null;
+    StartupLog.Write(app.Logger, settings, app.Environment, simulated);
 
     RequireApiKey(app);
 
