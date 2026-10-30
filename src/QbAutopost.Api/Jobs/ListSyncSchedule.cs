@@ -75,13 +75,14 @@ public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource s
     /// <see cref="InFlight"/> and <paramref name="enqueue"/> is called, under this schedule's lock, with the work that
     /// runs <paramref name="sync"/>; it must only <b>enqueue</b> that work on the worker (never run it inline), so the
     /// worker, which checks this lock before a scheduled attempt, always finds the item already in its channel.
+    /// <paramref name="sync"/> answers null when it skipped the attempt, as a skipped scheduled attempt does.
     /// <para>
     /// The flight completes (result, fault, or cancellation) and is cleared inside that work, on the worker, before the
     /// worker moves on. A caller's own wait bound is applied by the caller; it never cancels the flight.
     /// </para>
     /// </summary>
     public (Task<ListSyncCompletion?> Flight, bool Joined) JoinOrStart(
-        Func<CancellationToken, Task<ListSyncCompletion>> sync, Action<Func<CancellationToken, Task<ListSyncCompletion>>> enqueue)
+        Func<CancellationToken, Task<ListSyncCompletion?>> sync, Action<Func<CancellationToken, Task<ListSyncCompletion?>>> enqueue)
     {
         ArgumentNullException.ThrowIfNull(sync);
         ArgumentNullException.ThrowIfNull(enqueue);
@@ -182,8 +183,8 @@ public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource s
     }
 
     /// <summary>The work of one dashboard flight, on the worker: completes the flight, then clears it.</summary>
-    private async Task<ListSyncCompletion> RunFlightAsync(
-        TaskCompletionSource<ListSyncCompletion?> flight, Func<CancellationToken, Task<ListSyncCompletion>> sync, CancellationToken ct)
+    private async Task<ListSyncCompletion?> RunFlightAsync(
+        TaskCompletionSource<ListSyncCompletion?> flight, Func<CancellationToken, Task<ListSyncCompletion?>> sync, CancellationToken ct)
     {
         try
         {

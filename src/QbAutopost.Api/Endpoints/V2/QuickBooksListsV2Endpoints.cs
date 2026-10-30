@@ -1,6 +1,6 @@
-using System.Globalization;
 using Microsoft.Extensions.Options;
 using QbAutopost.Api.Configuration;
+using QbAutopost.Api.Database;
 using QbAutopost.Api.Jobs;
 using QbAutopost.Api.SavedRequests;
 using QbAutopost.Api.Security;
@@ -77,7 +77,6 @@ public static class QuickBooksListsV2Endpoints
     public const string TimeoutType = "sync-timeout";
     public const string StoppingType = "api-stopping";
 
-    public const int DefaultHistoryPageSize = 25;
     public const int MaxHistoryPageSize = 100;
 
     private static readonly string[] HistoryParameters = ["trigger", "outcome", "page", "pageSize"];
@@ -85,8 +84,8 @@ public static class QuickBooksListsV2Endpoints
     public static IEndpointRouteBuilder MapQuickBooksListsV2Endpoints(this IEndpointRouteBuilder v2)
     {
         v2.MapGet("/quickbooks/lists", GetListsAsync);
-        v2.MapPost(ApiRoutes.ListSyncRoute, SyncAsync);
-        v2.MapGet(ApiRoutes.ListSyncHistoryRoute, HistoryAsync);
+        v2.MapPost(ApiRoutes.ListSyncRoute, SyncAsync).RequireDatabaseWhenConfigured();
+        v2.MapGet(ApiRoutes.ListSyncHistoryRoute, HistoryAsync).RequireDatabaseWhenConfigured();
         return v2;
     }
 
@@ -149,24 +148,13 @@ public static class QuickBooksListsV2Endpoints
             return false;
         }
 
-        var page = 1;
-        if (q.TryGetValue("page", out var pageText)
-            && (!int.TryParse(pageText.ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out page) || page < 1))
+        if (V2QueryParser.Paging(q, MaxHistoryPageSize) is not { } paging)
         {
-            error = "page must be 1 or more.";
+            error = $"page must be 1 or more and pageSize between 1 and {MaxHistoryPageSize}.";
             return false;
         }
 
-        var pageSize = DefaultHistoryPageSize;
-        if (q.TryGetValue("pageSize", out var sizeText)
-            && (!int.TryParse(sizeText.ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out pageSize)
-                || pageSize < 1 || pageSize > MaxHistoryPageSize))
-        {
-            error = $"pageSize must be between 1 and {MaxHistoryPageSize}.";
-            return false;
-        }
-
-        query = new ListSyncQuery(triggers, outcomes, page, pageSize);
+        query = new ListSyncQuery(triggers, outcomes, paging.Page, paging.PageSize);
         return true;
     }
 
@@ -210,7 +198,8 @@ public static class QuickBooksListsV2Endpoints
 
     /// <summary>
     /// M14 §7.2. Order: the presence guard (never start QuickBooks), then join the sync in flight or queue one on the
-    /// worker, then wait at most <c>Api:SyncPostTimeoutSeconds</c>. Not an audit-feed event (Q-121).
+    /// worker, which checks again when its turn comes, then wait at most <c>Api:SyncPostTimeoutSeconds</c>. Not an
+    /// audit-feed event (Q-121).
     /// </summary>
     private static async Task<IResult> SyncAsync(
         HttpContext http,
@@ -226,17 +215,14 @@ public static class QuickBooksListsV2Endpoints
         var log = loggers.CreateLogger(typeof(QuickBooksListsV2Endpoints));
         var (trigger, requestedBy) = WhoAsks(http);
 
-        if (!IsOpen(presence, log))
+        if (!ListSyncGuard.IsOpen(presence, log))
         {
-            await RecordSkippedAsync(sync, trigger, requestedBy, log, ct);
-            log.LogInformation(
-                "QuickBooks lists sync ({Trigger}, by {RequestedBy}): {Outcome} ({Reason})",
-                Lower(trigger), requestedBy ?? "unknown", Lower(ListSyncOutcome.Skipped), ListSyncReasons.QuickBooksNotOpen);
+            await SkipAsync(sync, trigger, requestedBy, log, ct);
             return NotOpen();
         }
 
         var (flight, joined) = schedule.JoinOrStart(
-            token => RunLoggedAsync(sync, trigger, requestedBy, log, token),
+            token => RunLoggedAsync(sync, presence, trigger, requestedBy, log, token),
             work => Observe(queue.RunExclusiveAsync(SyncLabel, work, CancellationToken.None)));
         if (joined)
         {
@@ -278,7 +264,7 @@ public static class QuickBooksListsV2Endpoints
 
         if (done is null)
         {
-            // A scheduled attempt this request joined was skipped: QuickBooks closed between the two checks.
+            // The attempt that ran was skipped: QuickBooks closed between the checks.
             return NotOpen();
         }
 
@@ -344,37 +330,27 @@ public static class QuickBooksListsV2Endpoints
         return (ListSyncTrigger.Api, client is null ? caller?.Id : client.Name ?? client.Id);
     }
 
-    /// <summary>§6: never start QuickBooks. A check that itself fails counts as "not open", as for the schedule (Q-122).</summary>
-    private static bool IsOpen(IQbPresence presence, ILogger log)
+    private static async Task SkipAsync(QbListSync sync, ListSyncTrigger trigger, string? requestedBy, ILogger log, CancellationToken ct)
     {
-        try
-        {
-            return presence.IsCompanyOpen();
-        }
-        catch (Exception ex)
-        {
-            log.LogWarning(ex, "QuickBooks presence check failed; the list sync is refused as not open");
-            return false;
-        }
+        await ListSyncGuard.RecordSkippedAsync(sync, trigger, requestedBy, log, ct);
+        log.LogInformation(
+            "QuickBooks lists sync ({Trigger}, by {RequestedBy}): {Outcome} ({Reason})",
+            Lower(trigger), requestedBy ?? "unknown", Lower(ListSyncOutcome.Skipped), ListSyncReasons.QuickBooksNotOpen);
     }
 
-    private static async Task RecordSkippedAsync(QbListSync sync, ListSyncTrigger trigger, string? requestedBy, ILogger log, CancellationToken ct)
+    /// <summary>
+    /// The sync itself, on the worker, with the §12 line for its outcome. §6: it may have waited behind a job, so
+    /// QuickBooks is checked again here; null when it has closed meanwhile.
+    /// </summary>
+    private static async Task<ListSyncCompletion?> RunLoggedAsync(
+        QbListSync sync, IQbPresence presence, ListSyncTrigger trigger, string? requestedBy, ILogger log, CancellationToken ct)
     {
-        try
+        if (!ListSyncGuard.IsOpen(presence, log))
         {
-            await sync.RecordSkippedAsync(trigger, requestedBy, ListSyncReasons.QuickBooksNotOpen, ct);
+            await SkipAsync(sync, trigger, requestedBy, log, ct);
+            return null;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
-        {
-            // The answer is still 409; the store has logged a database failure.
-            log.LogInformation("QuickBooks lists sync: the skipped attempt could not be recorded: {Error}", ex.Message);
-        }
-    }
 
-    /// <summary>The sync itself, on the worker, with the §12 line for its outcome.</summary>
-    private static async Task<ListSyncCompletion> RunLoggedAsync(
-        QbListSync sync, ListSyncTrigger trigger, string? requestedBy, ILogger log, CancellationToken ct)
-    {
         try
         {
             var completion = await sync.SyncWithRunAsync(trigger, requestedBy, ct);

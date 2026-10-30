@@ -25,6 +25,7 @@ public sealed class EfQbListsStore(IDbContextFactory<QbAutopostDbContext> factor
     public async Task RecordAsync(ListSyncRun run, QbLists? lists, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(run);
+        ListSyncRun.RequireLists(run, lists);
 
         await using var db = await factory.CreateDbContextAsync(ct);
         await using var transaction = await db.Database.BeginTransactionAsync(ct);

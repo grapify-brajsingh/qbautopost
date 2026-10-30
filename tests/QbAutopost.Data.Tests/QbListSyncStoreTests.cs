@@ -269,6 +269,17 @@ public sealed class QbListSyncStoreTests(PostgresFixture postgres) : IClassFixtu
     }
 
     [PostgresFact]
+    public async Task Should_RefuseTheRun_When_AnOkRunCarriesNoLists()
+    {
+        await using var db = await Db.CreateAsync(postgres);
+        var store = db.Store();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => store.RecordAsync(OkRun(0, Lists("A")), null, CancellationToken.None));
+
+        Assert.Equal(0, await db.ScalarAsync("SELECT count(*) FROM qb_list_syncs"));
+    }
+
+    [PostgresFact]
     public async Task Should_ReturnAttemptsNewestFirstWithCurrentOk_When_Listing()
     {
         await using var db = await Db.CreateAsync(postgres);

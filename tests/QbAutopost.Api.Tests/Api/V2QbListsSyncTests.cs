@@ -303,6 +303,24 @@ public sealed class V2QbListsSyncTests : IDisposable
         Assert.Equal(ListSyncReasons.QuickBooksNotOpen, last.GetProperty("reason").GetString());
     }
 
+    /// <summary>§6: the sync may wait behind a job, and QuickBooks can close meanwhile; the worker must not start it.</summary>
+    [Fact]
+    public async Task Should_Answer409AndNotCallQuickBooks_When_QuickBooksClosesBeforeTheWorkerRunsTheSync()
+    {
+        var presence = new SequencePresence(true, false);
+        using var host = _factory.WithWebHostBuilder(b => b.ConfigureTestServices(s => Replace<IQbPresence>(s, presence)));
+        using var editor = User(host, DashboardRoles.Editor);
+
+        using var response = await editor.PostAsync(Sync, null).WaitAsync(Patience);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(QuickBooksListsV2Endpoints.NotOpenType, (await response.ReadProblemAsync()).GetProperty("type").GetString());
+        Assert.Equal(2, presence.Calls);
+        Assert.Empty(_factory.Gateway.Requests);
+        var row = Source(host).LastAttempt!;
+        Assert.Equal((ListSyncTrigger.Dashboard, ListSyncOutcome.Skipped, ListSyncReasons.QuickBooksNotOpen), (row.Trigger, row.Outcome, row.Reason));
+    }
+
     [Fact]
     public async Task Should_Answer503KeepTheListsAndRecordFailed_When_QuickBooksIsUnavailable()
     {
@@ -470,10 +488,10 @@ public sealed class V2QbListsSyncTests : IDisposable
     public async Task Should_StartOneFlightAndJoinIt_When_TwoCallersAskTogether()
     {
         var schedule = NewSchedule();
-        var enqueued = new List<Func<CancellationToken, Task<ListSyncCompletion>>>();
+        var enqueued = new List<Func<CancellationToken, Task<ListSyncCompletion?>>>();
         var result = Done(1);
 
-        var (first, joinedFirst) = schedule.JoinOrStart(_ => Task.FromResult(result), enqueued.Add);
+        var (first, joinedFirst) = schedule.JoinOrStart(_ => Task.FromResult<ListSyncCompletion?>(result), enqueued.Add);
         var (second, joinedSecond) = schedule.JoinOrStart(_ => throw new InvalidOperationException("never started"), enqueued.Add);
 
         Assert.Equal((false, true), (joinedFirst, joinedSecond));
@@ -492,7 +510,7 @@ public sealed class V2QbListsSyncTests : IDisposable
     public async Task Should_FaultTheFlightAndClearIt_When_TheSyncFails()
     {
         var schedule = NewSchedule();
-        Func<CancellationToken, Task<ListSyncCompletion>>? work = null;
+        Func<CancellationToken, Task<ListSyncCompletion?>>? work = null;
         var (flight, _) = schedule.JoinOrStart(_ => throw new QuickBooksBusyException("busy"), w => work = w);
 
         await Assert.ThrowsAsync<QuickBooksBusyException>(() => work!(CancellationToken.None));
@@ -507,7 +525,7 @@ public sealed class V2QbListsSyncTests : IDisposable
         var schedule = NewSchedule();
 
         Assert.Throws<InvalidOperationException>(() =>
-            schedule.JoinOrStart(_ => Task.FromResult(Done(0)), _ => throw new InvalidOperationException("closed")));
+            schedule.JoinOrStart(_ => Task.FromResult<ListSyncCompletion?>(Done(0)), _ => throw new InvalidOperationException("closed")));
 
         Assert.Null(schedule.InFlight);
     }
@@ -517,8 +535,8 @@ public sealed class V2QbListsSyncTests : IDisposable
     public async Task Should_RefuseAScheduledAttempt_When_ADashboardFlightHoldsTheHandle()
     {
         var schedule = NewSchedule();
-        Func<CancellationToken, Task<ListSyncCompletion>>? work = null;
-        var (flight, _) = schedule.JoinOrStart(_ => Task.FromResult(Done(4)), w => work = w);
+        Func<CancellationToken, Task<ListSyncCompletion?>>? work = null;
+        var (flight, _) = schedule.JoinOrStart(_ => Task.FromResult<ListSyncCompletion?>(Done(4)), w => work = w);
 
         Assert.Null(schedule.BeginAttempt());
 

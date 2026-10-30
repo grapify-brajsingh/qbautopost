@@ -37,5 +37,6 @@ public static class Workers
         },
         gateway,
         clock,
-        lists);
+        lists,
+        (IQbListsSource)lists);
 }

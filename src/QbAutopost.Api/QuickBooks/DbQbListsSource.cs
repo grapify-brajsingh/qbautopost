@@ -18,7 +18,7 @@ public sealed class DbQbListsSource(
     ILogger<DbQbListsSource> log) : IQbListsStore, IQbListsSource
 {
     private readonly object _gate = new();
-    private State _state = new(QbLists.Empty, null);
+    private State _state = new(QbLists.Empty, null, false);
 
     public QbLists Current => Volatile.Read(ref _state).Lists;
 
@@ -26,7 +26,8 @@ public sealed class DbQbListsSource(
 
     /// <summary>
     /// Startup (M14 §3.3, §9): imports <c>qb-lists.json</c> if the database has no Ok row, then loads the current lists
-    /// and the last attempt. A database error leaves empty lists, is logged once at Error and does not stop startup.
+    /// and the last attempt. A database error leaves empty lists, is logged at Error and does not stop startup;
+    /// <see cref="EnsureLoadedAsync"/> tries again.
     /// </summary>
     public async Task InitializeAsync(CancellationToken ct)
     {
@@ -42,14 +43,21 @@ public sealed class DbQbListsSource(
 
             var current = await store.LoadCurrentAsync(ct) ?? QbLists.Empty;
             var last = await store.LastAttemptAsync(ct);
-            Swap(_ => new State(current, last));
+            // A sync recorded meanwhile is newer than this read: it keeps its lists.
+            Swap(s => s.Loaded ? s : new State(current, last, true));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Swap(_ => new State(QbLists.Empty, null));
-            log.LogError(ex, "QuickBooks lists could not be loaded from the database; starting with empty lists until a sync succeeds");
+            log.LogError(ex, "QuickBooks lists could not be loaded from the database; the lists stay empty until the database is back or a sync succeeds");
         }
     }
+
+    /// <summary>
+    /// Loads the lists if the startup load failed. Called by <c>DatabaseGate</c>'s recovery when the database first
+    /// answers, which is before any saved-request route can post against empty lists. No timer (CLAUDE.md).
+    /// </summary>
+    public Task EnsureLoadedAsync(CancellationToken ct) =>
+        Volatile.Read(ref _state).Loaded ? Task.CompletedTask : InitializeAsync(ct);
 
     public async Task RecordAsync(ListSyncRun run, QbLists? lists, CancellationToken ct)
     {
@@ -69,7 +77,7 @@ public sealed class DbQbListsSource(
         Swap(s =>
         {
             var replace = run.Outcome == ListSyncOutcome.Ok && lists is not null;
-            return new State(replace ? lists! : s.Lists, run);
+            return new State(replace ? lists! : s.Lists, run, s.Loaded || replace);
         });
     }
 
@@ -99,5 +107,5 @@ public sealed class DbQbListsSource(
         }
     }
 
-    private sealed record State(QbLists Lists, ListSyncRun? Last);
+    private sealed record State(QbLists Lists, ListSyncRun? Last, bool Loaded);
 }

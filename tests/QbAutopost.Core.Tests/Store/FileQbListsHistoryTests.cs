@@ -52,6 +52,17 @@ public sealed class FileQbListsHistoryTests : IDisposable
         await store.RecordAsync(run, run.Outcome == ListSyncOutcome.Ok ? Lists() : null, CancellationToken.None);
 
     [Fact]
+    public async Task Should_RefuseTheRun_When_AnOkRunCarriesNoLists()
+    {
+        var store = Store();
+        await RecordAsync(store, Run(0, ListSyncOutcome.Ok));
+
+        await Assert.ThrowsAsync<ArgumentException>(() => store.RecordAsync(Run(1, ListSyncOutcome.Ok), null, CancellationToken.None));
+
+        Assert.Equal(1, (await store.ListAttemptsAsync(All(), CancellationToken.None)).Total);
+    }
+
+    [Fact]
     public async Task Should_ReturnEmptyPage_When_NothingRecordedSinceStart()
     {
         var page = await Store().ListAttemptsAsync(All(), CancellationToken.None);

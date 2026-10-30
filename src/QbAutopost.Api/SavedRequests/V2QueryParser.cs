@@ -196,7 +196,7 @@ public static class V2QueryParser
     }
 
     /// <summary>(page, pageSize), or null when either is not a whole number in range.</summary>
-    private static (int Page, int PageSize)? Paging(IQueryCollection q, int maxPageSize)
+    internal static (int Page, int PageSize)? Paging(IQueryCollection q, int maxPageSize)
     {
         var page = 1;
         var pageSize = Math.Min(DefaultPageSize, maxPageSize);

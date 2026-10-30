@@ -28,11 +28,18 @@ public sealed class FileQbLists(string filePath, int historyRows = FileQbLists.D
 
     public ListSyncRun? LastAttempt => Volatile.Read(ref _last);
 
+    /// <summary>File mode: the answer is byte-identical to what v1 gave before M14; a file that exists counts as synced.</summary>
+    public QbListsStatus Status() =>
+        File.Exists(filePath)
+            ? new QbListsStatus(true, filePath)
+            : new QbListsStatus(false, $"{filePath} not found; run POST /api/v1/quickbooks/lists/sync");
+
     public Task RecordAsync(ListSyncRun run, QbLists? lists, CancellationToken ct)
     {
-        if (run.Outcome == ListSyncOutcome.Ok && lists is not null)
+        ListSyncRun.RequireLists(run, lists);
+        if (run.Outcome == ListSyncOutcome.Ok)
         {
-            _file.Save(lists);
+            _file.Save(lists!);
         }
 
         lock (_gate)

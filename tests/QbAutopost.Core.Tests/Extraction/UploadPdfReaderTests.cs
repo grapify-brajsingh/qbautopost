@@ -73,6 +73,21 @@ public class UploadPdfReaderTests
     }
 
     [Fact]
+    public void Should_NameTheShortPages_When_OnlySomePagesAreShort()
+    {
+        var result = UploadPdfReader.Read(Build(Long, "short", Long, "tiny"), 10);
+
+        Assert.Equal(UploadPdfOutcome.Ok, result.Outcome);
+        Assert.Equal([2, 4], result.UnreadPages);
+    }
+
+    [Fact]
+    public void Should_NameNoPages_When_EveryPageIsRead()
+    {
+        Assert.Empty(UploadPdfReader.Read(Build(Long, Long), 10).UnreadPages!);
+    }
+
+    [Fact]
     public void Should_JoinPagesWithPageBreak_When_Ok()
     {
         var result = UploadPdfReader.Read(Build(Long, Long.Replace("one", "ONE")), 10);

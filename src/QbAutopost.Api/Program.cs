@@ -386,6 +386,12 @@ builder.Services.AddSingleton(sp =>
                 .RecoverInFlightAsync(sp.GetRequiredService<IClock>().UtcNow, ct);
             sp.GetRequiredService<ILogger<DatabaseGate>>()
                 .LogInformation("Saved-request recovery: {Count} interrupted post(s) marked unknown", moved);
+
+            // A database that was down at startup left the lists empty; load them before a route can post against them.
+            if (sp.GetService<DbQbListsSource>() is { } lists)
+            {
+                await lists.EnsureLoadedAsync(ct);
+            }
         });
 });
 builder.Services.AddHostedService<InFlightRecovery>();

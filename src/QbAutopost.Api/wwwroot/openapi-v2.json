@@ -7027,6 +7027,14 @@
               "pageCount": {
                 "type": "integer",
                 "format": "int32"
+              },
+              "unreadPages": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "description": "1-based pages under 40 non-space characters, left out of the extraction. Rows on them are missing: check them by hand."
               }
             }
           },
