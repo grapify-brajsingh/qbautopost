@@ -82,7 +82,7 @@ Copy `rules.json` (start from `samples/rules.json`) to `C:\qb-autopost\rules.jso
 
 ### 2.5 Going live and more than one company
 
-- A new install posts nothing by itself: `DryRunDefault` is `true`. Go live by setting it to `false` only after the shadow week (tracker T-803/T-804 checklists). A request's own `dryRun` always wins.
+- A new install posts nothing by itself: `DryRunDefault` is `true`, but the dashboard's Post button always posts (section 14). Go live by setting it to `false` only after the shadow week (tracker T-803/T-804 checklists). A request's own `dryRun` always wins.
 - One installation serves **one** company (`Company:*` holds one name and one file) and `start-all.ps1` starts one API. Running several companies on one server is not supported yet (tracker Q-44); until the owner decides, switch companies one at a time.
 
 ## 3. Configure
@@ -919,6 +919,8 @@ newer than `BackupMaxAgeHours`), a backup taken by hand before the first post, a
 step 12 passes. Upload is on from day one, knowing statement text goes to OpenRouter.
 
 ### 14.1 First install, once, in this order
+
+**Before step 1.** `deploy.ps1` deploys `main` of both repos (the API and the dashboard), so `main` of each must hold the code to be deployed: committed, pushed and merged first. That is the owner's decision under each repo's commit rules; the script does not do it.
 
 1. Install Git, Node 22 and the .NET 8 SDK; sign in to GitHub; clone both repos into `C:\qb-autopost\src`.
 2. Leave QuickBooks open on the company file, and keep it that way.
