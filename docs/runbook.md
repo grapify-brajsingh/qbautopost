@@ -380,6 +380,20 @@ never the names):
 SELECT * FROM qb_list_syncs ORDER BY id DESC LIMIT 20;
 ```
 
+The dashboard's **Lists** page reads the same history through `GET /api/v2/quickbooks/lists/syncs` (M15; `lists:read`,
+so every dashboard role, or an API key with `lists:read` or `qb:read`):
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:5080/api/v2/quickbooks/lists/syncs?outcome=failed,skipped&pageSize=50" -Headers @{ Authorization = "Bearer $token" }
+```
+
+Newest first, 25 per page by default (`page`, `pageSize` up to 100), filtered by `trigger`
+(`schedule,dashboard,api,import`) and `outcome` (`ok,failed,skipped`), comma-separated. Each item is what `lastSync`
+shows (trigger, outcome, reason, times, who pressed Sync now, the fixed message) plus its `id`, the counts of an `ok`
+attempt and `current: true` on the newest `ok` attempt, whose lists are in use. It never returns the raw error text:
+read that in the log or in the `error` column above. With **no database** the history is the attempts since the API
+started, kept in memory (the same cap, `HistoryRows`), and starts again from id 1 after a restart.
+
 **Turning it off.** Set the machine variable `QuickBooks__ListSync__IntervalMinutes=0` and restart the API. The lists
 then change only when somebody syncs by hand (`POST /api/v1/quickbooks/lists/sync`, or Sync now). Setting it back to 30
 restores the schedule.
@@ -872,7 +886,14 @@ dashboard against the real API.
 - Every secret is a throwaway value in that compose file and reaches the API as a `QBAUTOPOST__*` variable; nothing is
   baked into the image.
 - The QuickBooks name lists come from `docker/seed/qb-lists.json` in the dashboard repository, mounted read-only at
-  `/data/qb-lists.json` (the simulated company starts with empty lists).
+  `/data/qb-lists.json` (`Paths:QbLists`). Since M15 the simulated company is **seeded from that file** at startup
+  (accounts with their type, vendors, customers), so Sync now and the scheduled sync return the same names instead of
+  storing empty lists. The startup `QuickBooks:` line ends `simulated company: 19 accounts, 15 vendors, 6 customers from
+  /data/qb-lists.json`; a missing or unreadable file logs one Warning `simulated QuickBooks company has no lists: …` and
+  the company starts empty (startup goes on). The seed applies only in the simulated mode (Development/Testing), never
+  to the Desktop SDK.
+- To rebuild only the API after a change, keeping the database and its demo data:
+  `docker compose -f docker-compose.integration.yml up -d --build api` (no `down -v`).
 - To read real PDFs with the real model, set `OPENROUTER_BASE_URL=https://openrouter.ai/api/v1` and
   `OPENROUTER_API_KEY` before `docker compose up`.
 
