@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.AspNetCore.Identity;
@@ -479,6 +480,16 @@ try
         app.Logger.LogInformation("QbAutopost ready, listening on {Urls}", string.Join(", ", app.Urls)));
     app.Lifetime.ApplicationStopping.Register(() =>
         app.Logger.LogInformation("QbAutopost stopping; a job still running is closed by startup recovery next time"));
+
+    // T-1601: before everything that reads the caller's address or scheme. Known proxies stay at the framework default
+    // (loopback only), so a header from any other peer is ignored.
+    if (settings.Api.TrustForwardedHeaders)
+    {
+        app.UseForwardedHeaders(new ForwardedHeadersOptions
+        {
+            ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+        });
+    }
 
     if (TransportGuard.UseHsts(settings.Api))
     {
