@@ -34,7 +34,8 @@ public sealed class OperatorDocsTests
     private static readonly string[] Routes =
         ["/health", "/jobs", "/batches/", "/rules/", "/quickbooks/", "/qb/sync-lists"];
 
-    private const string Prefix = "/api/v1";
+    /// <summary>The versioned prefixes an operator document may put in front of a route (M14: the v2 lists routes).</summary>
+    private static readonly string[] Prefixes = ["/api/v1", "/api/v2"];
 
     [Theory]
     [MemberData(nameof(OperatorFiles))]
@@ -116,7 +117,7 @@ public sealed class OperatorDocsTests
                  i = text.IndexOf(route, i + 1, StringComparison.Ordinal))
             {
                 var before = text[..i];
-                if (!before.EndsWith(Prefix, StringComparison.Ordinal))
+                if (!Prefixes.Any(prefix => before.EndsWith(prefix, StringComparison.Ordinal)))
                 {
                     yield return $"line {text.Take(i).Count(c => c == '\n') + 1}: {route}";
                 }

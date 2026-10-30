@@ -13,3 +13,4 @@
 | [0009](0009-postgresql-for-saved-requests.md) | PostgreSQL for saved requests and dashboard users | accepted | 2026-10-27 |
 | [0010](0010-dashboard-users-and-jwt.md) | Dashboard users, Identity and short-lived JWTs | accepted | 2026-10-27 |
 | [0011](0011-openrouter-for-model-calls.md) | OpenRouter for all model calls; Hermes retired | accepted | 2026-10-28 |
+| [0012](0012-qb-lists-in-postgres-scheduled-sync.md) | QuickBooks lists in PostgreSQL, refreshed by a scheduled sync on the job worker | accepted | 2026-10-29 |

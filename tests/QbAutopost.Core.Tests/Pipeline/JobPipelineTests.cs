@@ -58,7 +58,8 @@ public sealed class JobPipelineTests : IDisposable
         TestInvoiceExtractor.Create(_ocr, _hermes),
         TestAccountChooser.Create(_hermes),
         new UnusedGateway(),
-        new SystemClock());
+        new SystemClock(),
+        new QbAutopost.Core.Store.FileQbLists(Path.Combine(_job.Root, "qb-lists.json")));
 
     private JobRecord Job() => new() { JobId = "2026-08-tropicana", Folder = _job.Folder, Status = JobStatus.Analysing, DryRun = true };
 

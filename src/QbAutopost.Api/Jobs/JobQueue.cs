@@ -95,6 +95,81 @@ public sealed class JobQueue
     }
 
     /// <summary>
+    /// M14 §5: the worker's bounded wait. Runs the next item through <paramref name="run"/> — with the same
+    /// <see cref="Depth"/>/<see cref="Outstanding"/> accounting as <see cref="ReadAllAsync"/> — and returns true; or
+    /// returns false when <paramref name="deadline"/> completes first and nothing is waiting. A null deadline means
+    /// "do not wait": only an item already in the channel is run.
+    /// <para>
+    /// An item that arrives together with the deadline still runs (a job always goes before the scheduled sync). The
+    /// deadline is handed a token that is cancelled once the wait is over, and must honour it. A deadline that faults,
+    /// or is cancelled by anything but this wait, throws <see cref="InvalidOperationException"/> (it is not "due").
+    /// </para>
+    /// </summary>
+    public async Task<bool> RunNextAsync(
+        Func<JobWorkItem, Task> run, Func<CancellationToken, Task>? deadline, CancellationToken ct)
+    {
+        if (!_channel.Reader.TryRead(out var item))
+        {
+            if (deadline is null)
+            {
+                return false;
+            }
+
+            using (var wait = CancellationTokenSource.CreateLinkedTokenSource(ct))
+            {
+                var ready = _channel.Reader.WaitToReadAsync(wait.Token).AsTask();
+                var due = deadline(wait.Token);
+                var first = await Task.WhenAny(ready, due);
+
+                // A deadline that ended first without running to completion (faulted, or cancelled by something other
+                // than this wait) is broken: it is not "due", and reporting it as such would sync on every pass.
+                var broken = first == due && !due.IsCompletedSuccessfully && !ct.IsCancellationRequested;
+                wait.Cancel();
+
+                // The deadline's own faults are observed here; only the channel wait is awaited to its end.
+                _ = due.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+                try
+                {
+                    await ready;
+                }
+                catch (OperationCanceledException)
+                {
+                    // The deadline came first, or the host is stopping (checked below).
+                }
+
+                ct.ThrowIfCancellationRequested();
+                if (broken)
+                {
+                    throw new InvalidOperationException("The wait for the scheduled list sync failed.", due.Exception?.GetBaseException());
+                }
+            }
+
+            // Nothing waiting now: the caller runs the sync, and an item that arrives after this read waits behind it
+            // (at most one sync, spec §5.7).
+            if (!_channel.Reader.TryRead(out item))
+            {
+                return false;
+            }
+        }
+
+        // As in ReadAllAsync: running, not waiting, from here; no longer in flight once run has returned.
+        Interlocked.Decrement(ref _depth);
+        try
+        {
+            await run(item);
+        }
+        finally
+        {
+            if (!item.ReleasesItself)
+            {
+                Interlocked.Decrement(ref _outstanding);
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Runs <paramref name="work"/> on the single worker, after any job ahead of it, and returns its result. The work
     /// runs to the end even if the caller stops waiting (<paramref name="ct"/> only ends the wait).
     /// </summary>
@@ -142,6 +217,19 @@ public sealed class JobQueue
 
         return (true, await result.Task.WaitAsync(ct));
     }
+
+    /// <summary>
+    /// M14 §5.9 (ADR-0012, with ADR-0008): the scheduled list sync claims the same exclusive slot
+    /// <see cref="TryRunExclusiveAsync"/> claims, in the same one interlocked step, so a caller who must not wait is
+    /// answered "busy" while the sync holds QuickBooks instead of waiting behind it. False when the slot is taken (a
+    /// caller holds it, or items are queued or running): the worker defers the attempt and runs that work first. Every
+    /// true must be followed by exactly one <see cref="ReleaseIdleClaim"/>. The claim is not an item: it never touches
+    /// <see cref="Depth"/>, and items enqueued meanwhile are counted as before.
+    /// </summary>
+    public bool TryClaimIdle() => Interlocked.CompareExchange(ref _outstanding, 1, 0) == 0;
+
+    /// <summary>Releases a claim taken by <see cref="TryClaimIdle"/>.</summary>
+    public void ReleaseIdleClaim() => Interlocked.Decrement(ref _outstanding);
 
     /// <summary>
     /// The work item both exclusive paths run: the caller's result, or their exception, back on the wire.

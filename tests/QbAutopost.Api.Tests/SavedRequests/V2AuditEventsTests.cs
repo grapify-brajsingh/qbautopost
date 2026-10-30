@@ -94,6 +94,62 @@ public sealed class V2AuditEventsTests : IDisposable
         Assert.Equal(JsonValueKind.Null, signIn.GetProperty("request").ValueKind);
     }
 
+    [Fact]
+    public async Task Should_NameSubjectUser_When_UserEventRead()
+    {
+        using var subject = _host.User(DashboardRoles.Editor, out var subjectId);
+        Store.AddUserAudit(new UserAuditEntry(
+            0, subjectId, "admin-1", "created", new JsonObject { ["role"] = "editor" }, DateTime.UtcNow.AddMinutes(-1)));
+
+        var created = await UserEventAsync("user-created");
+
+        var detail = created.GetProperty("detail");
+        Assert.Equal(subjectId, detail.GetProperty("userId").GetString());
+        Assert.Equal("editor", detail.GetProperty("role").GetString());
+        var (name, email) = SubjectOf(subjectId);
+        Assert.Equal(email, detail.GetProperty("email").GetString());
+        Assert.Equal(name, detail.GetProperty("displayName").GetString());
+    }
+
+    [Fact]
+    public async Task Should_KeepStoredEmail_When_DetailAlreadyHasOne()
+    {
+        using var subject = _host.User(DashboardRoles.Viewer, out var subjectId);
+        Store.AddUserAudit(new UserAuditEntry(
+            0, subjectId, "admin-1", "created", new JsonObject { ["email"] = "as-stored@example.com" }, DateTime.UtcNow.AddMinutes(-1)));
+
+        var created = await UserEventAsync("user-created");
+
+        Assert.Equal("as-stored@example.com", created.GetProperty("detail").GetProperty("email").GetString());
+        Assert.Equal(SubjectOf(subjectId).Name, created.GetProperty("detail").GetProperty("displayName").GetString());
+    }
+
+    [Fact]
+    public async Task Should_LeaveDetailAsStored_When_SubjectUnknown()
+    {
+        Store.AddUserAudit(new UserAuditEntry(
+            0, "nobody-knows-me", "admin-1", "disabled", null, DateTime.UtcNow.AddMinutes(-1)));
+
+        var disabled = await UserEventAsync("user-disabled");
+
+        var detail = disabled.GetProperty("detail");
+        Assert.Equal("nobody-knows-me", detail.GetProperty("userId").GetString());
+        Assert.False(detail.TryGetProperty("email", out _));
+        Assert.False(detail.TryGetProperty("displayName", out _));
+    }
+
+    private async Task<JsonElement> UserEventAsync(string action)
+    {
+        var body = await GetAsync(DashboardRoles.Admin, $"{Feed}?action={action}");
+        return body.GetProperty("items").EnumerateArray().Single();
+    }
+
+    private (string Name, string Email) SubjectOf(string userId)
+    {
+        var found = _host.Factory.Users.FindAsync([userId], CancellationToken.None).Result;
+        return (found[userId].Name, found[userId].Email!);
+    }
+
     [Theory]
     [InlineData("from=2026-10-01T00:00:00")]
     [InlineData("to=2026-10-01")]

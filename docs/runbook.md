@@ -49,11 +49,11 @@ Job states: `queued → analysing → ready → posting → posted | partial`, o
 | `C:\qb-autopost\app\` | the published program |
 | `C:\qb-autopost\rules.json` | mapping rules (§3.3) |
 | `C:\qb-autopost\ledger.json` | every posted line and batch (do not edit by hand) |
-| `C:\qb-autopost\qb-lists.json` | cached QuickBooks accounts / vendors / customers |
+| `C:\qb-autopost\qb-lists.json` | cached QuickBooks accounts / vendors / customers, **only when no database is configured**. With PostgreSQL the lists live in the database (`qb_list_syncs`, §5.4); the file is then read once to import and never written again |
 | `C:\qb-autopost\jobs.json` | index of known job folders |
 | `C:\qb-autopost\clients.json` | API callers: id, name, scopes and a **salted hash** of each key, never a key (§3.4) |
 | `C:\qb-autopost\api-batches\` | one folder per direct post: its request, state and qbXML, plus `idempotency.json` |
-| `C:\qb-autopost\qb-audit\` | qbXML copies of list syncs and undos without a job folder |
+| `C:\qb-autopost\qb-audit\` | qbXML copies of list syncs and undos without a job folder. A list-sync copy holds names and types only (the query asks for nothing else), replaced at each sync |
 | `C:\qb-autopost\logs\` | `qbautopost-yyyyMMdd.log`, one per day, 31 kept, **and** `audit-yyyyMMdd.jsonl`, 400 days (§8.7) |
 | `C:\qb-jobs\` | job folders (any location works; the API takes an absolute path — see `Paths:AllowedJobRoots`, §3.5) |
 
@@ -77,12 +77,12 @@ Copy `rules.json` (start from `samples/rules.json`) to `C:\qb-autopost\rules.jso
    - If a Hermes container still exists from before, stop and disable it (`docker compose down` in `deploy\hermes`, then disable the Docker service or the WSL distribution's autostart). **Docker is no longer needed** on this server.
    - Restart the API afterwards so it reads the variables, then check `GET /api/v1/health/hermes` (it now pings OpenRouter; section 8.1).
 2. `deploy/start-all.ps1` starts or verifies the PostgreSQL service, starts `C:\qb-autopost\app\QbAutopost.Api.exe` (`-AppExe`) unless it already runs, then waits for `GET /api/v1/health/ready` = 200. It no longer starts Docker or a model container. The script holds no key, so it can only call the two key-free routes (`/api/v1/health/hermes` needs `health:read` - use `scripts\qb-server-check.ps1 -Step health` for the dependency checks). Exit 0 = the API is ready; exit 1 = the API could not be started or never became ready. It writes `C:\qb-autopost\logs\start-all-yyyyMMdd.log` and never reads a key.
-3. `deploy/install-task.ps1` (run once as the auto-logon account, in an elevated PowerShell) registers the task `QbAutopost`: at logon of that account, 60 s delay, **interactive** session, limited rights, no password stored, no time limit, a second start ignored. Pass start-all options with `-StartAllArguments '-SkipPostgres'`; remove it with `-Unregister`.
+3. `deploy/install-task.ps1` (run once from an administrator's elevated PowerShell, with `-UserId '<MACHINE>\<account>'` when the auto-logon account is not an administrator) registers the task `QbAutopost`: at logon of that account, 60 s delay, **interactive** session, limited rights, no password stored, no time limit, a second start ignored. Pass start-all options with `-StartAllArguments '-SkipPostgres'`; remove it with `-Unregister`.
 4. Both scripts accept `-WhatIf` (prints what would happen, changes nothing). Test the task with `Start-ScheduledTask -TaskName QbAutopost`, then sign out and in once.
 
 ### 2.5 Going live and more than one company
 
-- A new install posts nothing by itself: `DryRunDefault` is `true`. Go live by setting it to `false` only after the shadow week (tracker T-803/T-804 checklists). A request's own `dryRun` always wins.
+- A new install posts nothing by itself: `DryRunDefault` is `true`, but the dashboard's Post button always posts (section 14). Go live by setting it to `false` only after the shadow week (tracker T-803/T-804 checklists). A request's own `dryRun` always wins.
 - One installation serves **one** company (`Company:*` holds one name and one file) and `start-all.ps1` starts one API. Running several companies on one server is not supported yet (tracker Q-44); until the owner decides, switch companies one at a time.
 
 ## 3. Configure
@@ -92,6 +92,7 @@ Copy `rules.json` (start from `samples/rules.json`) to `C:\qb-autopost\rules.jso
 | Key | Default | Meaning |
 |---|---|---|
 | `Api:Bind` | `http://127.0.0.1:5080` | Keep it on loopback. A non-loopback bind without TLS **stops startup** unless `Api:AllowInsecureRemote` is on (§3.5) |
+| `Api:TrustForwardedHeaders` | `false` | Set `true` only when a proxy on the same machine (nginx, §14) forwards every request: the API then reads `X-Forwarded-For` and `X-Forwarded-Proto` from loopback senders only, so the brute-force brake, rate limits and audit see the caller's address |
 | `Api:ApiKey` | `change-me` | The shared all-scopes key. The host refuses to start when no caller can authenticate at all — see `Api:AllowLegacyKey` and §3.4 |
 | `Api:AllowLegacyKey` | `true` | Accept `Api:ApiKey` as an implicit all-scopes caller. Set **false** once every caller has its own key (§3.4) |
 | `Api:LegacyRoutes` | `true` | Also answer the pre-M9 flat paths beside `/api/v1/*`; each use logs a warning once per route per hour |
@@ -113,6 +114,9 @@ Copy `rules.json` (start from `samples/rules.json`) to `C:\qb-autopost\rules.jso
 | `QuickBooks:QbXmlVersion` | `13.0` | `16.0` on QuickBooks 2023+ if needed |
 | `QuickBooks:DuplicateWindowDays` | `3` | Days either side for the live duplicate check (G4) |
 | `QuickBooks:BusyTimeoutSeconds` | `60` | A QuickBooks call longer than this is abandoned (`quickbooks-busy`) |
+| `QuickBooks:ListSync:IntervalMinutes` | `30` | Minutes between scheduled list syncs. `0` = schedule off; otherwise 5 to 1440 (anything else stops startup). §5.4 |
+| `QuickBooks:ListSync:FirstDelayMinutes` | `2` | First scheduled attempt this long after startup when no attempt is recorded; 0 to 1440 |
+| `QuickBooks:ListSync:HistoryRows` | `200` | Rows kept in `qb_list_syncs` (at least 10) |
 | `QuickBooks:BackupFolder` | empty | When set, posting is refused unless the newest `*.QBB` there is recent |
 | `QuickBooks:BackupMaxAgeHours` | `36` | Age limit for that backup |
 | `QuickBooks:Fake` | `false` | Test only: simulated company. Refused outside Development/Testing |
@@ -167,7 +171,7 @@ of the key — never the key itself. Issue one with:
 ```
 
 It prints the key **once** and stores only the hash; it cannot be recovered, only replaced. The caller sends it as
-`X-Api-Key: <key>` on every request. (`Authorization: Bearer` is *not* accepted by this build — tracker Q-67.)
+`X-Api-Key: <key>` on every request. API keys are sent only in `X-Api-Key`; an API key in `Authorization: Bearer` is *not* accepted by this build (tracker Q-67). `Authorization: Bearer` carries only a dashboard user's access token (§11).
 
 | Scope | Lets the caller |
 |---|---|
@@ -287,7 +291,7 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:5080/api/v1/quickbooks/list
 ```
 
 The read never opens a QuickBooks session, so it answers while QuickBooks is shut down; a `syncedUtc` of `null`
-means the sync has not run yet.
+means the sync has not run yet. The lists also refresh by themselves every 30 minutes (§5.4).
 
 ### 5.2 Review a dry run
 
@@ -319,13 +323,113 @@ queries QuickBooks for duplicates. Result:
 
 Only one job or QuickBooks operation runs at a time; others wait in the queue.
 
+### 5.4 Scheduled list sync (M14)
+
+The account, vendor and customer names are refreshed from QuickBooks by the API itself, on the same single worker that
+runs jobs, so a sync never overlaps a job or a post. Settings (§3.1; environment form
+`QuickBooks__ListSync__IntervalMinutes`):
+
+- `QuickBooks:ListSync:IntervalMinutes` (default 30): minutes between syncs, 5 to 1440. `0` turns the schedule off.
+- `QuickBooks:ListSync:FirstDelayMinutes` (default 2): the first sync after the API starts, when no earlier attempt is known.
+- `QuickBooks:ListSync:HistoryRows` (default 200): how many attempts `qb_list_syncs` keeps (at least 10; the newest
+  successful row is always kept). At most about four days at the default (Sync now and skipped attempts count too).
+
+The startup log's `QuickBooks:` line shows what is in force, for example `list sync every 30 min (first after 2 min),
+lists in the database`, or `list sync schedule off`.
+
+**It never starts QuickBooks.** Before each scheduled sync the API looks for a running QuickBooks in its own Windows
+session. If there is none, the attempt is recorded as `skipped` with the reason `quickbooks-not-open` and nothing is
+sent. So QuickBooks must be open **in the same Windows session as the API** (the signed-in desktop where
+`start-all.ps1` runs it, not another user's session and not a service). Close QuickBooks at night and the lists simply
+stay as they were; open it and the next due sync runs. The check sees only the QuickBooks program, not which company
+is open: with QuickBooks running and no company file open, or another file open, the sync goes on and QuickBooks may
+open `Company:FilePath` itself or show a login prompt. Keep QuickBooks on the configured company file.
+
+**A dialog delays the worker for up to about two minutes.** When QuickBooks is showing a dialog (or is busy), the sync
+waits for it inside QuickBooks' session start, which can take up to about 2 minutes. The worker is occupied meanwhile,
+so a job submitted in that time waits and then runs normally; nothing is lost. A post that does not wait
+(`validate-and-post`, or posting a saved request) is answered `409` "session in use" while the sync holds QuickBooks,
+with nothing sent: retry it after the sync ends. Close the dialog to release it. A sync
+that fails this way is recorded as `failed` (reason `quickbooks-busy` or `quickbooks-unavailable`), the lists stay as
+they were, and the next attempt is a full interval later.
+
+**Reading the state.** `GET /api/v2/quickbooks/lists` with a dashboard user's token, or with an API key that holds
+`lists:read` or `qb:read`:
+
+```powershell
+$token = "<access token from a dashboard sign-in>"
+Invoke-RestMethod http://127.0.0.1:5080/api/v2/quickbooks/lists -Headers @{ Authorization = "Bearer $token" }
+# or, with an API key ($key holds lists:read or qb:read):
+Invoke-RestMethod http://127.0.0.1:5080/api/v2/quickbooks/lists -Headers @{ 'X-Api-Key' = $key }
+```
+
+Besides the names it returns:
+
+- `lastSync`: the newest attempt of any kind, with its outcome (`ok`, `failed`, `skipped`), reason, time, who asked
+  (`requestedBy` for a person's Sync now) and a fixed message. With a database it survives restarts; with **no database
+  it is the last attempt since the API started** and is null before any.
+- `nextSyncUtc`: when the next scheduled sync is due, or null when the schedule is off.
+
+`GET /api/v1/health/ready` also reports it in the `qb-lists` check (a warning only), for example
+`last sync failed 15:00 (quickbooks-not-open); lists from 14:30` (times UTC). If the lists are old and the last sync
+failed or was skipped, start with the reason.
+
+**History.** With PostgreSQL every attempt is a row in `qb_list_syncs` (who, when, trigger, outcome, reason, counts;
+never the names):
+
+```sql
+SELECT * FROM qb_list_syncs ORDER BY id DESC LIMIT 20;
+```
+
+The dashboard's **Lists** page reads the same history through `GET /api/v2/quickbooks/lists/syncs` (M15; `lists:read`,
+so every dashboard role, or an API key with `lists:read` or `qb:read`):
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:5080/api/v2/quickbooks/lists/syncs?outcome=failed,skipped&pageSize=50" -Headers @{ Authorization = "Bearer $token" }
+```
+
+Newest first, 25 per page by default (`page`, `pageSize` up to 100), filtered by `trigger`
+(`schedule,dashboard,api,import`) and `outcome` (`ok,failed,skipped`), comma-separated. Each item is what `lastSync`
+shows (trigger, outcome, reason, times, who pressed Sync now, the fixed message) plus its `id`, the counts of an `ok`
+attempt and `current: true` on the newest `ok` attempt, whose lists are in use. It never returns the raw error text:
+read that in the log or in the `error` column above. With **no database** the history is the attempts since the API
+started, kept in memory (the same cap, `HistoryRows`), and starts again from id 1 after a restart.
+
+**Turning it off.** Set the machine variable `QuickBooks__ListSync__IntervalMinutes=0` and restart the API. The lists
+then change only when somebody syncs by hand (`POST /api/v1/quickbooks/lists/sync`, or Sync now). Setting it back to 30
+restores the schedule.
+
+**Sync now.** The dashboard's lists panel has a Sync now button; it calls `POST /api/v2/quickbooks/lists/sync`:
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:5080/api/v2/quickbooks/lists/sync -Headers @{ Authorization = "Bearer $token" }
+# or, with an API key that holds qb:read:
+Invoke-RestMethod -Method Post http://127.0.0.1:5080/api/v2/quickbooks/lists/sync -Headers @{ 'X-Api-Key' = $key }
+```
+
+Who may call it: a dashboard user with `requests:edit` (editors and admins; viewers do not see the button), or an API
+key with `qb:read`. A key's sync is recorded with trigger `api` and the key's client name; a person's with trigger
+`dashboard` and their user id. The route uses the **posting** rate-limit bucket. Two people pressing it together cause one
+sync; a press while the scheduled sync runs joins it. Answers:
+
+| Status | Code | Meaning |
+|---|---|---|
+| `200` | | Fresh lists, counts and `lastSync`; the pickers update |
+| `403` | | A viewer, or a key without `qb:read` |
+| `409` | `quickbooks-not-open` | QuickBooks is not running in the API's session; a `skipped` row is recorded |
+| `503` | `quickbooks-unavailable` | QuickBooks could not be reached |
+| `503` | `quickbooks-busy` | QuickBooks did not answer within `QuickBooks:BusyTimeoutSeconds` (a dialog, usually) |
+| `503` | `api-stopping` | The API is shutting down |
+| `502` | `qb-status` | QuickBooks answered with an error status |
+| `504` | `sync-timeout` | Longer than `Api:SyncPostTimeoutSeconds`; the sync keeps running and its `qb_list_syncs` row shows the result |
+
 ## 6. Exceptions: held and skipped lines
 
 | Reason | Meaning | What to do |
 |---|---|---|
 | `unknown-payee` | No vendor/customer found; `candidates` lists the closest names | Teach an alias (below), re-run |
 | `no-account-rule`, `low-confidence`, `no-prior-posting` | No rule for the expense account, or the AI suggestion is not trusted yet; `candidates` has suggestions | Teach a vendor account (below) |
-| `no-accounts` | `qb-lists.json` empty | Sync lists |
+| `no-accounts` | The QuickBooks lists are empty (never synced) | Sync lists (§5.4) |
 | `hermes-failed` | Hermes did not give a valid answer | Check `/api/v1/health/hermes` (pings OpenRouter), re-run |
 | `unknown-account` | No `BankAccounts`/`CardAccounts` entry for the last four, or none detected | Add it to `rules.json`, or put the last four in the file name |
 | `unknown-csv-layout`, `ambiguous-csv-layout`, `unparsable-rows` | The CSV/XLSX export does not match exactly one layout, or a row cannot be read | Fix `CsvLayouts` or the export |
@@ -630,6 +734,8 @@ caller has its own key.
 The dashboard is a set of static files that the API itself serves at `/`, beside the API. Nothing else runs: no web server,
 no proxy. Spec: `docs/saved-requests-dashboard-v2.md` section 13. Checklist: `docs/testing/T-1117.server-checklist.md`.
 
+Behind the owner's nginx on the same server (no `Api:Bind` change, no `Api:Tls`), follow section 14 instead of 11.2.
+
 ### 11.1 Install the files
 
 ```powershell
@@ -769,3 +875,123 @@ at startup the log has one warning. An older server needs a Windows update, not 
 | `429` | The user passed `Extraction:MaxPerUserPerHour` |
 | `413` / `422` | Over 10 MB or 50 pages, not a PDF, protected, no text layer, or not a bank statement |
 | The save says the record expired | More than `Extraction:RecordHours` passed; upload again |
+
+## 13. Local Docker stack for dashboard integration (T-1303)
+
+**Not a deployment.** QuickBooks Desktop needs Windows COM, so production stays the Windows service of sections 1–12.
+The `Dockerfile` at the repository root builds a Linux image that runs the **simulated QuickBooks company**
+(`QuickBooks:Fake=true`, allowed only with `ASPNETCORE_ENVIRONMENT=Development`), for developing and testing the
+dashboard against the real API.
+
+- The stack is defined in the dashboard repository: `D:\qb_post_react\docker-compose.integration.yml` (PostgreSQL 16,
+  a one-shot `psql` step that applies `deploy/migrations.sql`, this API, an OpenRouter stand-in on the API's loopback,
+  and the dashboard behind nginx on `http://localhost:8080`).
+- Every secret is a throwaway value in that compose file and reaches the API as a `QBAUTOPOST__*` variable; nothing is
+  baked into the image.
+- The QuickBooks name lists come from `docker/seed/qb-lists.json` in the dashboard repository, mounted read-only at
+  `/data/qb-lists.json` (`Paths:QbLists`). Since M15 the simulated company is **seeded from that file** at startup
+  (accounts with their type, vendors, customers), so Sync now and the scheduled sync return the same names instead of
+  storing empty lists. The startup `QuickBooks:` line ends `simulated company: 19 accounts, 15 vendors, 6 customers from
+  /data/qb-lists.json`; a missing or unreadable file logs one Warning `simulated QuickBooks company has no lists: …` and
+  the company starts empty (startup goes on). The seed applies only in the simulated mode (Development/Testing), never
+  to the Desktop SDK.
+- To rebuild only the API after a change, keeping the database and its demo data:
+  `docker compose -f docker-compose.integration.yml up -d --build api` (no `down -v`).
+- To read real PDFs with the real model, set `OPENROUTER_BASE_URL=https://openrouter.ai/api/v1` and
+  `OPENROUTER_API_KEY` before `docker compose up`.
+
+```
+cd D:\qb_post_react
+docker compose -f docker-compose.integration.yml up -d --build
+npx playwright test -c playwright.integration.config.ts
+docker compose -f docker-compose.integration.yml down -v   # -v also drops the database volume
+```
+
+## 14. First install and releases (T-1603)
+
+Design: `docs/windows-deploy.md`. Checklist: `docs/testing/T-1603.server-checklist.md`. This is the path for the owner's
+server: nginx on the same machine in front of the API, no Docker, no n8n yet (connect it later per 10.6 and 11.5).
+
+**Decision, stated plainly.** The owner runs on the real company file from day one, so the first real post is also the
+first real-QuickBooks test (the T-609 test on a copy is knowingly skipped). `DryRunDefault` does not protect this: the
+dashboard's Post button always posts. The safeguards are `QuickBooks:BackupFolder` (posting is refused without a `.QBB`
+newer than `BackupMaxAgeHours`), a backup taken by hand before the first post, and one account with posting rights until
+step 12 passes. Upload is on from day one, knowing statement text goes to OpenRouter.
+
+### 14.1 First install, once, in this order
+
+**Before step 1.** `deploy.ps1` deploys `main` of both repos (the API and the dashboard), so `main` of each must hold the code to be deployed: committed, pushed and merged first. That is the owner's decision under each repo's commit rules; the script does not do it.
+
+1. Install Git, Node 22 or newer and the .NET 8 SDK; sign in to GitHub; clone both repos into `C:\qb-autopost\src`, so the
+   folders are `qbautopost` and `qbpost_dashboard`:
+
+   ```
+   git clone <API repo URL> C:\qb-autopost\src\qbautopost
+   git clone <dashboard repo URL> C:\qb-autopost\src\qbpost_dashboard
+   ```
+
+2. Leave QuickBooks open on the company file, and keep it that way.
+3. Run `install-postgres.ps1` (10.2): it creates the database, roles, connection variables, JWT signing key and the daily
+   backup task.
+4. Create `C:\qb-autopost\appsettings.Production.json` with `Company:Name` and `Company:FilePath` for the real company (the
+   defaults are the Tropicana sample), `Api:TrustForwardedHeaders: true`, `Paths:AllowedJobRoots`,
+   `QuickBooks:BackupFolder`, and `Paths:Clients` as `C:\qb-autopost\clients.json` (its default is relative to the program
+   folder, which a release replaces). Leave `DryRunDefault` alone.
+5. Copy `samples/rules.json` to `C:\qb-autopost\rules.json` and edit it.
+6. Set the secrets as environment variables: `QBAUTOPOST__Api__ApiKey`, the bootstrap admin email and password,
+   `OpenRouter__ApiKey`, `OpenRouter__Enabled=true` and `Extraction__Enabled=true`. Remove the bootstrap password after the
+   first sign-in (10.4). Verify upload with `docs/testing/T-1215.server-checklist.md`.
+7. Set up auto-logon for the account and run `install-task.ps1` from an administrator's elevated PowerShell, with
+   `-UserId '<MACHINE>\<account>'` when the account is not an administrator.
+8. Run `deploy.ps1` for the first version; because the dashboard folder is new, it starts the API after installing it.
+9. Approve the QuickBooks certificate dialog on the server's desktop as section 4 sets out (QuickBooks Admin login, then
+   `scripts\qb-server-check.ps1`).
+10. Set up nginx and the domain per 14.3. Sign in from an accountant's PC.
+11. Make a QuickBooks backup into `QuickBooks:BackupFolder`. Give posting rights to one trusted user; other accounts stay
+    view-only until step 12 passes.
+12. That user posts one small statement and checks it in QuickBooks. Only then widen posting rights. The Post button always
+    posts, so nobody else posts before this passes.
+
+### 14.2 Every release
+
+Run from `C:\qb-autopost\src\qbautopost` as the auto-logon account, at the desktop or over Remote Desktop (the API must run
+in that desktop session), in a normal PowerShell window, no elevation:
+
+```
+.\deploy\deploy.ps1 -WhatIf     # dry run: preflight problems are warnings, nothing changes
+.\deploy\deploy.ps1             # release; asks to confirm
+.\deploy\deploy.ps1 -Rollback   # previous version; refuses without app.old
+```
+
+Other switches: `-Yes` (skip the confirmation), `-Runtime win-x86`, `-Branch`. Deploy when nobody is posting: an
+interrupted post is marked unknown on the next start. A build failure changes nothing live; a failed start puts the
+previous version back.
+
+- **Dumps.** Every deploy keeps `pre-deploy-<timestamp>-<commit>.dump` in `<BackupFolder>\postgres`. The script never
+  deletes them: clear old ones by hand.
+- **A rollback does not undo a migration.** The pre-deploy dump is the way back (restore per 10.5).
+- If `deploy.ps1` itself changed in the pull, it stops: run it again.
+- **`app.old.prev` left behind** means an interrupted run. The preflight says so; the next release clears it. Only when
+  `app.old` is missing and you need `-Rollback` now, rename `app.old.prev` to `app.old` by hand first.
+
+### 14.3 nginx contract (the owner's work)
+
+nginx runs on the same server, since the API stays bound to loopback. It proxies everything to `http://127.0.0.1:5080`:
+
+```nginx
+client_max_body_size 11m;              # one PDF upload is at most 10 MB
+location / {
+    proxy_pass http://127.0.0.1:5080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;   # overwrite: a client cannot supply its own
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 600s;           # 11.4: at least 10 minutes, a post must never be cut off
+    proxy_send_timeout 600s;
+    proxy_buffering off;
+}
+```
+
+HTTPS is mandatory: the refresh cookie is `Secure` and browsers drop it on plain HTTP, so sign-in would not survive a
+reload. The server's firewall opens nginx's port to the office subnet only. A public DNS name is fine; a public route to
+the server is not (11.2: never a router port forward). `Api:Tls`, port 5443 and `Api:Bind` of 11.2 are not used.

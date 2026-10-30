@@ -17,7 +17,7 @@ public sealed record CompanyFileValidation(bool Ok, string? CompanyFile, IReadOn
 /// company open is the one misconfiguration that silently posts a batch into the wrong company's books.
 /// </para>
 /// </summary>
-public sealed class CompanyFileValidator(PipelineOptions options, IQbGateway gateway)
+public sealed class CompanyFileValidator(PipelineOptions options, IQbGateway gateway, IQbListsSource lists)
 {
     /// <summary>A failed check that makes the answer not ok.</summary>
     public const string Error = "error";
@@ -171,10 +171,19 @@ public sealed class CompanyFileValidator(PipelineOptions options, IQbGateway gat
             : new CompanyFileCheck("backupFreshness", false, severity, problem);
     }
 
-    private CompanyFileCheck ListsSynced() =>
-        File.Exists(options.QbListsFile)
-            ? new CompanyFileCheck("listsSynced", true, Warning, options.QbListsFile)
-            : new CompanyFileCheck("listsSynced", false, Warning, $"{options.QbListsFile} not found; run POST /api/v1/quickbooks/lists/sync");
+    // M14 §9: asks the source, so it is right whether the lists live in qb-lists.json or in the database.
+    private CompanyFileCheck ListsSynced()
+    {
+        try
+        {
+            var status = lists.Status();
+            return new CompanyFileCheck("listsSynced", status.Synced, Warning, status.Message);
+        }
+        catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or UnauthorizedAccessException)
+        {
+            return new CompanyFileCheck("listsSynced", false, Warning, "the saved lists cannot be read; run POST /api/v1/quickbooks/lists/sync");
+        }
+    }
 
     private static CompanyFileValidation Result(List<CompanyFileCheck> checks, string? companyFile)
     {

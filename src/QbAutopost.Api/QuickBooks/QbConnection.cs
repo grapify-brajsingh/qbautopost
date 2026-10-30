@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging.Abstractions;
 using QbAutopost.Api.Configuration;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.QuickBooks;
@@ -24,11 +25,14 @@ public enum QbConnectionMode
 /// The raw gateway the host talks to (T-601 DI switch). <c>Program</c> wraps it in <c>ResilientQbGateway</c>, so tests
 /// replace this holder, not <see cref="IQbGateway"/>, and still get the busy timeout and retry.
 /// </summary>
-public sealed class QbConnection(IQbGateway gateway, QbConnectionMode mode)
+public sealed class QbConnection(IQbGateway gateway, QbConnectionMode mode, SimulatedListsSeed? simulatedSeed = null)
 {
     public IQbGateway Gateway { get; } = gateway;
 
     public QbConnectionMode Mode { get; } = mode;
+
+    /// <summary>M15 §4: what the simulated company was seeded with; null in every other mode, or when it has no lists.</summary>
+    public SimulatedListsSeed? SimulatedSeed { get; } = simulatedSeed;
 
     public static QbConnectionMode SelectMode(bool fake, bool isWindows) =>
         fake ? QbConnectionMode.Simulated
@@ -36,7 +40,9 @@ public sealed class QbConnection(IQbGateway gateway, QbConnectionMode mode)
         : QbConnectionMode.Unavailable;
 
     /// <param name="sdkTrace">Receives each SDK session step (connect, begin, end) for the log; SDK mode only.</param>
-    public static QbConnection Create(AppSettings settings, IHostEnvironment environment, Action<string>? sdkTrace = null)
+    /// <param name="log">Receives the Warning when the simulated company has no lists (M15 §4); simulated mode only.</param>
+    public static QbConnection Create(
+        AppSettings settings, IHostEnvironment environment, Action<string>? sdkTrace = null, ILogger? log = null)
     {
         var mode = SelectMode(settings.QuickBooks.Fake, OperatingSystem.IsWindows());
         switch (mode)
@@ -50,7 +56,10 @@ public sealed class QbConnection(IQbGateway gateway, QbConnectionMode mode)
                         "QuickBooks:Fake=true is only allowed when ASPNETCORE_ENVIRONMENT is Development or Testing.");
                 }
 
-                return new QbConnection(new SimulatedQbGateway(new SimulatedQuickBooks()), mode);
+                // M15 §4: the company starts with the names of Paths:QbLists, so a sync in Development returns them.
+                var company = new SimulatedQuickBooks();
+                var seed = SimulatedListsSeed.Apply(company, settings.Paths.QbLists, log ?? NullLogger.Instance);
+                return new QbConnection(new SimulatedQbGateway(company), mode, seed);
             case QbConnectionMode.Sdk when OperatingSystem.IsWindows():
                 return new QbConnection(CreateSdkGateway(settings, sdkTrace), mode);
             default:

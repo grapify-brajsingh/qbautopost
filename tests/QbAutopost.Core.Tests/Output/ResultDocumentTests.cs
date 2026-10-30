@@ -32,7 +32,8 @@ public sealed class ResultDocumentTests : IDisposable
             TestInvoiceExtractor.Create(),
             TestAccountChooser.Create(),
             null!,
-            new SystemClock());
+            new SystemClock(),
+            new QbAutopost.Core.Store.FileQbLists(Path.Combine(_job.Root, "qb-lists.json")));
         var job = new JobRecord { JobId = "2026-08-tropicana", Folder = _job.Folder, Status = JobStatus.Ready, DryRun = true };
         return (job, await pipeline.RunAnalysisAsync(job, CancellationToken.None));
     }

@@ -1,9 +1,14 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using QbAutopost.Api.Tests.TestSupport;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Models;
+using QbAutopost.Core.Pipeline;
 using QbAutopost.Core.Store;
 
 namespace QbAutopost.Api.Tests.Api;
@@ -85,6 +90,45 @@ public sealed class SyncListsApiTests : IDisposable
         Assert.False(File.Exists(ListsFile));
     }
 
+    /// <summary>M14 §12: the v1 sync writes the same attempt line as the other triggers.</summary>
+    [Fact]
+    public async Task Should_LogTheAttemptLine_When_TheV1SyncSucceeds()
+    {
+        var logs = new CapturingLoggerProvider();
+        using var host = LoggedHost(logs);
+        using var client = host.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", ApiFactory.ApiKey);
+
+        using var response = await client.PostAsync("/api/v1/quickbooks/lists/sync", null);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var line = Assert.Single(logs.Entries, e => e.Entry.Message.StartsWith("QuickBooks lists sync (api, by ", StringComparison.Ordinal));
+        Assert.Equal(LogLevel.Information, line.Entry.Level);
+        Assert.EndsWith("): ok, 7 accounts, 2 vendors, 1 customers", line.Entry.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>M14 §12: a failed v1 sync names its outcome and reason, and does not claim a file it may not use.</summary>
+    [Fact]
+    public async Task Should_LogTheFailedAttemptLine_When_TheV1SyncFails()
+    {
+        _factory.Gateway.QueryThrow = new QuickBooksUnavailableException("no session");
+        var logs = new CapturingLoggerProvider();
+        using var host = LoggedHost(logs);
+        using var client = host.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", ApiFactory.ApiKey);
+
+        using var response = await client.PostAsync("/api/v1/quickbooks/lists/sync", null);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var line = Assert.Single(logs.Entries, e => e.Entry.Message.StartsWith("QuickBooks lists sync (api, by ", StringComparison.Ordinal));
+        Assert.Equal(LogLevel.Warning, line.Entry.Level);
+        Assert.Contains("): failed (quickbooks-unavailable): ", line.Entry.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(logs.Entries, e => e.Entry.Message.Contains("qb-lists.json unchanged", StringComparison.Ordinal));
+    }
+
+    private WebApplicationFactory<Program> LoggedHost(CapturingLoggerProvider logs) =>
+        _factory.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<ILoggerFactory>(LoggerFactory.Create(l => l.AddProvider(logs)))));
+
     [Fact]
     public async Task Should_Return401_When_ApiKeyIsMissing()
     {
@@ -94,6 +138,23 @@ public sealed class SyncListsApiTests : IDisposable
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         Assert.Empty(_factory.Gateway.Requests);
+    }
+
+    /// <summary>M14 A-5 (§8): a v1 sync, by either spelling, is recorded with trigger <c>api</c> and the client's name.</summary>
+    [Theory]
+    [InlineData("/qb/sync-lists")]
+    [InlineData("/api/v1/quickbooks/lists/sync")]
+    public async Task Should_RecordTheSyncWithTriggerApi_When_TheV1RouteSyncs(string route)
+    {
+        using var response = await _client.PostAsync(route, null);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var run = _factory.Services.GetRequiredService<IQbListsSource>().LastAttempt;
+
+        Assert.NotNull(run);
+        Assert.Equal(ListSyncTrigger.Api, run.Trigger);
+        Assert.Equal(ListSyncOutcome.Ok, run.Outcome);
+        Assert.False(string.IsNullOrEmpty(run.RequestedBy));
     }
 
     [Fact]

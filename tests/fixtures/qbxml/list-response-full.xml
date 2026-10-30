@@ -1,0 +1,64 @@
+<?xml version="1.0" ?>
+<QBXML>
+  <QBXMLMsgsRs>
+    <AccountQueryRs requestID="accounts" statusCode="0" statusSeverity="Info" statusMessage="Status OK">
+      <AccountRet>
+        <ListID>80000001-1787000001</ListID>
+        <TimeCreated>2026-01-05T09:00:00-05:00</TimeCreated>
+        <Name>Sample Checking 0001</Name>
+        <FullName>Sample Checking 0001</FullName>
+        <IsActive>true</IsActive>
+        <Sublevel>0</Sublevel>
+        <AccountType>Bank</AccountType>
+        <AccountNumber>1000</AccountNumber>
+        <Balance>1234.56</Balance>
+        <TotalBalance>1234.56</TotalBalance>
+      </AccountRet>
+      <AccountRet>
+        <ListID>80000002-1787000001</ListID>
+        <Name>Power</Name>
+        <FullName>Utilities:Power</FullName>
+        <IsActive>true</IsActive>
+        <Sublevel>1</Sublevel>
+        <AccountType>Expense</AccountType>
+        <AccountNumber>6100</AccountNumber>
+        <Balance>0.00</Balance>
+      </AccountRet>
+    </AccountQueryRs>
+    <VendorQueryRs requestID="vendors" statusCode="0" statusSeverity="Info" statusMessage="Status OK">
+      <VendorRet>
+        <ListID>80000010-1787000001</ListID>
+        <Name>Example Hardware</Name>
+        <IsActive>true</IsActive>
+        <VendorAddress>
+          <Addr1>1 Sample Street</Addr1>
+          <City>Exampleville</City>
+        </VendorAddress>
+        <Balance>10.00</Balance>
+      </VendorRet>
+      <VendorRet>
+        <ListID>80000011-1787000001</ListID>
+        <Name>Sample Power &amp; Light</Name>
+        <IsActive>true</IsActive>
+        <Balance>0.00</Balance>
+      </VendorRet>
+    </VendorQueryRs>
+    <CustomerQueryRs requestID="customers" statusCode="0" statusSeverity="Info" statusMessage="Status OK">
+      <CustomerRet>
+        <ListID>80000020-1787000001</ListID>
+        <Name>Sample Customer</Name>
+        <FullName>Sample Customer</FullName>
+        <IsActive>true</IsActive>
+        <Balance>5.00</Balance>
+      </CustomerRet>
+      <CustomerRet>
+        <ListID>80000021-1787000001</ListID>
+        <Name>Kitchen</Name>
+        <FullName>Sample Customer:Kitchen</FullName>
+        <IsActive>true</IsActive>
+        <Sublevel>1</Sublevel>
+        <Balance>0.00</Balance>
+      </CustomerRet>
+    </CustomerQueryRs>
+  </QBXMLMsgsRs>
+</QBXML>

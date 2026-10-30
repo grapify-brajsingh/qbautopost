@@ -59,6 +59,23 @@ public sealed class V2ScopeMatrixTests(Host host) : IClassFixture<Host>
             return;
         }
 
+        // M14 §7.2 (Q-120): v2's Sync now is for editors and admins (requests:edit) or a key with qb:read; v1's stays qb:read.
+        if (method == "POST" && relative == ApiRoutes.ListSyncRoute)
+        {
+            Assert.Equal(ApiScopes.QbRead, ApiRoutes.ScopeFor(method, V1 + relative));
+            Assert.Equal(ApiScopes.AnyOf(ApiScopes.RequestsEdit, ApiScopes.QbRead), ApiRoutes.ScopeFor(method, V2 + relative));
+            return;
+        }
+
+        // M15 §3: the list sync history exists under /api/v2 only (lists:read); its v1 spelling is unmapped and keeps the
+        // /quickbooks/ fall-through (qb:read), unchanged.
+        if (method == "GET" && relative == ApiRoutes.ListSyncHistoryRoute)
+        {
+            Assert.Equal(ApiScopes.QbRead, ApiRoutes.ScopeFor(method, V1 + relative));
+            Assert.Equal(ApiScopes.ListsRead, ApiRoutes.ScopeFor(method, V2 + relative));
+            return;
+        }
+
         Assert.Equal(ApiRoutes.ScopeFor(method, V1 + relative), ApiRoutes.ScopeFor(method, V2 + relative));
         Assert.Equal(
             ApiRoutes.ScopeFor(method, V1 + relative, isDevelopment: true),
@@ -73,11 +90,12 @@ public sealed class V2ScopeMatrixTests(Host host) : IClassFixture<Host>
     [InlineData("POST", V2 + "/health")]
     [InlineData("GET", V2 + "/health/ready")]
     [InlineData("GET", V2 + "/reference")]
-    [InlineData("POST", V2 + "/quickbooks/lists/sync")]
     [InlineData("POST", V2 + "/quickbooks/transactions")]
     [InlineData("POST", V2 + "/quickbooks/transactions/validate-and-post")]
     [InlineData("POST", V2 + "/quickbooks/connection/test")]
     [InlineData("POST", V2 + "/qb/sync-lists")]
+    [InlineData("POST", V2 + "/quickbooks/lists/syncs")]
+    [InlineData("DELETE", V2 + "/quickbooks/lists/syncs")]
     [InlineData("GET", V2 + "/batches/1")]
     [InlineData("POST", V2 + "/rules/alias")]
     [InlineData("GET", V2 + "/saved-requests/12/unknown")]

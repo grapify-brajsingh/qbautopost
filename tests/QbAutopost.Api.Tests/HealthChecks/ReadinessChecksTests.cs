@@ -20,7 +20,7 @@ public sealed class ReadinessChecksTests : IDisposable
         var rules = _dir.Combine("rules.json");
         File.WriteAllText(rules, "{}");
         var lists = _dir.Combine("qb-lists.json");
-        File.WriteAllText(lists, "{}");
+        File.WriteAllText(lists, "{\"syncedUtc\":\"2026-09-17T08:00:00Z\"}");
         return new AppSettings
         {
             Company = { Name = "Tropicana Properties LLC", RulesFile = rules },
@@ -28,13 +28,16 @@ public sealed class ReadinessChecksTests : IDisposable
         };
     }
 
+    private static QbAutopost.Core.Abstractions.IQbListsSource ListsOf(AppSettings s) =>
+        new QbAutopost.Core.Store.FileQbLists(s.Paths.QbLists);
+
     private static ReadinessCheck Check(ReadinessView view, string name) =>
         Assert.Single(view.Checks, c => c.Name == name);
 
     [Fact]
     public void Should_BeReady_When_EveryCheckPasses()
     {
-        var view = Readiness.Evaluate(Ready(), workerStarted: true);
+        var view = Readiness.Evaluate(Ready(), workerStarted: true, ListsOf(Ready()));
 
         Assert.True(view.Ok);
         Assert.All(view.Checks, c => Assert.True(c.Ok));
@@ -46,7 +49,7 @@ public sealed class ReadinessChecksTests : IDisposable
         var settings = Ready();
         File.Delete(settings.Company.RulesFile);
 
-        var view = Readiness.Evaluate(settings, workerStarted: true);
+        var view = Readiness.Evaluate(settings, workerStarted: true, ListsOf(settings));
 
         Assert.False(view.Ok);
         var rules = Check(view, "rules");
@@ -60,7 +63,7 @@ public sealed class ReadinessChecksTests : IDisposable
         var settings = Ready();
         settings.Company.Name = "  ";
 
-        var view = Readiness.Evaluate(settings, workerStarted: true);
+        var view = Readiness.Evaluate(settings, workerStarted: true, ListsOf(settings));
 
         Assert.False(view.Ok);
         Assert.False(Check(view, "settings").Ok);
@@ -69,7 +72,7 @@ public sealed class ReadinessChecksTests : IDisposable
     [Fact]
     public void Should_NotBeReady_When_WorkerHasNotStarted()
     {
-        var view = Readiness.Evaluate(Ready(), workerStarted: false);
+        var view = Readiness.Evaluate(Ready(), workerStarted: false, ListsOf(Ready()));
 
         Assert.False(view.Ok);
         Assert.False(Check(view, "worker").Ok);
@@ -81,12 +84,151 @@ public sealed class ReadinessChecksTests : IDisposable
         var settings = Ready();
         File.Delete(settings.Paths.QbLists);
 
-        var view = Readiness.Evaluate(settings, workerStarted: true);
+        var view = Readiness.Evaluate(settings, workerStarted: true, ListsOf(settings));
 
         Assert.True(view.Ok);
         var lists = Check(view, "qb-lists");
         Assert.False(lists.Ok);
         Assert.Equal(Readiness.Warning, lists.Severity);
+    }
+
+    [Fact]
+    public void Should_PassLikeValidateCompany_When_TheFileExistsWithoutASyncTime()
+    {
+        var settings = Ready();
+        File.WriteAllText(settings.Paths.QbLists, """{ "vendors": ["Home Depot"] }""");
+
+        var lists = Check(Readiness.Evaluate(settings, workerStarted: true, ListsOf(settings)), "qb-lists");
+
+        Assert.True(lists.Ok);
+        Assert.Equal(settings.Paths.QbLists, lists.Message);
+    }
+
+    [Fact]
+    public void Should_WarnWithoutThrowing_When_QbListsIsCorrupt()
+    {
+        var settings = Ready();
+        File.WriteAllText(settings.Paths.QbLists, "{ \"syncedUtc\": ");
+
+        var view = Readiness.Evaluate(settings, workerStarted: true, ListsOf(settings));
+
+        Assert.True(view.Ok);
+        var lists = Check(view, "qb-lists");
+        Assert.False(lists.Ok);
+        Assert.Equal(Readiness.Warning, lists.Severity);
+        Assert.Contains("unreadable", lists.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_WarnWithoutThrowing_When_QbListsAccessIsDenied()
+    {
+        var settings = Ready();
+
+        var view = Readiness.Evaluate(settings, workerStarted: true, new DeniedLists());
+
+        Assert.True(view.Ok);
+        var lists = Check(view, "qb-lists");
+        Assert.False(lists.Ok);
+        Assert.Equal(Readiness.Warning, lists.Severity);
+        Assert.Contains("unreadable", lists.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>A lists file the API's account may not read (an ACL, or a file locked by another account).</summary>
+    private sealed class DeniedLists : QbAutopost.Core.Abstractions.IQbListsSource
+    {
+        public QbAutopost.Core.Models.QbLists Current => throw new UnauthorizedAccessException("Access to the path is denied.");
+
+        public QbAutopost.Core.Pipeline.ListSyncRun? LastAttempt => null;
+    }
+
+    private sealed class StubLists(QbAutopost.Core.Models.QbLists current, QbAutopost.Core.Pipeline.ListSyncRun? last) : QbAutopost.Core.Abstractions.IQbListsSource
+    {
+        public QbAutopost.Core.Models.QbLists Current => current;
+
+        public QbAutopost.Core.Pipeline.ListSyncRun? LastAttempt => last;
+    }
+
+    private static QbAutopost.Core.Pipeline.ListSyncRun Attempt(QbAutopost.Core.Pipeline.ListSyncOutcome outcome, string? reason, DateTime finished) =>
+        new()
+        {
+            Trigger = QbAutopost.Core.Pipeline.ListSyncTrigger.Schedule,
+            StartedUtc = finished,
+            FinishedUtc = finished,
+            Outcome = outcome,
+            Reason = reason,
+        };
+
+    private static readonly QbAutopost.Core.Models.QbLists Synced1430 =
+        new() { SyncedUtc = new DateTime(2026, 10, 29, 14, 30, 0, DateTimeKind.Utc) };
+
+    [Fact]
+    public void Should_NameFailedAttemptAndListAge_When_ListsExistAndLastSyncFailed()
+    {
+        var failed = Attempt(QbAutopost.Core.Pipeline.ListSyncOutcome.Failed, "quickbooks-not-open", new DateTime(2026, 10, 29, 15, 0, 0, DateTimeKind.Utc));
+
+        var view = Readiness.Evaluate(Ready(), workerStarted: true, new StubLists(Synced1430, failed));
+
+        var lists = Check(view, "qb-lists");
+        Assert.True(lists.Ok);
+        Assert.Equal(Readiness.Warning, lists.Severity);
+        Assert.Contains("last sync failed 15:00 (quickbooks-not-open); lists from 14:30", lists.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_NameSkippedAttempt_When_LastSyncWasSkipped()
+    {
+        var skipped = Attempt(QbAutopost.Core.Pipeline.ListSyncOutcome.Skipped, "quickbooks-not-open", new DateTime(2026, 10, 29, 15, 30, 0, DateTimeKind.Utc));
+
+        var lists = Check(Readiness.Evaluate(Ready(), workerStarted: true, new StubLists(Synced1430, skipped)), "qb-lists");
+
+        Assert.True(lists.Ok);
+        Assert.Contains("last sync skipped 15:30 (quickbooks-not-open); lists from 14:30", lists.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_NameOnlyListAge_When_LastSyncWasOk()
+    {
+        var ok = Attempt(QbAutopost.Core.Pipeline.ListSyncOutcome.Ok, null, new DateTime(2026, 10, 29, 14, 30, 0, DateTimeKind.Utc));
+
+        var lists = Check(Readiness.Evaluate(Ready(), workerStarted: true, new StubLists(Synced1430, ok)), "qb-lists");
+
+        Assert.True(lists.Ok);
+        Assert.Contains("lists from 14:30", lists.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("last sync", lists.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_KeepNotSyncedGuidance_When_NeverSynced()
+    {
+        var lists = Check(Readiness.Evaluate(Ready(), workerStarted: true, new StubLists(QbAutopost.Core.Models.QbLists.Empty, null)), "qb-lists");
+
+        Assert.False(lists.Ok);
+        Assert.Contains("run POST /api/v1/quickbooks/lists/sync", lists.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("last sync", lists.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_NotNameTheFile_When_DatabaseModeAndNeverSynced()
+    {
+        var settings = Ready();
+        settings.Database.ConnectionString = "Host=db";
+
+        var lists = Check(Readiness.Evaluate(settings, workerStarted: true, new StubLists(QbAutopost.Core.Models.QbLists.Empty, null)), "qb-lists");
+
+        Assert.False(lists.Ok);
+        Assert.Contains("no lists synced yet; run POST /api/v1/quickbooks/lists/sync or Sync now", lists.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("qb-lists.json", lists.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_AddFailedAttempt_When_NeverSyncedAndLastAttemptFailed()
+    {
+        var failed = Attempt(QbAutopost.Core.Pipeline.ListSyncOutcome.Failed, "qb-status", new DateTime(2026, 10, 29, 9, 5, 0, DateTimeKind.Utc));
+
+        var lists = Check(Readiness.Evaluate(Ready(), workerStarted: true, new StubLists(QbAutopost.Core.Models.QbLists.Empty, failed)), "qb-lists");
+
+        Assert.False(lists.Ok);
+        Assert.Contains("last sync failed 09:05 (qb-status)", lists.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -97,7 +239,7 @@ public sealed class ReadinessChecksTests : IDisposable
         File.WriteAllText(blocker, "a file where the log folder should be");
         settings.Paths.Logs = Path.Combine(blocker, "logs");
 
-        var view = Readiness.Evaluate(settings, workerStarted: true);
+        var view = Readiness.Evaluate(settings, workerStarted: true, ListsOf(settings));
 
         Assert.False(view.Ok);
         Assert.False(Check(view, "logFolder").Ok);
@@ -106,7 +248,7 @@ public sealed class ReadinessChecksTests : IDisposable
     [Fact]
     public void Should_NameEveryCheck_When_Evaluated()
     {
-        var view = Readiness.Evaluate(Ready(), workerStarted: true);
+        var view = Readiness.Evaluate(Ready(), workerStarted: true, ListsOf(Ready()));
 
         Assert.Equal(
             ["settings", "rules", "qb-lists", "logFolder", "worker"],

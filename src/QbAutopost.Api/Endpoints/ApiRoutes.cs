@@ -59,6 +59,8 @@ public static class ApiRoutes
         ("POST", "/auth/change-password"),
         ("GET", "/auth/me"),
         ("GET", "/quickbooks/lists"),
+        ("POST", ListSyncRoute),
+        ("GET", ListSyncHistoryRoute),
         ("GET", "/health"),
         ("GET", "/health/database"),
         ("GET", OpenApiPath),
@@ -70,6 +72,18 @@ public static class ApiRoutes
     /// disagree about which path they mean.
     /// </summary>
     public const string SyncPostRoute = "/quickbooks/transactions/validate-and-post";
+
+    /// <summary>
+    /// M14 §7.2: the list sync. Under <c>/api/v1</c> (and flat) it is v1's, <c>qb:read</c>; under <c>/api/v2</c> it is the
+    /// dashboard's Sync now (<see cref="IsV2ListSync"/>), with its own scope and the posting rate bucket.
+    /// </summary>
+    public const string ListSyncRoute = "/quickbooks/lists/sync";
+
+    /// <summary>
+    /// M15 §3 (R-17): the list sync history, under <c>/api/v2</c> only: <c>lists:read</c> (a key with <c>qb:read</c> too),
+    /// the default rate bucket. Not <see cref="IsV2ListSync"/>, which is the POST of <see cref="ListSyncRoute"/> exactly.
+    /// </summary>
+    public const string ListSyncHistoryRoute = "/quickbooks/lists/syncs";
 
     public const string HealthPrefix = "/health";
 
@@ -193,6 +207,16 @@ public static class ApiRoutes
                && segments[0].Equals("saved-requests", Ordinal)
                && segments[2].Equals("post", Ordinal);
     }
+
+    /// <summary>
+    /// M14 §7.2: <c>POST /api/v2/quickbooks/lists/sync</c>, the dashboard's Sync now. It opens a QuickBooks session, so
+    /// <c>RateLimitPolicy</c> puts it in the posting bucket. The v1 and flat spellings are not it: they keep v1's bucket.
+    /// Case-insensitive, as routing is (R32; spelled out here because <c>Ordinal</c> in this class already ignores case).
+    /// </summary>
+    public static bool IsV2ListSync(string method, PathString path) =>
+        HttpMethods.IsPost(method)
+        && path.HasValue
+        && path.Value!.TrimEnd('/').Equals(V2Prefix + ListSyncRoute, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// T-912 (FR-A-16): the routes whose answer changes something, and which therefore leave an audit line.
@@ -323,11 +347,25 @@ public static class ApiRoutes
             return AuthScope(method, p);
         }
 
+        // M14 §7.2 (Q-120): the dashboard's Sync now, under /api/v2 only. Editors and admins (requests:edit, which no key
+        // can hold), or an API key with qb:read as on v1. Its v1 and flat spellings fall through to qb:read below.
+        if (IsV2ListSync(method, path))
+        {
+            return ApiScopes.AnyOf(ApiScopes.RequestsEdit, ApiScopes.QbRead);
+        }
+
         // Spec 11.1: the edit dropdowns read the cached lists, and that is all lists:read opens. Syncing the lists,
         // which opens a QuickBooks session, stays qb:read below.
         if (get && p.Equals("/quickbooks/lists", Ordinal))
         {
             return ApiScopes.ListsRead;
+        }
+
+        // M15 §3: the sync history reads what the lists page shows, so lists:read; v2 only. Anything but a GET stays admin.
+        // Its v1 and flat spellings are not mapped and keep the /quickbooks/ fall-through below, as before.
+        if (p.Equals(ListSyncHistoryRoute, Ordinal) && path.Value!.StartsWith(V2Prefix + "/", Ordinal))
+        {
+            return get ? ApiScopes.ListsRead : ApiScopes.Admin;
         }
 
         if (p.StartsWith("/rules/", Ordinal))

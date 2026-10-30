@@ -219,13 +219,16 @@ whose post finished on that local day (2026-10-26T18:30Z ≤ t < 2026-10-27T18:3
 | Extraction not configured (`Extraction:Enabled` false, or no key) | `503 extraction-unavailable` |
 | No `file` part | `400 invalid-request` |
 | Body over `Extraction:MaxBytes` (default 10 MB = 10 485 760) | `413 file-too-large`, detail names the byte limit. See "Body size" below. |
+| Same user already has an extraction in flight | `429 too-many-extractions`, `Retry-After: 30` |
+| More than `Extraction:MaxPerUserPerHour` (default 20) started by the user in the last hour | `429 too-many-extractions`, `Retry-After` = seconds until the oldest of those leaves the window |
 | File does not start with `%PDF-` | `415 not-a-pdf` |
 | PdfPig cannot open it | `415 not-a-pdf` |
 | PdfPig reports it encrypted / password-protected | `422 pdf-protected` |
 | More than `Extraction:MaxPages` (default 50) | `413 file-too-large`, detail names the page limit |
 | Every page under `PdfText.ScannedPageThreshold` (40 non-space characters) | `422 no-text`: "This PDF has no readable text. It may be a scan." |
-| Same user already has an extraction in flight | `429 too-many-extractions`, `Retry-After: 30` |
-| More than `Extraction:MaxPerUserPerHour` (default 20) started by the user in the last hour | `429 too-many-extractions`, `Retry-After` = seconds until the oldest of those leaves the window |
+
+- The limits come before the PDF checks (Q-130): parsing is the costly step, so they must bound it. An upload refused
+  by a later check has therefore used one of the hourly starts.
 
 - **Body size.** Today one global limit applies to every request: `Api:MaxRequestBodyBytes` (2 MB), enforced by
   `RequestSizeMiddleware` and by Kestrel (`Program.cs`). M12 must:
@@ -249,7 +252,8 @@ whose post finished on that local day (2026-10-26T18:30Z ≤ t < 2026-10-27T18:3
     (`UploadPdfReader`, or a new `PdfText` method; *builder's call*) that:
     - reads from a byte array or stream;
     - reports encrypted (→ 422), unopenable (→ 415), page count, and per-page text, as distinct results;
-    - treats a short page as empty text and returns `no-text` only when **every** page is short;
+    - treats a short page as empty text and returns `no-text` only when **every** page is short; the `200` names the
+      short pages in `file.unreadPages` (1-based, `[]` when none), because a short page can hold a transaction (Q-129);
     - never calls OCR.
   - The existing `PdfText.ReadAsync` behaviour for jobs is unchanged.
   - n8n uses a different PDF library, so its text is not byte-identical. That is accepted; the acceptance test does

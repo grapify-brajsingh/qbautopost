@@ -1,0 +1,35 @@
+<?xml version="1.0" ?>
+<QBXML>
+  <QBXMLMsgsRs>
+    <AccountQueryRs requestID="accounts" statusCode="0" statusSeverity="Info" statusMessage="Status OK">
+      <AccountRet>
+        <Name>Sample Checking 0001</Name>
+        <FullName>Sample Checking 0001</FullName>
+        <AccountType>Bank</AccountType>
+      </AccountRet>
+      <AccountRet>
+        <Name>Power</Name>
+        <FullName>Utilities:Power</FullName>
+        <AccountType>Expense</AccountType>
+      </AccountRet>
+    </AccountQueryRs>
+    <VendorQueryRs requestID="vendors" statusCode="0" statusSeverity="Info" statusMessage="Status OK">
+      <VendorRet>
+        <Name>Example Hardware</Name>
+      </VendorRet>
+      <VendorRet>
+        <Name>Sample Power &amp; Light</Name>
+      </VendorRet>
+    </VendorQueryRs>
+    <CustomerQueryRs requestID="customers" statusCode="0" statusSeverity="Info" statusMessage="Status OK">
+      <CustomerRet>
+        <Name>Sample Customer</Name>
+        <FullName>Sample Customer</FullName>
+      </CustomerRet>
+      <CustomerRet>
+        <Name>Kitchen</Name>
+        <FullName>Sample Customer:Kitchen</FullName>
+      </CustomerRet>
+    </CustomerQueryRs>
+  </QBXMLMsgsRs>
+</QBXML>
