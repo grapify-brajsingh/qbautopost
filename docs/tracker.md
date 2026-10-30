@@ -30,6 +30,7 @@ Status legend: `todo` · `doing` · `done` · `blocked` · `ready-for-human`
 | M12 | Home, upload and OpenRouter (R-10…R-14) | 15 | 14 | **in progress** (branch `feature/m12-home-upload-openrouter`): agent work done (T-1201…T-1214 done); T-1215 ready-for-human ([server], a person verifies on the QuickBooks server) — contract is `docs/dashboard-api-m12.md`, plan `docs/dashboard-api-m12-plan.md` |
 | M13 | Dashboard integration fixes (R-15, R-7.3, client aborts) and local Docker stack | 5 | 5 | **agent work done** (branch `feature/dashboard-integration`) — contract is `docs/dashboard-integration-m13.md`, plan `docs/dashboard-integration-m13-plan.md` |
 | M14 | QuickBooks list sync in PostgreSQL, scheduled on the job worker, v2 sync route | 10 | 9 | **agent work done; T-1409 ready-for-human** (branch `feature/m14-qb-list-sync`) — contract is `docs/qb-list-sync-m14.md`, plan `docs/qb-list-sync-m14-plan.md` |
+| M15 | QuickBooks list sync history route (R-17) and a seeded simulated company | 5 | 0 | **in progress** (branch `feature/m15-qb-lists-page`) — contract is `docs/qb-lists-page-m15.md`, plan `docs/qb-lists-page-m15-plan.md` |
 
 ## M0 — Bootstrap
 
@@ -342,6 +343,18 @@ Contract: `docs/qb-list-sync-m14.md` (owner request 2026-10-29: Sync now button,
 | T-1408 | Startup log line, readiness text, runbook | §12, §13 | see plan | `StartupLogTests` (4), `ReadinessChecksTests` +5 (failed, skipped, ok, never synced, never synced with a failed attempt); `OperatorDocsTests` green; full `dotnet test` | done | Startup `QuickBooks:` line ends `list sync every {n} min (first after {m} min)` or `list sync schedule off`, then `lists in the database` / `lists in {file}`. Readiness `qb-lists` text: `last sync failed 15:00 (quickbooks-not-open); lists from 14:30` (UTC); names, severity and v1 shape unchanged. Runbook §2.2, §3.1, §5.4 |
 | T-1409 | [server] checklist A-10 on the QuickBooks machine | §15 | `docs/testing/T-1409.server-checklist.md` | A person on the server | ready-for-human | [server]: implement against fakes, set `ready-for-human`, stop |
 
+## M15 — QuickBooks lists page: sync history (`/api/v2`) and a seeded simulated company
+
+Contract: `docs/qb-lists-page-m15.md` (owner request 2026-10-30: a **Lists** tab showing the synced names and the history of sync runs; requirement R-17 in `D:\qb_post_react\docs\api-requirements-for-dashboard.md`). Plan: `docs/qb-lists-page-m15-plan.md`. No v1 change, no new package, table, column, hosted service or timer.
+
+| ID | Task | Spec | Files | Verified by | Status | Notes |
+|---|---|---|---|---|---|---|
+| T-1500 | Tracker M15, Q-125…Q-127 | §5 | `docs/tracker.md` | Docs only; `OperatorDocsTests` green | done | |
+| T-1501 | Store: `ListAttemptsAsync` (EF and file) | §3.1 | | | todo | |
+| T-1502 | `GET /api/v2/quickbooks/lists/syncs`, scope, OpenAPI | §3 | | | todo | |
+| T-1503 | Seed the simulated company from `Paths:QbLists` | §4 | | | todo | |
+| T-1504 | Runbook, Session log; Docker stack check | §6 | | | todo | |
+
 ## Questions raised during implementation
 
 | # | Task | Question | Conservative choice taken | Answer (human) |
@@ -471,6 +484,9 @@ Contract: `docs/qb-list-sync-m14.md` (owner request 2026-10-29: Sync now button,
 | Q-122 | T-1406 | §5.2 takes the due time from the recorded last attempt; when the record itself fails (database down) the source does not move. What then? And a presence check that throws? | The schedule also remembers its own last attempt in memory and uses the newer of the two, so an unrecordable attempt still waits a full interval (no retry storm). A presence check that throws counts as "not open" (skipped, never start QuickBooks). The failure streak (§5.6) reads the newest known attempt of any trigger | |
 | Q-123 | T-1407 | §7.2 gives the dashboard route trigger `dashboard` with the user id, and lets an API key with `qb:read` call it. What trigger does a key's sync get? And does a v1 sync that is queued count as "a sync already queued" for joining? | A key on the v2 route is recorded as v1 records it: trigger `api`, `requestedBy` = the client's name (`dashboard` stays a person). Joining covers the scheduled sync and other dashboard syncs only (the brief's reading); a v1 sync queued at that moment is not joined, so the dashboard sync runs after it (two syncs, never overlapping). Marked `SPEC-GAP T-1407` in `QuickBooksListsV2Endpoints.WhoAsks` | |
 | Q-124 | T-1407 review | With no database, spec §3.4/§7.1 said `lastSync` is null, but `FileQbLists` keeps the last attempt in memory. Which? | Keep the in-memory value: it is more useful than null and resets on restart. Spec §3.4, §7.1 and A-8 amended: "with no database it is the last attempt since the API started (kept in memory), null before any". No code change | |
+| Q-125 | M15 spec | History without a database? | Attempts since the API started, in memory, same shape, capped at `QuickBooks:ListSync:HistoryRows` (as Q-124 for `lastSync`); `id` is a per-process sequence | |
+| Q-126 | M15 spec | Show a failed attempt's `error` to admins? | No: exception text is operator data; `message` is enough for the dashboard, the log has the rest | |
+| Q-127 | M15 spec | Names added/removed per sync (diff of stored `lists`)? | Not in M15 (owner asked for history, not changes); possible later from the stored JSON | |
 
 ## Decisions
 
@@ -675,3 +691,4 @@ Contract: `docs/qb-list-sync-m14.md` (owner request 2026-10-29: Sync now button,
 | 2026-10-29 | 101 | M14 review | M-4: `DbQbListsSource` replaces `Current` on every recorded Ok run (syncs are serialised; the `SyncedUtc` monotonic guard is gone, so a backward clock step cannot freeze the lists). `QbListsSourceDbWiringTests`: the guard test becomes `Should_ReplaceCurrent_When_AnOkRunIsRecordedAfterTheClockSteppedBack` (red against the guard, then green; 7 green). |
 | 2026-10-29 | 102 | M14 review | M-5: `ApiRoutes.IsV2ListSync` already matched case-insensitively (the class-wide `Ordinal` constant is `OrdinalIgnoreCase`, R32), so the finding needed no behaviour change; the comparison is now spelled `StringComparison.OrdinalIgnoreCase` and a pin test added: mixed-case `/API/V2/QuickBooks/Lists/Sync` → posting bucket and `requests:edit`/`qb:read` scope (`V2QbListsSyncTests` +2, green before and after). `IsSavedRequestPost` untouched. V2QbListsSync + V2ScopeMatrix 197 green. |
 | 2026-10-29 | 103 | M14 review | Final review fixes I-1, I-2, M-1, M-3, M-4, M-5, M-7 complete. `dotnet build -warnaserror` 0 warnings; `dotnet test`: Core 1253, Api 1638, Data 497 (1 skipped). Report `.superpowers/sdd/qb-list-sync-m14-plan/final-fix-report.md`. |
+| 2026-10-30 | 104 | T-1500 | M15 docs: tracker M15 row and section (T-1500…T-1504), Q-125…Q-127. Docs only. |
