@@ -31,6 +31,7 @@ Status legend: `todo` · `doing` · `done` · `blocked` · `ready-for-human`
 | M13 | Dashboard integration fixes (R-15, R-7.3, client aborts) and local Docker stack | 5 | 5 | **agent work done** (branch `feature/dashboard-integration`) — contract is `docs/dashboard-integration-m13.md`, plan `docs/dashboard-integration-m13-plan.md` |
 | M14 | QuickBooks list sync in PostgreSQL, scheduled on the job worker, v2 sync route | 10 | 9 | **agent work done; T-1409 ready-for-human** (branch `feature/m14-qb-list-sync`) — contract is `docs/qb-list-sync-m14.md`, plan `docs/qb-list-sync-m14-plan.md` |
 | M15 | QuickBooks list sync history route (R-17) and a seeded simulated company | 5 | 5 | **agent work done** (branch `feature/m15-qb-lists-page`) — contract is `docs/qb-lists-page-m15.md`, plan `docs/qb-lists-page-m15-plan.md` |
+| M16 | Windows server deployment: one-command release, nginx contract, first-install runbook | 4 | 3 | **agent work done; T-1602 and T-1603 ready-for-human** (branch `feature/m16-windows-deploy`) — design is `docs/windows-deploy.md` |
 
 ## M0 — Bootstrap
 
@@ -355,6 +356,17 @@ Contract: `docs/qb-lists-page-m15.md` (owner request 2026-10-30: a **Lists** tab
 | T-1503 | Seed the simulated company from `Paths:QbLists` | §4 | `src/QbAutopost.Api/QuickBooks/{QbConnection,SimulatedListsSeed}.cs`, `src/QbAutopost.Api/Logging/StartupLog.cs`, `src/QbAutopost.Api/Program.cs`, `tests/QbAutopost.Api.Tests/QuickBooks/SimulatedListsSeedTests.cs`, `tests/fixtures/qb-lists/simulated-company.json` | New `SimulatedListsSeedTests` (6, real DI switch with `QuickBooks:Fake=true`: A-8 v2 Sync now → 200 with counts 19/15/6 and the fixture's names and types; startup `QuickBooks:` line `simulated company: 19 accounts, 15 vendors, 6 customers from {file}`; missing file → 200 empty lists, one Warning, line says `simulated company: no lists`; unreadable file → empty, one Warning, startup goes on; the company holds the seed before use; no seed with a test gateway); red with the seed call disabled (5 of 6), then green; `StartupLogTests`, `QuickBooksFlowApiTests` green; `dotnet build -warnaserror` 0 warnings; `dotnet test`: Core 1261, Api 1676, Data 504 (1 skipped) | done | `SimulatedListsSeed.Apply(company, Paths:QbLists, log)` in the Simulated branch of `QbConnection.Create` only (SDK and unavailable unchanged; the branch still refuses outside Development/Testing). Blank names are skipped. Warning `simulated QuickBooks company has no lists: {Reason}` (not set / not found / could not be read). `QbConnection.SimulatedSeed` carries the counts; `Program` resolves the connection before the startup lines only when the mode is Simulated, so the Warning and the counts are part of startup; `StartupLog.Write` gains an optional connection. Builder's call, not in §4: a missing file makes the line end `simulated company: no lists` |
 | T-1504 | Runbook, Session log; Docker stack check | §6 | `docs/runbook.md` (§5.4 history route, §13 seeded simulated company and api-only rebuild) | `OperatorDocsTests` green; Docker stack (`docker compose -f D:\qb_post_react\docker-compose.integration.yml up -d --build api`, no `down -v`): startup line `… simulated company: 19 accounts, 15 vendors, 6 customers from /data/qb-lists.json`; signed in as the demo admin, `POST /api/v2/quickbooks/lists/sync` → 200, counts 19/15/6, `lastSync` dashboard/ok by "Asha Kapoor"; `GET /api/v2/quickbooks/lists/syncs` → 200, that run on top (id 5) with counts 19/15/6 and `current: true`, the import row (id 1) `current: false`; `?foo=1` → 400 | done | The compose schedule was left as found (off); the owner re-enables it. The dashboard's Playwright run was not part of this task |
 
+## M16 — Windows server deployment
+
+Design: `docs/windows-deploy.md`. Plan: `docs/windows-deploy-plan.md`. nginx and the domain are the owner's work; no CI/CD, no Docker on the server, no n8n in this rollout.
+
+| ID | Task | Spec | Files | Verified by | Status | Notes |
+|---|---|---|---|---|---|---|
+| T-1600 | Design and plan | §1–§11 | `docs/windows-deploy.md`, `docs/windows-deploy-plan.md` | Docs only | done | |
+| T-1601 | `Api:TrustForwardedHeaders` for a loopback proxy | §7 | `src/QbAutopost.Api/`, `tests/QbAutopost.Api.Tests/` | Tests against fakes; counts in the Session log | done | Default off keeps existing installs unchanged |
+| T-1602 | [server] `deploy/deploy.ps1`, one-command release | §8 | `deploy/deploy.ps1`, `tests/QbAutopost.Core.Tests/Architecture/WindowsDeployScriptTests.cs` | Static script tests; the release itself only on the server | ready-for-human | [server]: keeps `pre-deploy-*.dump` (never deleted); a rollback does not undo a migration |
+| T-1603 | [server] First-install runbook, nginx contract, server checklist | §6, §9 | `docs/runbook.md` (§3.1, §11, new §14), `docs/testing/T-1603.server-checklist.md`, `tests/QbAutopost.Core.Tests/Architecture/WindowsDeployScriptTests.cs` | Three doc tests (red, then green); checklist items 1–8 on the server | ready-for-human | [server]. Q-128 |
+
 ## Questions raised during implementation
 
 | # | Task | Question | Conservative choice taken | Answer (human) |
@@ -487,6 +499,7 @@ Contract: `docs/qb-lists-page-m15.md` (owner request 2026-10-30: a **Lists** tab
 | Q-125 | M15 spec | History without a database? | Attempts since the API started, in memory, same shape, capped at `QuickBooks:ListSync:HistoryRows` (as Q-124 for `lastSync`); `id` is a per-process sequence | |
 | Q-126 | M15 spec | Show a failed attempt's `error` to admins? | No: exception text is operator data; `message` is enough for the dashboard, the log has the rest | |
 | Q-127 | M15 spec | Names added/removed per sync (diff of stored `lists`)? | Not in M15 (owner asked for history, not changes); possible later from the stored JSON | |
+| Q-128 | T-1603 | Does Enterprise 24 accept the default `QuickBooks:QbXmlVersion`? | Keep the default; checklist item 5 sets `16.0` if the first small post fails on version | |
 
 ## Decisions
 
@@ -696,3 +709,7 @@ Contract: `docs/qb-lists-page-m15.md` (owner request 2026-10-30: a **Lists** tab
 | 2026-10-30 | 106 | T-1502 | `GET /api/v2/quickbooks/lists/syncs` (R-17): `lists:read`, read bucket, v2 only; `trigger`/`outcome` sets, `page`, `pageSize` 1–100, anything else 400 `invalid-request`; items share `lastSync`'s mapping plus `id`, `counts`, `current`. openapi-v2 documents it. `V2QbListSyncHistoryTests` 29 + `V2QbListSyncHistoryDbTests` 1 (red with the route unmapped, then green); scope matrix, drift and v1 pins green. `dotnet build -warnaserror` 0 warnings; `dotnet test`: Core 1261, Api 1670, Data 504 (1 skipped). |
 | 2026-10-30 | 107 | T-1503 | Simulated company seeded from `Paths:QbLists` (accounts with type, vendors, customers) in `QbConnection.Create`, simulated mode only; missing/unreadable file → one Warning, empty company, startup goes on; startup line states the counts. `SimulatedListsSeedTests` 6 (red 5/6 with the seed call disabled, then green). `dotnet build -warnaserror` 0 warnings; `dotnet test`: Core 1261, Api 1676, Data 504 (1 skipped). |
 | 2026-10-30 | 108 | T-1504 | Runbook §5.4 (history route) and §13 (simulated company seeded from the mounted lists, api-only rebuild). Docker stack: api rebuilt and restarted only; Sync now → 200 with 19/15/6, the history lists it on top with `current: true`. M15 agent work done. |
+| 2026-10-30 | 109 | T-1600 | M16 design `docs/windows-deploy.md` and plan `docs/windows-deploy-plan.md`. Docs only. |
+| 2026-10-30 | 110 | T-1601 | `Api:TrustForwardedHeaders` (default false): forwarded `X-Forwarded-For`/`-Proto` honoured from loopback proxies only, first in the pipeline. Done. |
+| 2026-10-30 | 111 | T-1602 | `deploy/deploy.ps1` (one-command release, rollback, pre-deploy dump, restore on a failed swap or start); static tests in `WindowsDeployScriptTests`. `ready-for-human` [server]. |
+| 2026-10-30 | 112 | T-1603 | Runbook §14 (first install, releases, nginx contract, T-609 decision and safeguards), §3.1 `Api:TrustForwardedHeaders`, §11 pointer; `docs/testing/T-1603.server-checklist.md` items 1–8; Q-128. `WindowsDeployScriptTests` +3 (red 3 of 3, then green). `dotnet build -warnaserror` 0 warnings; full `dotnet test`: Core 1285, Data 504 (1 skipped), Api 1679, all green. `ready-for-human` [server]. M16 agent work done. |

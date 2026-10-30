@@ -199,4 +199,39 @@ public sealed class WindowsDeployScriptTests
     {
         Assert.DoesNotContain(forbidden, Read(), StringComparison.OrdinalIgnoreCase);
     }
+
+    private static string ReadDoc(params string[] parts) =>
+        File.ReadAllText(Path.Combine(new[] { RepoRoot.Find() }.Concat(parts).ToArray()));
+
+    [Fact]
+    public void Should_DocumentFirstInstall_When_ReadingRunbook()
+    {
+        var runbook = ReadDoc("docs", "runbook.md");
+
+        foreach (var token in new[]
+        {
+            "deploy.ps1", "TrustForwardedHeaders", "appsettings.Production.json", "Extraction__Enabled",
+            "proxy_read_timeout 600s", "X-Forwarded-For $remote_addr", "pre-deploy-", "auto-logon",
+        })
+        {
+            Assert.Contains(token, runbook, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Should_WarnThatPostAlwaysPosts_When_ReadingRunbook()
+    {
+        Assert.Contains("Post button always posts", ReadDoc("docs", "runbook.md"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_ListTheServerChecks_When_ReadingChecklist()
+    {
+        var checklist = ReadDoc("docs", "testing", "T-1603.server-checklist.md");
+
+        foreach (var token in new[] { "Rollback", "appsettings.Production.json", "Secure", "QbXmlVersion", "QbAutopost", "Stop-ScheduledTask" })
+        {
+            Assert.Contains(token, checklist, StringComparison.Ordinal);
+        }
+    }
 }
