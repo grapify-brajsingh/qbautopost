@@ -245,6 +245,7 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton<IQbGateway>(sp => sp.GetRequiredService<ResilientQbGateway>());
 builder.Services.AddSingleton<QbConnectionCheck>();
 builder.Services.AddSingleton<CompanyFileValidator>();
+builder.Services.AddSingleton<CompanyAccessChecker>();
 builder.Services.AddSingleton(sp =>
 {
     var s = sp.GetRequiredService<IOptions<AppSettings>>().Value;

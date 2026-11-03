@@ -247,6 +247,11 @@ public sealed class FakeCompanyStore : ICompanyStore
             }
 
             var row = _companies[index];
+            if (!SamePath(row.FilePath, check.CheckedFilePath))
+            {
+                return Task.FromResult(new CompanyChange(CompanyChangeKind.Stale, row));
+            }
+
             var next = row with
             {
                 Access = check.Access,

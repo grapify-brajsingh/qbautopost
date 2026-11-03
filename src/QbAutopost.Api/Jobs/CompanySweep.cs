@@ -56,6 +56,14 @@ public sealed class CompanySweepSource(
     /// <summary>Several companies and <c>Companies:ScheduledSync</c> = <c>off</c>: no scheduled sync at all (no slot, no read).</summary>
     public bool Off => Enabled && Mode == ScheduledSyncModes.Off;
 
+    /// <summary>
+    /// The company as it is now, for a sweep step: the snapshot taken when the sweep began can be stale (the company was
+    /// disabled, re-pointed or lost its approval since). Null when it may no longer open a session; its lists must not be
+    /// recorded under a file that was not the one chosen.
+    /// </summary>
+    public async Task<CompanyContext?> ReResolveAsync(CompanyContext chosen, CancellationToken ct) =>
+        await resolver.GetAsync(chosen.Id, ct) is { CanOpenSession: true } now ? now : null;
+
     public async Task<IReadOnlyList<CompanyContext>> SelectAsync(CancellationToken ct)
     {
         if (companies is null)

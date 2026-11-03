@@ -4,8 +4,10 @@ using Microsoft.Extensions.Options;
 using QbAutopost.Api.Companies;
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Database;
+using QbAutopost.Api.Jobs;
 using QbAutopost.Api.Security;
 using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Api;
 using QbAutopost.Core.Companies;
 using QbAutopost.Core.SavedRequests;
 
@@ -62,6 +64,7 @@ public static class CompanyEndpoints
         v2.MapGet("/companies", ListAsync).RequireDatabaseWhenConfigured();
         v2.MapPost("/companies/scan", ScanAsync).RequireDatabaseWhenConfigured();
         v2.MapPatch("/companies/{id}", PatchAsync).RequireDatabaseWhenConfigured();
+        v2.MapPost("/companies/{id}/check", CheckAsync).RequireDatabaseWhenConfigured();
         return v2;
     }
 
@@ -77,6 +80,73 @@ public static class CompanyEndpoints
             : [.. (await store.ListAsync(ct)).Select(views.Of)];
         var lastScan = store is null ? null : await store.LastScanUtcAsync(ct);
         return Results.Ok(new CompaniesView(root, s.Companies.Configured, s.Companies.Configured && Directory.Exists(root), lastScan, items));
+    }
+
+    /// <summary>
+    /// Check access (spec 5.1): the one route that opens a session for a company that is not approved, because it is how a
+    /// file becomes approved. A company with no file to open is still refused (409 <c>company-not-ready</c>), and a company
+    /// whose file is gone is recorded as <c>file-not-found</c> without a session. QuickBooks must already be running. The
+    /// call runs on the worker through the one gateway lock; another open file is a 409 and changes nothing.
+    /// </summary>
+    private static async Task<IResult> CheckAsync(
+        HttpContext http, string id, ICompanyResolver resolver, CompanyAccessChecker checker, JobQueue queue, IQbPresence presence,
+        IQbListsCatalog lists, IServiceProvider services, ILoggerFactory loggers, CancellationToken ct)
+    {
+        if (!int.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out var companyId))
+        {
+            return CompanyProblems.NotFound(0);
+        }
+
+        if (services.GetService<ICompanyStore>() is not { } store)
+        {
+            return CompanyProblems.RootUnavailable("checking a company needs the database");
+        }
+
+        if (await resolver.GetAsync(companyId, ct) is not { } context || await store.GetAsync(companyId, ct) is not { } company)
+        {
+            return CompanyProblems.NotFound(companyId);
+        }
+
+        if (context.State != CompanyState.Active || string.IsNullOrEmpty(context.FilePath) || context.FileOutsideRoot)
+        {
+            return CompanyProblems.NotReadyToCheck(context);
+        }
+
+        if (!string.Equals(context.FilePath, company.FilePath, StringComparison.OrdinalIgnoreCase))
+        {
+            return CompanyProblems.EditedBySomeoneElse(company.RowVersion);
+        }
+
+        if (File.Exists(company.FilePath) && !ListSyncGuard.IsOpen(presence, loggers.CreateLogger(typeof(CompanyEndpoints))))
+        {
+            return CompanyProblems.QuickBooksNotOpen();
+        }
+
+        CompanyAccessCheck check;
+        try
+        {
+            check = await queue.RunExclusiveAsync($"company-check-{companyId}", t => checker.CheckAsync(company, t), ct);
+        }
+        catch (Exception ex) when (CompanyFileRefusal.Of(ex) is { } refusal)
+        {
+            return refusal.Type == CompanyFileRefusal.OpenElsewhere
+                ? CompanyProblems.OpenElsewhere(refusal)
+                : CompanyProblems.FileUnavailable(refusal);
+        }
+
+        var change = await store.RecordAccessAsync(companyId, check, CallerMiddleware.CallerOf(http)!.Actor, ct);
+        switch (change.Kind)
+        {
+            case CompanyChangeKind.NotFound:
+                return CompanyProblems.NotFound(companyId);
+            case CompanyChangeKind.Stale:
+                // The company was re-pointed while QuickBooks answered: the answer is for another file, so nothing was stamped.
+                return CompanyProblems.EditedBySomeoneElse((change.Company ?? await store.GetAsync(companyId, ct))?.RowVersion ?? company.RowVersion);
+            default:
+                var views = new CompanyViews(lists, await PendingAsync(services, ct));
+                http.Response.Headers.ETag = $"\"{change.Company!.RowVersion.ToString(CultureInfo.InvariantCulture)}\"";
+                return Results.Ok(views.Of(change.Company));
+        }
     }
 
     /// <summary>Reads the whole root first and applies only when it could be read, so a bad root changes nothing.</summary>

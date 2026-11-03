@@ -208,6 +208,36 @@ public sealed class ScheduledCompanySweepTests : IDisposable
     }
 
     [Fact]
+    public async Task Should_SkipTheCompany_When_ItWasDisabledAfterTheSweepChoseIt()
+    {
+        var gateway = new HookGateway(_gateway, () => DisableAsync(TakomaId).GetAwaiter().GetResult());
+
+        await SweepOnceAsync(gateway);
+
+        Assert.Equal([null, SaFile], _gateway.Targets); // the stale snapshot of Takoma is never opened
+        Assert.Null(LastOf(TakomaId));
+        Assert.Equal(ListSyncOutcome.Ok, LastOf(SaId)!.Outcome);
+    }
+
+    [Fact]
+    public async Task Should_SkipTheCompany_When_ItsAccessWasReplacedAfterTheSweepChoseIt()
+    {
+        var gateway = new HookGateway(_gateway, () => _companies.RecordAccessAsync(
+            SaId, new CompanyAccessCheck(CompanyAccess.NeedsApproval, "dialog", null, null, T0, SaFile), "admin", default).GetAwaiter().GetResult());
+
+        await SweepOnceAsync(gateway);
+
+        Assert.Equal([null, TakomaFile], _gateway.Targets);
+        Assert.Null(LastOf(SaId));
+    }
+
+    private async Task DisableAsync(int id)
+    {
+        var company = (await _companies.GetAsync(id, default))!;
+        await _companies.UpdateAsync(id, company.RowVersion, new CompanyPatch(null, null, true), "admin", T0, default);
+    }
+
+    [Fact]
     public async Task Should_NeverSyncOrScheduleASync_When_ScheduledSyncIsOff()
     {
         _settings.Companies.ScheduledSync = ScheduledSyncModes.Off;

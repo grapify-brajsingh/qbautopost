@@ -39,6 +39,11 @@ public sealed class SimulatedQuickBooks(string txnIdPrefix = "SIM-")
     public IList<string> Customers { get; } = new List<string>();
     public string ProductName { get; set; } = "QuickBooks Desktop (simulated)";
 
+    /// <summary>M17: what <c>CompanyQueryRq</c> answers for this company.</summary>
+    public string CompanyName { get; set; } = "Simulated Company";
+
+    public string? LegalCompanyName { get; set; }
+
     public IReadOnlyList<SimulatedTxn> Transactions
     {
         get
@@ -126,6 +131,8 @@ public sealed class SimulatedQuickBooks(string txnIdPrefix = "SIM-")
                 "CustomerRet", new XElement("Name", c), new XElement("FullName", c), new XElement("IsActive", "true")))),
             "HostQueryRq" => Response(rq, 0, "Status OK", new XElement(
                 "HostRet", new XElement("ProductName", ProductName), new XElement("MajorVersion", "33"), new XElement("MinorVersion", "0"))),
+            "CompanyQueryRq" => Response(rq, 0, "Status OK", new XElement(
+                "CompanyRet", new XElement("CompanyName", CompanyName), LegalCompanyName is null ? null : new XElement("LegalCompanyName", LegalCompanyName))),
             "TxnDelRq" => Delete(rq),
             _ => Response(rq, UnsupportedStatusCode, $"{name} is not supported by the simulator"),
         };

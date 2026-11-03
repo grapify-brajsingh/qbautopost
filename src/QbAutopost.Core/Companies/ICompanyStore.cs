@@ -16,7 +16,10 @@ public enum CompanyChangeKind { Changed, NotFound, Stale, Invalid }
 
 public sealed record CompanyChange(CompanyChangeKind Kind, Company? Company, string? Error = null);
 
-public sealed record CompanyAccessCheck(CompanyAccess Access, string? Message, string? QbCompanyName, string? QbLegalName, DateTime CheckedUtc);
+/// <param name="CheckedFilePath">The file the check opened (null when the company had none). The store stamps the result only
+/// while the company still points at this file (T-1703 ruling), so a file that was not the one checked is never approved.</param>
+public sealed record CompanyAccessCheck(
+    CompanyAccess Access, string? Message, string? QbCompanyName, string? QbLegalName, DateTime CheckedUtc, string? CheckedFilePath);
 
 public sealed record ScanApplied(int Added, int Updated, int Missing, int Ambiguous, IReadOnlyList<int> AddedIds, IReadOnlyList<Company> Items);
 
@@ -38,7 +41,7 @@ public interface ICompanyStore
     /// <summary>Records <c>company-updated</c>.</summary>
     Task<CompanyChange> UpdateAsync(int id, int expectedRowVersion, CompanyPatch patch, string actor, DateTime nowUtc, CancellationToken ct);
 
-    /// <summary>Records <c>company-checked</c>.</summary>
+    /// <summary>Records <c>company-checked</c>. Stale (nothing stamped, nothing audited) when the company's file is no longer <see cref="CompanyAccessCheck.CheckedFilePath"/>.</summary>
     Task<CompanyChange> RecordAccessAsync(int id, CompanyAccessCheck check, string actor, CancellationToken ct);
 
     Task<DateTime?> LastScanUtcAsync(CancellationToken ct);

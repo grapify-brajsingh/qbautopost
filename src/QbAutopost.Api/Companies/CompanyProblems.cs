@@ -12,6 +12,7 @@ public static class CompanyProblems
     public const string RootUnavailableType = "company-root-unavailable";
     public const string RequiredType = "company-required";
     public const string NotReadyType = "company-not-ready";
+    public const string QuickBooksNotOpenType = "quickbooks-not-open";
 
     /// <summary>503. <paramref name="rootFolder"/> is the folder that cannot be read (or the reason when none is set); nothing was changed.</summary>
     public static IResult RootUnavailable(string rootFolder) =>
@@ -61,6 +62,23 @@ public static class CompanyProblems
                 ? $"{company.DisplayName}'s company file is outside Companies:RootFolder, so it is never opened. Nothing was sent."
                 : $"{company.DisplayName} is {CompanyText.Of(company.State)} with access {CompanyText.Of(company.Access)}; only an "
                   + "active, approved company can be validated or posted. Nothing was sent.",
+            CompanyText.Of(company.State),
+            CompanyText.Of(company.Access));
+
+    /// <summary>503 (spec 5.1): QuickBooks is not running in this session; Check access never starts it. No session was opened.</summary>
+    public static IResult QuickBooksNotOpen() =>
+        Results.Problem(
+            statusCode: StatusCodes.Status503ServiceUnavailable,
+            title: "QuickBooks is not open",
+            detail: "QuickBooks is not running in this session, and this app never starts it. Open QuickBooks on the server, then check again.",
+            type: QuickBooksNotOpenType);
+
+    /// <summary>409 (spec 5.1, ruling): the company has no file to open (missing, disabled, ambiguous without a chosen file, or outside the root).</summary>
+    public static IResult NotReadyToCheck(CompanyContext company) =>
+        NotReadyProblem(
+            company.FileOutsideRoot
+                ? $"{company.DisplayName}'s company file is outside Companies:RootFolder, so it is never opened. No session was opened."
+                : $"{company.DisplayName} is {CompanyText.Of(company.State)} and has no company file to open. Rescan the folder or choose its file, then check again. No session was opened.",
             CompanyText.Of(company.State),
             CompanyText.Of(company.Access));
 

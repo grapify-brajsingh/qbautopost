@@ -49,6 +49,7 @@ public static class ApiRoutes
         ("GET", "/companies"),
         ("POST", "/companies/scan"),
         ("PATCH", "/companies/{id}"),
+        ("POST", "/companies/{id}/check"),
         ("GET", "/users"),
         ("POST", "/users"),
         ("GET", "/users/{id}"),
@@ -350,6 +351,7 @@ public static class ApiRoutes
             }
 
             var changes = (HttpMethods.IsPost(method) && p.Equals("/companies/scan", Ordinal))
+                || (HttpMethods.IsPost(method) && IsCompanyCheck(p))
                 || (HttpMethods.IsPatch(method) && p.StartsWith("/companies/", Ordinal)
                     && p.IndexOf('/', "/companies/".Length) < 0 && !p.Equals("/companies/scan", Ordinal));
             return changes ? ApiScopes.RequestsAdmin : ApiScopes.Admin;
@@ -477,6 +479,19 @@ public static class ApiRoutes
                || (post && (p.Equals(AuthLogout, Ordinal) || p.Equals(AuthChangePassword, Ordinal)))
             ? ApiScopes.SignedIn
             : ApiScopes.Admin;
+    }
+
+    /// <summary>T-1710: <c>/companies/{id}/check</c>, one segment between (the admin's Check access).</summary>
+    private static bool IsCompanyCheck(string path)
+    {
+        const string prefix = "/companies/";
+        const string suffix = "/check";
+        if (!path.StartsWith(prefix, Ordinal) || !path.EndsWith(suffix, Ordinal) || path.Length <= prefix.Length + suffix.Length)
+        {
+            return false;
+        }
+
+        return path.IndexOf('/', prefix.Length) == path.Length - suffix.Length;
     }
 
     /// <summary>The route itself or anything below it, and not a longer sibling such as <c>/usersx</c>.</summary>

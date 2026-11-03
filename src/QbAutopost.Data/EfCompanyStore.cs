@@ -266,6 +266,12 @@ public sealed class EfCompanyStore(IDbContextFactory<QbAutopostDbContext> factor
             return new CompanyChange(CompanyChangeKind.NotFound, null);
         }
 
+        if (!SamePath(row.FilePath, check.CheckedFilePath))
+        {
+            // The company was re-pointed while the check ran: the answer belongs to another file.
+            return new CompanyChange(CompanyChangeKind.Stale, ToModel(row));
+        }
+
         row.Access = check.Access;
         row.AccessMessage = check.Message;
         row.AccessCheckedUtc = check.CheckedUtc;

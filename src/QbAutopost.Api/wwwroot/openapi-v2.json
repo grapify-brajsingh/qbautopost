@@ -855,6 +855,92 @@
         }
       }
     },
+    "/api/v2/companies/{id}/check": {
+      "post": {
+        "tags": [
+          "Companies"
+        ],
+        "operationId": "checkCompany",
+        "summary": "Check access: open a session on the company's file and store the result.",
+        "description": "M17 spec 3, 5.1. The one call that opens a session for a company that is not approved, because it is how a file becomes approved. Runs on the job worker through the one QuickBooks lock: opens a session on the company's file, asks `CompanyQueryRq` and stores `access` (`approved` with `qbCompanyName` and `qbLegalName`; `needs-approval` when QuickBooks did not answer within `QuickBooks:BusyTimeoutSeconds` - answer the certificate dialog on the server, the lock stays held until it is answered; `file-not-found` when the `.qbw` is gone, with no session; `error` with `accessMessage` when the session could not open). The result is stamped only while the company still points at the file that was checked (else `412 edited-by-someone-else`, nothing stamped). A company with no file to open (`missing`, `disabled`, `ambiguous` without a chosen file, or a file outside `Companies:RootFolder`) answers `409 company-not-ready` (`state`, `access`) with no session. QuickBooks must already be running (`503 quickbooks-not-open`, no session); another open company file answers `409 company-file-open-elsewhere` (`openFile`, `neededFile`) and a file that would not open `503 company-file-unavailable`, access unchanged. Never retried. Records `company-checked`. Needs `requests:admin`.",
+        "x-required-scope": "requests:admin",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The company's id.",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The company with its new access. The new `ETag` is set.",
+            "headers": {
+              "ETag": {
+                "description": "The company's ETag (its row version, in quotes).",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Company"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "`company-not-ready` (with `state`, `access`): the company has no file to open. Or `company-file-open-elsewhere` (with `openFile`, `neededFile`): QuickBooks has another file open. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: the company changed while QuickBooks answered. Nothing was stamped.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`quickbooks-not-open`: QuickBooks is not running. Or `company-file-unavailable` (with `neededFile`): the file would not open. Or `database-unavailable`.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/users": {
       "get": {
         "tags": [

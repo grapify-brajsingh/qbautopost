@@ -306,7 +306,7 @@ public abstract class CompanyStoreContract
         var checkedUtc = Now.AddMinutes(5);
 
         var change = await store.RecordAccessAsync(
-            company.Id, new CompanyAccessCheck(CompanyAccess.Approved, "ok", "Alpha Inc", "Alpha Incorporated", checkedUtc), "user-1", default);
+            company.Id, new CompanyAccessCheck(CompanyAccess.Approved, "ok", "Alpha Inc", "Alpha Incorporated", checkedUtc, company.FilePath), "user-1", default);
 
         Assert.Equal(CompanyChangeKind.Changed, change.Kind);
         var read = await store.GetAsync(company.Id, default);
@@ -320,10 +320,30 @@ public abstract class CompanyStoreContract
     }
 
     [ContractFact]
+    public async Task Should_StampNothing_When_CompanyWasRepointedDuringTheCheck()
+    {
+        var store = CreateStore();
+        var company = (await ScanAsync(store, Folder("300_Gamma", @"C:\Root\300_Gamma\a.qbw", @"C:\Root\300_Gamma\b.qbw"))).Single();
+        var chosen = await store.UpdateAsync(
+            company.Id, company.RowVersion, new CompanyPatch(null, @"C:\Root\300_Gamma\a.qbw", null), "user-1", Now, default);
+        var checkedFile = chosen.Company!.FilePath;
+        await store.UpdateAsync(
+            company.Id, chosen.Company.RowVersion, new CompanyPatch(null, @"C:\Root\300_Gamma\b.qbw", null), "user-1", Now, default);
+
+        var change = await store.RecordAccessAsync(
+            company.Id, new CompanyAccessCheck(CompanyAccess.Approved, "ok", "Gamma", null, Now.AddMinutes(1), checkedFile), "user-1", default);
+
+        Assert.Equal(CompanyChangeKind.Stale, change.Kind);
+        var read = await store.GetAsync(company.Id, default);
+        Assert.NotEqual(CompanyAccess.Approved, read!.Access);
+        Assert.Null(read.QbCompanyName);
+    }
+
+    [ContractFact]
     public async Task Should_ReturnNotFound_When_AccessCheckedForUnknownCompany()
     {
         var change = await CreateStore().RecordAccessAsync(
-            999, new CompanyAccessCheck(CompanyAccess.Error, "x", null, null, Now), "user-1", default);
+            999, new CompanyAccessCheck(CompanyAccess.Error, "x", null, null, Now, null), "user-1", default);
 
         Assert.Equal(CompanyChangeKind.NotFound, change.Kind);
     }

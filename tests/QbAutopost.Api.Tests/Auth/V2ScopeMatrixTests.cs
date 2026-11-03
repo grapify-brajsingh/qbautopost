@@ -92,6 +92,19 @@ public sealed class V2ScopeMatrixTests(Host host) : IClassFixture<Host>
         Assert.NotEqual(ApiScopes.Admin, ApiRoutes.ScopeFor(method, V2 + relative));
     }
 
+    [Fact]
+    public void Should_NeedRequestsAdmin_When_CheckingACompanysAccess() =>
+        Assert.Equal(ApiScopes.RequestsAdmin, ApiRoutes.ScopeFor("POST", V2 + "/companies/7/check"));
+
+    [Theory]
+    [InlineData("GET", V2 + "/companies/7/check")]
+    [InlineData("POST", V2 + "/companies/check")]
+    [InlineData("POST", V2 + "/companies/7/8/check")]
+    [InlineData("POST", V2 + "/companies/7/checkx")]
+    [InlineData("POST", V1 + "/companies/7/check")]
+    public void Should_CloseTheRoute_When_ItIsNotTheCheckRoute(string method, string path) =>
+        Assert.Equal(ApiScopes.Admin, ApiRoutes.ScopeFor(method, path));
+
     /// <summary>The fall-through stays <c>admin</c> for anything under <c>/api/v2</c> that spec 3 does not name.</summary>
     [Theory]
     [InlineData("GET", V2 + "/jobs")]

@@ -321,7 +321,14 @@ public sealed class JobWorker(
         var next = cursor.Remaining.Dequeue();
         try
         {
-            if (await SyncCompanyAsync(next, cursor.WarnOnFailure, stoppingToken))
+            // The cursor holds the snapshot taken when the sweep began; every step asks again (T-1709 ruling), so a company
+            // disabled, re-pointed or un-approved meanwhile is skipped or synced from its current file.
+            if (await ReResolveAsync(sweep, next, stoppingToken) is not { } current)
+            {
+                log.LogInformation("Scheduled list sync: company {CompanyId} may no longer open a session; skipped", next.Id);
+                cursor.Dropped++;
+            }
+            else if (await SyncCompanyAsync(current, cursor.WarnOnFailure, stoppingToken))
             {
                 cursor.Synced++;
             }
@@ -335,10 +342,24 @@ public sealed class JobWorker(
         if (cursor.Remaining.Count == 0)
         {
             _sweep = null;
-            EndSweep(cursor.Attempt, release, cursor.Synced == cursor.Selected ? ListSyncOutcome.Ok : ListSyncOutcome.Failed);
+            EndSweep(cursor.Attempt, release, cursor.Synced == cursor.Selected - cursor.Dropped ? ListSyncOutcome.Ok : ListSyncOutcome.Failed);
         }
 
         return true;
+    }
+
+    /// <summary>A failed read of the company is the same as one that may not open a session: nothing is synced (hold, don't guess).</summary>
+    private async Task<CompanyContext?> ReResolveAsync(CompanySweepSource sweep, CompanyContext chosen, CancellationToken stoppingToken)
+    {
+        try
+        {
+            return await sweep.ReResolveAsync(chosen, stoppingToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
+        {
+            log.LogWarning(ex, "Scheduled list sync: company {CompanyId} could not be read again", chosen.Id);
+            return null;
+        }
     }
 
     /// <summary>Frees the slot, then publishes the end of the attempt (nobody joins a sweep) and moves the due time.</summary>
@@ -371,6 +392,9 @@ public sealed class JobWorker(
         public Queue<CompanyContext> Remaining { get; } = new(selected);
 
         public int Selected { get; } = selected.Count;
+
+        /// <summary>Companies skipped because they could no longer open a session; not a failure of the sweep.</summary>
+        public int Dropped { get; set; }
 
         public bool WarnOnFailure { get; } = warnOnFailure;
 
