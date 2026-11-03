@@ -18,12 +18,14 @@ public sealed class AppSettings
     public AuthSettings Auth { get; set; } = new();
     public DashboardSettings Dashboard { get; set; } = new();
     public ExtractionSettings Extraction { get; set; } = new();
+    public CompaniesSettings Companies { get; set; } = new();
 
     /// <summary>Makes every configured file path absolute, relative ones against <paramref name="root"/>.</summary>
     public void ResolvePaths(string root)
     {
         Company.RulesFile = Path.GetFullPath(Company.RulesFile, root);
         Paths.ResolveAgainst(root);
+        Companies.ResolveAgainst(root);
         if (!string.IsNullOrWhiteSpace(QuickBooks.BackupFolder))
         {
             QuickBooks.BackupFolder = Path.GetFullPath(QuickBooks.BackupFolder, root);
@@ -192,6 +194,37 @@ public sealed class RateLimitSettings
 
     /// <summary>How long that address is then refused outright.</summary>
     public int FailedAuthBlockMinutes { get; set; } = 5;
+}
+
+/// <summary>M17 §4.1 <c>Companies</c>. Checked at startup by <see cref="CompaniesOptionsValidator"/>.</summary>
+public sealed class CompaniesSettings
+{
+    /// <summary>The folder holding one sub-folder per company; blank keeps multi-company off. Must be absolute.</summary>
+    public string RootFolder { get; set; } = "";
+
+    /// <summary>Where each scan-created company keeps its rules and ledger: <c>&lt;DataFolder&gt;/&lt;id&gt;/</c>.</summary>
+    public string DataFolder { get; set; } = "data/companies";
+
+    /// <summary>Copied once into a scan-created company's folder as its starting rules.</summary>
+    public string RulesTemplate { get; set; } = "data/rules.json";
+
+    public string ScheduledSync { get; set; } = ScheduledSyncModes.WaitingOnly;
+
+    public bool Configured => !string.IsNullOrWhiteSpace(RootFolder);
+
+    /// <summary>Relative <see cref="DataFolder"/> and <see cref="RulesTemplate"/> resolve against the content root; <see cref="RootFolder"/> is left as given.</summary>
+    public void ResolveAgainst(string root)
+    {
+        DataFolder = Path.GetFullPath(DataFolder, root);
+        RulesTemplate = Path.GetFullPath(RulesTemplate, root);
+    }
+}
+
+public static class ScheduledSyncModes
+{
+    public const string WaitingOnly = "waiting-only", All = "all", Off = "off";
+
+    public static bool IsKnown(string? value) => value is WaitingOnly or All or Off;
 }
 
 public sealed class CompanySettings

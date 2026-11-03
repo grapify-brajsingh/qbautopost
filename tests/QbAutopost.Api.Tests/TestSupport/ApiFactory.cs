@@ -52,6 +52,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     /// </summary>
     public FakeSavedRequestStore Store { get; }
 
+    /// <summary>M17: the in-memory company store of a host without PostgreSQL (production registers none without a database, ruling B9).</summary>
+    public FakeCompanyStore Companies { get; } = new();
+
     /// <summary>
     /// The fake gate; with <see cref="WithPostgres"/>, the host's real gate (resolving it starts the host).
     /// </summary>
@@ -176,6 +179,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             // M14 §5: a long-lived test host must not sync on its own two minutes in (it would query the fake
             // gateway and rewrite qb-lists.json under a running test). ScheduledListSyncTests drive the schedule directly.
             ["QuickBooks:ListSync:IntervalMinutes"] = "0",
+            // M17: scan-created companies keep their files in the test folder, starting from the sample rules.
+            ["Companies:DataFolder"] = Dir.Combine("data", "companies"),
+            ["Companies:RulesTemplate"] = Fixtures.SampleRules,
         }));
         builder.ConfigureTestServices(services =>
         {
@@ -195,6 +201,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
             services.RemoveAll<ISavedRequestStore>();
             services.AddSingleton<ISavedRequestStore>(Store);
+            services.RemoveAll<QbAutopost.Core.Companies.ICompanyStore>();
+            services.AddSingleton<QbAutopost.Core.Companies.ICompanyStore>(Companies);
             services.RemoveAll<DatabaseGate>();
             services.AddSingleton(_fakeGate);
             services.RemoveAll<IUserGate>();

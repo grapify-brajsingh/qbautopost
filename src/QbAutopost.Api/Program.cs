@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.AspNetCore.Identity;
 using QbAutopost.Api.Auth;
+using QbAutopost.Api.Companies;
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Database;
 using QbAutopost.Api.Endpoints;
@@ -21,6 +22,7 @@ using QbAutopost.Api.SavedRequests;
 using QbAutopost.Api.Security;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Api;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.Extract;
 using QbAutopost.Core.Gateway;
 using QbAutopost.Core.Hermes;
@@ -82,6 +84,8 @@ builder.Services.AddOptions<AppSettings>()
 builder.Services.AddSingleton<IValidateOptions<AppSettings>, OpenRouterOptionsValidator>();
 // M14 §11: QuickBooks:ListSync values the schedule cannot honour stop startup.
 builder.Services.AddSingleton<IValidateOptions<AppSettings>, ListSyncOptionsValidator>();
+// M17 §4.1: Companies:RootFolder must be absolute and ScheduledSync one of three values.
+builder.Services.AddSingleton<IValidateOptions<AppSettings>, CompaniesOptionsValidator>();
 
 const string CorsPolicyName = "QbAutopostCallers";
 
@@ -110,6 +114,14 @@ builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
 
 builder.Services.AddSingleton<IClock, SystemClock>();
+// M17 §4.4: one resolver for every caller. The store exists only with a database (ruling B9); without one the resolver
+// serves the default company only.
+builder.Services.AddSingleton<CompanyDataFolder>();
+builder.Services.AddSingleton(sp => new CompanyResolver(
+    sp.GetRequiredService<IOptions<AppSettings>>(),
+    sp.GetRequiredService<CompanyDataFolder>(),
+    sp.GetService<ICompanyStore>()));
+builder.Services.AddSingleton<ICompanyResolver>(sp => sp.GetRequiredService<CompanyResolver>());
 // T-910 (FR-A-13): the caller list is re-read per request, so revoking a key takes effect without a restart.
 builder.Services.AddSingleton(sp => new ApiClientStore(sp.GetRequiredService<IOptions<AppSettings>>().Value.Paths.Clients));
 builder.Services.AddScoped(sp => new ApiClientResolver(sp.GetRequiredService<ApiClientStore>().Load()));
@@ -309,6 +321,7 @@ var listSync = builder.Configuration.GetSection("QuickBooks:ListSync").Get<ListS
 if (database.Configured)
 {
     builder.Services.AddQbAutopostData(database.ConnectionString, database.CommandTimeoutSeconds, listSync.HistoryRows);
+    builder.Services.AddSingleton<CompanyBootstrap>();
 
     // M14 §3, §9: database mode. One source is both the store and the reader; qb-lists.json is only imported (§3.3).
     builder.Services.AddSingleton<DbQbListsSource>();
@@ -386,6 +399,12 @@ builder.Services.AddSingleton(sp =>
                 .RecoverInFlightAsync(sp.GetRequiredService<IClock>().UtcNow, ct);
             sp.GetRequiredService<ILogger<DatabaseGate>>()
                 .LogInformation("Saved-request recovery: {Count} interrupted post(s) marked unknown", moved);
+
+            // A database that was down at startup has no default company yet; create it and assign old rows first.
+            if (sp.GetService<CompanyBootstrap>() is { } bootstrap)
+            {
+                await bootstrap.RunAsync(ct);
+            }
 
             // A database that was down at startup left the lists empty; load them before a route can post against them.
             if (sp.GetService<DbQbListsSource>() is { } lists)
@@ -479,6 +498,17 @@ try
     // error is logged inside and leaves empty lists; it does not stop startup.
     if (database.Configured)
     {
+        // M17 §4.4: the default company (and the backfill of old rows) comes first; a database error is logged and does
+        // not stop startup, as with the lists below.
+        try
+        {
+            await app.Services.GetRequiredService<CompanyBootstrap>().RunAsync(app.Lifetime.ApplicationStopping);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            app.Logger.LogError(ex, "Company bootstrap failed; the default company is created when the database next answers");
+        }
+
         await app.Services.GetRequiredService<DbQbListsSource>().InitializeAsync(app.Lifetime.ApplicationStopping);
     }
 
