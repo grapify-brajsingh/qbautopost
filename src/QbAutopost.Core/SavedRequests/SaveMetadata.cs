@@ -33,15 +33,19 @@ public enum UploadFieldKind
     /// <summary>No <c>upload</c>, or <c>upload: null</c>: an ordinary save.</summary>
     Absent,
 
-    /// <summary><c>upload</c> is present but <c>upload.extractionId</c> is not a UUID string.</summary>
+    /// <summary><c>upload</c> is present but <c>upload.extractionId</c> is not a UUID string, or <c>upload.companyId</c> is not a positive whole number.</summary>
     Invalid,
 
     /// <summary><c>upload.extractionId</c> is a UUID.</summary>
     Present,
 }
 
-/// <summary>The <c>upload</c> field of a v2 save body. Only <c>extractionId</c> is read; every other field is ignored.</summary>
-public sealed record UploadField(UploadFieldKind Kind, Guid ExtractionId)
+/// <summary>
+/// The <c>upload</c> field of a v2 save body: <c>extractionId</c> and (M17 spec 5.2) the optional <c>companyId</c> the
+/// person chose. Every other field is ignored, and so is a top-level <c>companyId</c>.
+/// </summary>
+/// <param name="CompanyId">The chosen company, or null when <c>upload.companyId</c> is absent or null.</param>
+public sealed record UploadField(UploadFieldKind Kind, Guid ExtractionId, int? CompanyId = null)
 {
     public static UploadField Read(JsonElement body)
     {
@@ -52,12 +56,23 @@ public sealed record UploadField(UploadFieldKind Kind, Guid ExtractionId)
             return new UploadField(UploadFieldKind.Absent, Guid.Empty);
         }
 
-        return upload.ValueKind == JsonValueKind.Object
-            && upload.TryGetProperty("extractionId", out var id)
-            && id.ValueKind == JsonValueKind.String
-            && Guid.TryParseExact(id.GetString(), "D", out var guid)
-                ? new UploadField(UploadFieldKind.Present, guid)
-                : new UploadField(UploadFieldKind.Invalid, Guid.Empty);
+        var invalid = new UploadField(UploadFieldKind.Invalid, Guid.Empty);
+        if (upload.ValueKind != JsonValueKind.Object
+            || !upload.TryGetProperty("extractionId", out var id)
+            || id.ValueKind != JsonValueKind.String
+            || !Guid.TryParseExact(id.GetString(), "D", out var guid))
+        {
+            return invalid;
+        }
+
+        if (!upload.TryGetProperty("companyId", out var company) || company.ValueKind == JsonValueKind.Null)
+        {
+            return new UploadField(UploadFieldKind.Present, guid);
+        }
+
+        return company.ValueKind == JsonValueKind.Number && company.TryGetInt32(out var companyId) && companyId > 0
+            ? new UploadField(UploadFieldKind.Present, guid, companyId)
+            : invalid;
     }
 
     /// <summary>R-14.2: true when the body also carries a non-null <c>email</c> or <c>pushId</c>, which an upload never has.</summary>

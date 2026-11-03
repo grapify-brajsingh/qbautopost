@@ -245,7 +245,7 @@ public sealed class V2CompanyPostTests : IDisposable
         SeedCompanies(takomaRules: Fixtures.PathOf("multi-company", "takoma-rules.json"));
         var statement = Fixture("multi-company", "takoma-statement.json");
         var takoma = await SaveAsync(statement, TakomaId);
-        var onDefault = await SaveAsync(statement, null);
+        var onDefault = await SaveAsync(statement, 1);
 
         var (takomaStatus, takomaBody) = await ActionAsync(takoma, "validate");
         var (defaultStatus, defaultBody) = await ActionAsync(onDefault, "validate");
@@ -253,21 +253,5 @@ public sealed class V2CompanyPostTests : IDisposable
         Assert.Equal((HttpStatusCode.OK, HttpStatusCode.OK), (takomaStatus, defaultStatus));
         Assert.Equal("ok", takomaBody.GetProperty("validation").GetProperty("state").GetString());
         Assert.Equal("held", defaultBody.GetProperty("validation").GetProperty("state").GetString());
-    }
-
-    // TRANSITIONAL until T-1712: a statement with no company posts on the default company, as before M17.
-    [Fact]
-    public async Task Should_PostAsBefore_When_StatementHasNoCompanyYet()
-    {
-        SeedCompanies();
-        var id = await SaveAsync(Fixture("saved-requests-v2", "post-false.json"), null);
-
-        var (status, body) = await ActionAsync(id, "post");
-
-        Assert.Equal(HttpStatusCode.OK, status);
-        Assert.Equal("posted", body.GetProperty("status").GetString());
-        Assert.NotEmpty(Gateway.Targets);
-        Assert.All(Gateway.Targets, Assert.Null);
-        Assert.Contains(new LedgerStore(_factory.LedgerFile).Load().Jobs, j => j.BatchId == body.GetProperty("postId").GetString());
     }
 }

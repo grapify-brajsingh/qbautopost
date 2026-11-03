@@ -19,6 +19,12 @@ public enum PostEndingKind
 
     /// <summary>M17 §4.7, ruling B1: the company file's session could not open; nothing was sent.</summary>
     CompanyFileUnavailable,
+
+    /// <summary>
+    /// M17 §4.7 (T-1708 ruling, carried to T-1712): the statement's company stopped being active + approved between the
+    /// check and the claim. No session was opened and nothing was sent.
+    /// </summary>
+    CompanyNotReady,
 }
 
 /// <summary>An ending. <paramref name="Status"/> and <paramref name="Held"/> matter only for <see cref="PostEndingKind.Completed"/>.</summary>

@@ -90,6 +90,11 @@ public static class V2QueryParser
             return false;
         }
 
+        if (!TryCompany(q, out var company, out error))
+        {
+            return false;
+        }
+
         var max = Math.Max(1, maxPageSize);
         if (Paging(q, max) is not { } paging)
         {
@@ -100,7 +105,10 @@ public static class V2QueryParser
         query = new SavedRequestQueryV2(
             new SavedRequestQuery(
                 statuses, needsAttention, duplicate, Text(q, "q"), createdFrom, createdTo, Text(q, "source"), sort,
-                paging.Page, paging.PageSize),
+                paging.Page, paging.PageSize)
+            {
+                Company = company,
+            },
             receivedFrom, receivedTo, Text(q, "emailFrom"), Text(q, "reference"), minTotal, maxTotal, hasErrors)
         {
             ReceivedFromUtc = receivedFromUtc,
@@ -111,6 +119,38 @@ public static class V2QueryParser
             PostedToUtc = postedToUtc,
         };
         return true;
+    }
+
+    /// <summary>
+    /// M17 spec 5.2: <c>company=&lt;id&gt;</c> (a whole number, 1 or more) or <c>company=none</c>, sent once. Absent is
+    /// every statement (<paramref name="filter"/> null). Anything else is an error; a well-formed id of no company simply
+    /// matches nothing (ruling B20).
+    /// </summary>
+    public static bool TryCompany(IQueryCollection q, out CompanyFilter? filter, out string? error)
+    {
+        filter = null;
+        error = null;
+        if (!q.TryGetValue("company", out var values))
+        {
+            return true;
+        }
+
+        var text = values.Count == 1 ? values[0] : null;
+        if (text == "none")
+        {
+            filter = CompanyFilter.None;
+            return true;
+        }
+
+        if (text is not null
+            && int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var id) && id > 0)
+        {
+            filter = new CompanyFilter(id);
+            return true;
+        }
+
+        error = "company is a company id (a whole number, 1 or more) or none, sent once.";
+        return false;
     }
 
     /// <summary>

@@ -15,6 +15,9 @@ public static class SavedRequestEvents
     public const string Discarded = "discarded";
     public const string Restored = "restored";
     public const string Resolved = "resolved";
+
+    /// <summary>M17 spec 4.6: the set-company action; detail <c>{ companyId, from, to, source }</c>.</summary>
+    public const string CompanyAssigned = "company-assigned";
 }
 
 /// <summary>
@@ -53,6 +56,23 @@ public sealed record NewSavedRequest(
 
     /// <summary>The v2 judgement of version 1. Null: the store copies <see cref="Snapshot"/> into it.</summary>
     public ValidationSnapshot? SnapshotV2 { get; init; }
+
+    // ---- M17 (T-1712, spec 4.6) ----
+
+    /// <summary>The statement's company; null holds it as <i>needs company</i>.</summary>
+    public int? CompanyId { get; init; }
+
+    /// <summary>How <see cref="CompanyId"/> was decided; null when there is none.</summary>
+    public QbAutopost.Core.Companies.CompanySource? CompanySource { get; init; }
+
+    /// <summary>The upload's printed-name match, copied from the extraction; null for other saves.</summary>
+    public QbAutopost.Core.Companies.CompanyMatch? CompanyMatch { get; init; }
+}
+
+/// <summary>M17 spec 5.2: <c>company=&lt;id&gt;</c> (<see cref="CompanyId"/> set) or <c>company=none</c> (null: no company).</summary>
+public sealed record CompanyFilter(int? CompanyId)
+{
+    public static CompanyFilter None { get; } = new((int?)null);
 }
 
 public sealed record NewVersion(
@@ -94,7 +114,11 @@ public sealed record SavedRequestQuery(
     string? Source,
     string Sort,
     int Page,
-    int PageSize);
+    int PageSize)
+{
+    /// <summary>M17 spec 5.2 (v2 lists only): the statements of one company, or those with none. Null: every statement.</summary>
+    public CompanyFilter? Company { get; init; }
+}
 
 public sealed record SavedRequestStats(
     int Total,

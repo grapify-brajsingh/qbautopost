@@ -44,4 +44,7 @@ public enum SavedRequestAction
     Discard = 8,
     Restore = 16,
     Resolve = 32,
+
+    /// <summary>M17 spec 4.6 (v2 only): set or change the statement's company.</summary>
+    SetCompany = 64,
 }

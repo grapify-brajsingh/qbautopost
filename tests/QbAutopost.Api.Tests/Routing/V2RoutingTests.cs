@@ -53,6 +53,20 @@ public sealed class V2RoutingTests : IDisposable
         Assert.Equal($"{V2}/saved-requests/{id}", response.Headers.Location?.OriginalString);
     }
 
+    /// <summary>M17 §5.2: set-company is a v2 route; an editor reaches it under /api/v2 and is refused its v1 spelling.</summary>
+    [Fact]
+    public async Task Should_MapSetCompanyUnderV2Only_When_AnEditorCallsIt()
+    {
+        var id = await _host.SaveFixtureAsync("n8n-good.json");
+        using var editor = _host.User(DashboardRoles.Editor);
+
+        using var v1 = await editor.PostAsync($"/api/v1/saved-requests/{id}/company", SavedRequestTestHost.Json("""{"companyId":1}"""));
+        using var v2 = await editor.PostAsync($"{V2}/saved-requests/{id}/company", SavedRequestTestHost.Json("""{"companyId":1}"""));
+
+        Assert.Equal(HttpStatusCode.Forbidden, v1.StatusCode);
+        Assert.Equal(HttpStatusCode.PreconditionRequired, v2.StatusCode);
+    }
+
     [Theory]
     [InlineData("GET", V2 + "/jobs")]
     [InlineData("GET", V2 + "/saved-requests/1/unknown")]

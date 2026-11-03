@@ -137,12 +137,16 @@ public sealed class SavedRequestIntake(
         var version1 = v2 ? ExternalIdAssigner.AssignOnSave(payload) : payload;
         var metadata = v2 ? SaveMetadataReader.Read(payload) : SaveMetadata.None;
 
+        // M17 spec 4.6: the n8n/API body is unchanged (owner, 2026-11-04); a save gets the one company there is (multi-company
+        // off, or exactly one active company) and otherwise none: it waits as "needs company".
+        var company = await resolver.AutoAssignAsync(ct);
+
         var now = clock.UtcNow;
         var read = SavedPayloadReader.Read(version1);
-        var (snapshot, snapshotV2) = validator.ValidateBoth(read, NotPostedRows.Read(version1), 1, now);
+        var (snapshot, snapshotV2) = validator.ValidateBoth(read, NotPostedRows.Read(version1), 1, now, null, company);
         var canonical = PayloadCanonicalizer.Sha256(version1, v2 ? PayloadRules.V2 : PayloadRules.V1);
         var fingerprints = Fingerprints(read, now);
-        var duplicate = await DetectAsync(canonical, read, fingerprints, null, now, ct);
+        var duplicate = await DetectAsync(canonical, read, fingerprints, null, company?.Id, now, ct);
 
         return await store.CreateAsync(
             new NewSavedRequest(
@@ -151,6 +155,8 @@ public sealed class SavedRequestIntake(
             {
                 Metadata = metadata,
                 SnapshotV2 = snapshotV2,
+                CompanyId = company?.Id,
+                CompanySource = company is null ? null : CompanySource.Default,
             },
             ct);
     }
@@ -163,9 +169,15 @@ public sealed class SavedRequestIntake(
     /// duplicates are computed on the current version, exactly as <see cref="SaveAsync"/> does for its version 1. The
     /// store decides replay, expired, not found, already saved and key reuse, atomically (T-1210, Ruling R7).
     /// <para>Rule 3: nothing here computes money; both versions carry the amounts as read or as sent.</para>
+    /// <para>
+    /// M17 spec 4.6 (plan conflict 13): the company is <paramref name="chosenCompanyId"/> when sent (source <c>chosen</c>;
+    /// a company that does not exist or is missing or disabled is <see cref="UploadSaveKind.CompanyNotAssignable"/> and
+    /// nothing is stored), else the one company there is (source <c>default</c>), else the extraction's <c>matched</c>
+    /// company (source <c>matched</c>), else none. The extraction's match is kept on the statement either way.
+    /// </para>
     /// </summary>
     public async Task<UploadSaveResult> SaveUploadAsync(
-        string rawBody, Guid extractionId, string? idempotencyKey, Caller caller, CancellationToken ct)
+        string rawBody, Guid extractionId, int? chosenCompanyId, string? idempotencyKey, Caller caller, CancellationToken ct)
     {
         if (!TryParseObject(rawBody, out var payload))
         {
@@ -174,9 +186,18 @@ public sealed class SavedRequestIntake(
 
         GuardStorable(payload);
 
+        CompanyContext? chosen = null;
+        if (chosenCompanyId is { } chosenId && (chosen = await AssignableAsync(chosenId, ct)) is null)
+        {
+            return new UploadSaveResult(UploadSaveKind.CompanyNotAssignable, null, null, null);
+        }
+
         // Read only to build version 1; the store re-reads the record under its lock and makes every decision. An
         // unknown id still goes to the store, which answers a replay first and Expired otherwise.
         var extraction = await uploads.GetExtractionAsync(extractionId, ct);
+        var (company, source) = chosen is not null
+            ? (chosen, CompanySource.Chosen)
+            : await UploadCompanyAsync(extraction?.Company, ct);
         var version1 = Version1Of(extraction, payload);
         var reviewed = ExternalIdAssigner.AssignOnSave(payload);
         var changes = PayloadDiff.Compute(version1, reviewed, PayloadRules.V2);
@@ -186,10 +207,10 @@ public sealed class SavedRequestIntake(
 
         var now = clock.UtcNow;
         var read = SavedPayloadReader.Read(current);
-        var (snapshot, snapshotV2) = validator.ValidateBoth(read, NotPostedRows.Read(current), number, now);
+        var (snapshot, snapshotV2) = validator.ValidateBoth(read, NotPostedRows.Read(current), number, now, null, company);
         var canonical = PayloadCanonicalizer.Sha256(current, PayloadRules.V2);
         var fingerprints = Fingerprints(read, now);
-        var duplicate = await DetectAsync(canonical, read, fingerprints, null, now, ct);
+        var duplicate = await DetectAsync(canonical, read, fingerprints, null, company?.Id, now, ct);
 
         var request = new NewSavedRequest(
             SourceOf(caller), caller.Actor, rawBody, current, read, canonical, fingerprints, idempotencyKey,
@@ -197,6 +218,9 @@ public sealed class SavedRequestIntake(
         {
             Metadata = SaveMetadataReader.Read(payload),
             SnapshotV2 = snapshotV2,
+            CompanyId = company?.Id,
+            CompanySource = company is null ? null : source,
+            CompanyMatch = extraction?.Company,
         };
         return await uploads.SaveUploadAsync(
             new NewUploadSave(
@@ -204,6 +228,56 @@ public sealed class SavedRequestIntake(
                 reviewedRows ? JsonSerializer.SerializeToNode(changes, JsonOptions.Default)!.AsArray() : null,
                 ReadFromNote(extraction?.FileName ?? ""), ReviewedNote),
             ct);
+    }
+
+    /// <summary>
+    /// The company of an upload saved without <c>upload.companyId</c>: the one company there is, else the extraction's
+    /// <c>matched</c> company while it may still be assigned, else none.
+    /// </summary>
+    private async Task<(CompanyContext? Company, CompanySource? Source)> UploadCompanyAsync(CompanyMatch? match, CancellationToken ct)
+    {
+        if (await resolver.AutoAssignAsync(ct) is { } only)
+        {
+            return (only, CompanySource.Default);
+        }
+
+        return match is { Match: CompanyMatchKind.Matched, CompanyId: { } matchedId }
+               && await AssignableAsync(matchedId, ct) is { } matched
+            ? (matched, CompanySource.Matched)
+            : (null, null);
+    }
+
+    /// <summary>
+    /// M17 spec 4.6, ruling B18: a company a person may give a statement: it exists and is <c>active</c> or
+    /// <c>ambiguous</c>; null for one that does not exist or is missing or disabled.
+    /// </summary>
+    public async Task<CompanyContext?> AssignableAsync(int companyId, CancellationToken ct) =>
+        await resolver.GetAsync(companyId, ct) is { State: CompanyState.Active or CompanyState.Ambiguous } company ? company : null;
+
+    /// <summary>
+    /// M17 spec 4.6: sets or changes the statement's company (source <c>chosen</c>), clears its stored validation (lists
+    /// differ per company) and runs the duplicate rules again with the new company. Null when
+    /// <paramref name="companyId"/> may not be assigned (<see cref="AssignableAsync"/>; the route answers 400). The store
+    /// decides not found, stale and wrong status (not pending, or an attempt in progress), atomically.
+    /// </summary>
+    public async Task<MutationResult?> SetCompanyAsync(
+        long id, int expectedRowVersion, int companyId, Caller caller, CancellationToken ct)
+    {
+        if (await AssignableAsync(companyId, ct) is null)
+        {
+            return null;
+        }
+
+        var current = await store.GetAsync(id, ct);
+        if (current is null)
+        {
+            return new MutationResult(MutationKind.NotFound, null);
+        }
+
+        var now = clock.UtcNow;
+        var read = SavedPayloadReader.Read(current.CurrentPayload);
+        var duplicate = await DetectAsync(current.CanonicalSha256, read, Fingerprints(read, now), id, companyId, now, ct);
+        return await store.SetCompanyAsync(id, expectedRowVersion, companyId, duplicate, caller.Actor, now, ct);
     }
 
     /// <summary>
@@ -254,7 +328,7 @@ public sealed class SavedRequestIntake(
         var (snapshot, snapshotV2) = await ValidateBothAsync(current, read, NotPostedRows.Read(next), number, now, ct);
         var canonical = PayloadCanonicalizer.Sha256(next, rules);
         var fingerprints = Fingerprints(read, now);
-        var duplicate = await DetectAsync(canonical, read, fingerprints, id, now, ct);
+        var duplicate = await DetectAsync(canonical, read, fingerprints, id, current.CompanyId, now, ct);
         var changes = PayloadDiff.Compute(current.CurrentPayload, next, rules);
 
         return await store.AppendVersionAsync(
@@ -284,29 +358,33 @@ public sealed class SavedRequestIntake(
         var (snapshot, snapshotV2) = await ValidateBothAsync(
             current, read, NotPostedRows.Read(current.CurrentPayload), current.CurrentVersion, now, ct);
         var fingerprints = Fingerprints(read, now);
-        var duplicate = await DetectAsync(current.CanonicalSha256, read, fingerprints, id, now, ct);
+        var duplicate = await DetectAsync(current.CanonicalSha256, read, fingerprints, id, current.CompanyId, now, ct);
 
         return await store.SetValidationAsync(id, snapshot, snapshotV2, duplicate, caller.Actor, now, ct);
     }
 
     /// <summary>
-    /// M17 §4.7: the company <paramref name="record"/> is validated and posted against; the default company when it has
-    /// none yet (TRANSITIONAL until T-1712); null when its company no longer exists (ruling B18).
+    /// M17 §4.6, §4.7: the company <paramref name="record"/> is validated and posted against, read from its stored row;
+    /// null when it has none (the routes answer <c>company-required</c> first) or when its company no longer exists
+    /// (ruling B18: <c>company-not-ready</c>).
     /// </summary>
     public Task<CompanyContext?> CompanyOfAsync(SavedRequest record, CancellationToken ct) =>
         resolver.ForStatementAsync(record.CompanyId, ct);
 
     /// <summary>
-    /// Both snapshots of an existing statement, planned with its own company's rules and ledger. A company that no longer
-    /// exists cannot be planned for: both snapshots are <c>unavailable</c> (the validate route answers 409 before this).
+    /// Both snapshots of an existing statement, planned with its own company's rules and lists. A statement with no
+    /// company is not planned (<see cref="SavedRequestValidator.CompanyRequired"/>), nor is one whose company no longer
+    /// exists: both snapshots are <c>unavailable</c> with <see cref="SavedRequestValidator.CompanyGone"/> (the validate
+    /// route answers 409 before this).
     /// </summary>
     private async Task<(ValidationSnapshot V1, ValidationSnapshot V2)> ValidateBothAsync(
         SavedRequest record, PayloadRead read, NotPostedRead notPosted, int number, DateTime now, CancellationToken ct)
     {
-        if (await CompanyOfAsync(record, ct) is not { } company)
+        var company = await CompanyOfAsync(record, ct);
+        if (record.CompanyId is not null && company is null)
         {
             var unavailable = new ValidationSnapshot(
-                ValidationState.Unavailable, now, number, null, [], [SavedRequestValidator.CompanyRequired], null);
+                ValidationState.Unavailable, now, number, null, [], [SavedRequestValidator.CompanyGone], null);
             return (unavailable, unavailable);
         }
 
@@ -339,12 +417,13 @@ public sealed class SavedRequestIntake(
             ? DuplicateDetector.RowFingerprints(request, limits, DateOnly.FromDateTime(nowUtc))
             : NoFingerprints;
 
+    /// <param name="companyId">M17 spec 4.6: the statement's company; reference and row matches stay within it.</param>
     private async Task<DuplicateMatch> DetectAsync(
-        string canonical, PayloadRead read, IReadOnlySet<string> fingerprints, long? excludeId, DateTime nowUtc,
-        CancellationToken ct)
+        string canonical, PayloadRead read, IReadOnlySet<string> fingerprints, long? excludeId, int? companyId,
+        DateTime nowUtc, CancellationToken ct)
     {
         var since = nowUtc.AddDays(-Math.Max(0, settings.Value.SavedRequests.DuplicateLookbackDays));
         var candidates = await store.DuplicateCandidatesAsync(since, excludeId, ct);
-        return DuplicateDetector.Detect(canonical, read.Request?.Reference, fingerprints, candidates);
+        return DuplicateDetector.Detect(canonical, read.Request?.Reference, fingerprints, candidates, companyId);
     }
 }

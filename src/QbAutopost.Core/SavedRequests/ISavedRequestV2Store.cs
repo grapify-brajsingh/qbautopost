@@ -23,7 +23,8 @@ public interface ISavedRequestV2Store
     /// </summary>
     Task<PagedResult<SavedRequestSummary>> ListV2Async(SavedRequestQueryV2 query, CancellationToken ct);
 
-    Task<SavedRequestStatsV2> StatsV2Async(CancellationToken ct);
+    /// <summary>The v2 stats, over the statements <paramref name="company"/> selects (null: all of them).</summary>
+    Task<SavedRequestStatsV2> StatsV2Async(CompanyFilter? company, CancellationToken ct);
 
     /// <summary>
     /// Other requests with the same non-empty reference as <paramref name="id"/> and status pending, posting, partial

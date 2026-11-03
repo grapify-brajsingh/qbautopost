@@ -88,6 +88,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     {
         _postgres = postgres;
         Store = store ?? new FakeSavedRequestStore();
+        // M17 (T-1712): the company-assigned event names companies as the EF store does, from the company rows.
+        Store.CompanyNames ??= id => Companies.GetAsync(id, default).GetAwaiter().GetResult() is { } c ? (c.Code, c.DisplayName) : null;
 
         // Not forced: the host's first start-up check makes it Ready, and runs recovery on Store first, as production does.
         _fakeGate = new DatabaseGate(

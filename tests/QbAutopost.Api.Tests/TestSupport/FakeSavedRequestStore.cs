@@ -89,6 +89,9 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestStore
             Metadata = Copy(request.Metadata),
             SkipCount = SavedRequestColumns.SkipCountOf(payload),
             Upload = upload,
+            CompanyId = request.CompanyId,
+            CompanySource = request.CompanyId is null ? null : request.CompanySource,
+            CompanyMatch = request.CompanyMatch,
         };
         record = WithSnapshotV2(record, request.Read.Readable, request.SnapshotV2 ?? request.Snapshot);
         _requests[id] = record;
@@ -151,7 +154,7 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestStore
             var digests = _requests.Values
                 .Where(r => r.CreatedUtc >= sinceUtc && r.Status != SavedRequestStatus.Discarded && r.Id != excludeId)
                 .OrderBy(r => r.CreatedUtc).ThenBy(r => r.Id)
-                .Select(r => new DuplicateDigest(r.Id, r.CanonicalSha256, r.Reference, new HashSet<string>(_fingerprints[r.Id], StringComparer.Ordinal), r.CreatedUtc))
+                .Select(r => new DuplicateDigest(r.Id, r.CanonicalSha256, r.Reference, new HashSet<string>(_fingerprints[r.Id], StringComparer.Ordinal), r.CreatedUtc, r.CompanyId))
                 .ToList();
             return Task.FromResult<IReadOnlyList<DuplicateDigest>>(digests);
         }
@@ -296,6 +299,60 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestStore
                 nowUtc, actor);
             return Mutation(MutationKind.Ok, updated);
         }
+    }
+
+    /// <summary>
+    /// M17: how the fake names a company in the <c>company-assigned</c> event (the EF store reads the <c>companies</c>
+    /// table). Null, or a lookup that returns null: the id alone, with null code and display name.
+    /// </summary>
+    public Func<int, (string? Code, string DisplayName)?>? CompanyNames { get; set; }
+
+    public Task<MutationResult> SetCompanyAsync(
+        long id, int expectedRowVersion, int companyId, DuplicateMatch duplicate, string actor, DateTime nowUtc,
+        CancellationToken ct)
+    {
+        lock (_gate)
+        {
+            if (!_requests.TryGetValue(id, out var r)) return Mutation(MutationKind.NotFound, null);
+            if (r.RowVersion != expectedRowVersion) return Mutation(MutationKind.Stale, r);
+            if (r.Status != SavedRequestStatus.Pending) return Mutation(MutationKind.WrongStatus, r);
+            if (_attempts[id].Any(a => a.Outcome == AttemptOutcome.InProgress)) return Mutation(MutationKind.WrongStatus, r);
+
+            var readable = _versions[id].Single(v => v.Number == r.CurrentVersion).Readable;
+            var detail = new JsonObject
+            {
+                ["companyId"] = companyId,
+                ["from"] = RefOf(r.CompanyId),
+                ["to"] = RefOf(companyId),
+                ["source"] = "chosen",
+            };
+            var updated = r with
+            {
+                CompanyId = companyId,
+                CompanySource = QbAutopost.Core.Companies.CompanySource.Chosen,
+                Validation = null,
+                ValidatedUtc = null,
+                ValidationV2 = null,
+                NeedsAttention = !readable,
+                NeedsAttentionV2 = !readable || r.Metadata.MetadataErrors.Count > 0,
+                ProblemCount = 0,
+                DuplicateOfId = duplicate.Of,
+                DuplicateReasons = duplicate.Reasons.ToList(),
+                RowVersion = r.RowVersion + 1,
+                UpdatedUtc = nowUtc,
+                UpdatedBy = actor,
+            };
+            _requests[id] = updated;
+            AddEvent(id, SavedRequestEvents.CompanyAssigned, detail, nowUtc, actor);
+            return Mutation(MutationKind.Ok, updated);
+        }
+
+        JsonObject? RefOf(int? companyId) =>
+            companyId is { } key
+                ? CompanyNames?.Invoke(key) is { } names
+                    ? new JsonObject { ["id"] = key, ["code"] = names.Code, ["displayName"] = names.DisplayName }
+                    : new JsonObject { ["id"] = key, ["code"] = null, ["displayName"] = null }
+                : null;
     }
 
     public Task<MutationResult> ChangeStatusAsync(
@@ -592,7 +649,11 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestStore
     private static SavedRequestSummary Summarize(SavedRequest r) => new(
         r.Id, r.Status, r.Source, r.Reference, r.ControlTotal, r.TransactionCount, r.CurrentVersion, r.NeedsAttention,
         r.DuplicateOfId, r.DuplicateReasons.ToList(), r.Validation?.State, r.ValidatedUtc, r.PostId,
-        r.CreatedUtc, r.CreatedBy, r.UpdatedUtc, r.UpdatedBy, r.RowVersion);
+        r.CreatedUtc, r.CreatedBy, r.UpdatedUtc, r.UpdatedBy, r.RowVersion)
+    {
+        CompanyId = r.CompanyId,
+        CompanySource = r.CompanySource,
+    };
 
     /// <summary>
     /// The v1 list filters. With <paramref name="v2"/> (T-1107), <c>needsAttention</c> reads the v2 flag and <c>q</c>
@@ -603,12 +664,16 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestStore
         if (query.Statuses.Count > 0) rows = rows.Where(r => query.Statuses.Contains(r.Status));
         if (query.NeedsAttention is { } na) rows = rows.Where(r => (v2 ? r.NeedsAttentionV2 : r.NeedsAttention) == na);
         if (query.Duplicate is { } dup) rows = rows.Where(r => (r.DuplicateReasons.Count > 0) == dup);
+        if (query.Company is { } company) rows = OfCompany(rows, company);
         if (query.Source is { Length: > 0 } source) rows = rows.Where(r => r.Source == source);
         if (query.CreatedFrom is { } from) rows = rows.Where(r => DateOnly.FromDateTime(r.CreatedUtc) >= from);
         if (query.CreatedTo is { } to) rows = rows.Where(r => DateOnly.FromDateTime(r.CreatedUtc) <= to);
         if (!string.IsNullOrWhiteSpace(query.Q)) rows = rows.Where(r => Matches(r, query.Q.Trim(), v2));
         return rows;
     }
+
+    private static IEnumerable<SavedRequest> OfCompany(IEnumerable<SavedRequest> rows, CompanyFilter company) =>
+        rows.Where(r => r.CompanyId == company.CompanyId);
 
     private static bool Matches(SavedRequest r, string q, bool v2)
     {

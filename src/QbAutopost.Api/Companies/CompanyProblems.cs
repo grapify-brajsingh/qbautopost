@@ -44,7 +44,7 @@ public static class CompanyProblems
             type: "edited-by-someone-else",
             extensions: new Dictionary<string, object?> { ["rowVersion"] = rowVersion });
 
-    /// <summary>409 (spec 5.2): the statement has no company, so nothing is validated or posted. Used from T-1712.</summary>
+    /// <summary>409 (spec 5.2): the statement has no company, so nothing is validated or posted.</summary>
     public static IResult Required(string publicRef) =>
         Results.Problem(
             statusCode: StatusCodes.Status409Conflict,
@@ -56,14 +56,7 @@ public static class CompanyProblems
     /// 409 (spec 4.7): only an <c>active</c> + <c>approved</c> company opens a QuickBooks session. Nothing was claimed and
     /// no session was opened.
     /// </summary>
-    public static IResult NotReady(CompanyContext company) =>
-        NotReadyProblem(
-            company.FileOutsideRoot
-                ? $"{company.DisplayName}'s company file is outside Companies:RootFolder, so it is never opened. Nothing was sent."
-                : $"{company.DisplayName} is {CompanyText.Of(company.State)} with access {CompanyText.Of(company.Access)}; only an "
-                  + "active, approved company can be validated or posted. Nothing was sent.",
-            CompanyText.Of(company.State),
-            CompanyText.Of(company.Access));
+    public static IResult NotReady(CompanyContext company) => Results.Problem(NotReadyDetails(company, company.Id));
 
     /// <summary>503 (spec 5.1): QuickBooks is not running in this session; Check access never starts it. No session was opened.</summary>
     public static IResult QuickBooksNotOpen() =>
@@ -83,8 +76,22 @@ public static class CompanyProblems
             CompanyText.Of(company.Access));
 
     /// <summary>Ruling B18: a stored statement names a company that no longer exists. 409, nothing claimed, no session.</summary>
-    public static IResult NotReady(int companyId) =>
-        NotReadyProblem($"Company {companyId} of this statement no longer exists. Set its company again. Nothing was sent.", null, null);
+    public static IResult NotReady(int companyId) => Results.Problem(NotReadyDetails(null, companyId));
+
+    /// <summary>
+    /// The 409 <c>company-not-ready</c> body of a statement's company: <paramref name="company"/>'s state and access, or
+    /// (null, ruling B18) company <paramref name="companyId"/> no longer exists. For answers that add fields to it.
+    /// </summary>
+    public static Microsoft.AspNetCore.Mvc.ProblemDetails NotReadyDetails(CompanyContext? company, int companyId) =>
+        company is null
+            ? NotReadyDetails($"Company {companyId} of this statement no longer exists. Set its company again. Nothing was sent.", null, null)
+            : NotReadyDetails(
+                company.FileOutsideRoot
+                    ? $"{company.DisplayName}'s company file is outside Companies:RootFolder, so it is never opened. Nothing was sent."
+                    : $"{company.DisplayName} is {CompanyText.Of(company.State)} with access {CompanyText.Of(company.Access)}; only an "
+                      + "active, approved company can be validated or posted. Nothing was sent.",
+                CompanyText.Of(company.State),
+                CompanyText.Of(company.Access));
 
     /// <summary>409 (spec 4.7, A-7): QuickBooks has another company file open. Nothing was sent and it is not retried.</summary>
     public static IResult OpenElsewhere(CompanyFileRefusal refusal, IDictionary<string, object?>? extra = null) =>
@@ -124,12 +131,16 @@ public static class CompanyProblems
             .ProblemDetails;
 
     private static IResult NotReadyProblem(string detail, string? state, string? access) =>
-        Results.Problem(
+        Results.Problem(NotReadyDetails(detail, state, access));
+
+    private static Microsoft.AspNetCore.Mvc.ProblemDetails NotReadyDetails(string detail, string? state, string? access) =>
+        TypedResults.Problem(
             statusCode: StatusCodes.Status409Conflict,
             title: "Company not ready",
             detail: detail,
             type: NotReadyType,
-            extensions: new Dictionary<string, object?> { ["state"] = state, ["access"] = access });
+            extensions: new Dictionary<string, object?> { ["state"] = state, ["access"] = access })
+            .ProblemDetails;
 
     private static Dictionary<string, object?> With(IDictionary<string, object?>? extra, Dictionary<string, object?> extensions)
     {

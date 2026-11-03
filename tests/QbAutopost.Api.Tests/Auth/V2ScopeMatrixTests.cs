@@ -68,6 +68,14 @@ public sealed class V2ScopeMatrixTests(Host host) : IClassFixture<Host>
             return;
         }
 
+        // M17 §5.2: set-company exists under /api/v2 only (requests:edit); v1 has no such route, so its spelling stays admin.
+        if (method == "POST" && relative.EndsWith("/company", StringComparison.Ordinal) && relative.StartsWith("/saved-requests/", StringComparison.Ordinal))
+        {
+            Assert.Equal(ApiScopes.Admin, ApiRoutes.ScopeFor(method, V1 + relative));
+            Assert.Equal(ApiScopes.RequestsEdit, ApiRoutes.ScopeFor(method, V2 + relative));
+            return;
+        }
+
         // M14 §7.2 (Q-120): v2's Sync now is for editors and admins (requests:edit) or a key with qb:read; v1's stays qb:read.
         if (method == "POST" && relative == ApiRoutes.ListSyncRoute)
         {
@@ -91,6 +99,10 @@ public sealed class V2ScopeMatrixTests(Host host) : IClassFixture<Host>
             ApiRoutes.ScopeFor(method, V2 + relative, isDevelopment: true));
         Assert.NotEqual(ApiScopes.Admin, ApiRoutes.ScopeFor(method, V2 + relative));
     }
+
+    [Fact]
+    public void Should_NeedRequestsEdit_When_SettingAStatementsCompany() =>
+        Assert.Equal(ApiScopes.RequestsEdit, ApiRoutes.ScopeFor("POST", V2 + "/saved-requests/12/company"));
 
     [Fact]
     public void Should_NeedRequestsAdmin_When_CheckingACompanysAccess() =>

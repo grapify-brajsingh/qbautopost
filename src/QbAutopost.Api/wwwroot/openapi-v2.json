@@ -1894,6 +1894,16 @@
             }
           },
           {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "description": "M17 §5.2: a company id (only that company's statements) or `none` (statements with no company), sent once. Anything else answers `400 invalid-request`; an id of no company matches nothing.",
+            "schema": {
+              "type": "string",
+              "pattern": "^(none|[1-9][0-9]*)$"
+            }
+          },
+          {
             "name": "page",
             "in": "query",
             "required": false,
@@ -1955,7 +1965,7 @@
         ],
         "operationId": "savedRequestStats",
         "summary": "Counts for the dashboard header.",
-        "description": "Dashboard v2 §9.3. `byStatus` names every status, zero included. Each flag is counted among `pending` requests and among `all`, on the v2 judgement (§5.3); `hasErrors` is a problem count above 0 or needing attention.",
+        "description": "Dashboard v2 §9.3. `byStatus` names every status, zero included. Each flag is counted among `pending` requests and among `all`, on the v2 judgement (§5.3); `hasErrors` is a problem count above 0 or needing attention. M17 §5.2: `company` narrows every count; `needsCompany` counts pending statements with no company.",
         "x-required-scope": "requests:read",
         "security": [
           {
@@ -1991,8 +2001,30 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "`invalid-request`: `company` is neither a company id nor `none`. Nothing was read.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "description": "M17 §5.2: a company id (only that company's statements) or `none` (statements with no company), sent once. Anything else answers `400 invalid-request`; an id of no company matches nothing.",
+            "schema": {
+              "type": "string",
+              "pattern": "^(none|[1-9][0-9]*)$"
+            }
+          }
+        ]
       }
     },
     "/api/v2/saved-requests/{id}": {
@@ -2261,7 +2293,7 @@
             }
           },
           "409": {
-            "description": "`not-editable`: the request is not `pending`; the detail names its status. Nothing was changed.",
+            "description": "`not-editable`: the request is not `pending`; the detail names its status. Nothing was changed. M17 §4.6: `company-required` when the statement has no company; `company-not-ready` (with `state` and `access`) when its company is not active and approved. Nothing was validated or sent.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2666,6 +2698,144 @@
         }
       }
     },
+    "/api/v2/saved-requests/{id}/company": {
+      "post": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "setSavedRequestCompany",
+        "summary": "Set or change the company of a pending statement.",
+        "description": "M17 §4.6, §5.2. Body `{ \"companyId\": n }`; `If-Match` is required. Only a `pending` statement with no attempt in progress. Clears the stored validation (lists differ per company), runs the duplicate rules again with the new company (`same-reference` and `overlapping-rows` compare only statements of the same company), sets `companySource` to `chosen`, and writes the audit event `company-assigned` with detail `{ companyId, from: { id, code, displayName } | null, to: { id, code, displayName }, source: \"chosen\" }`.",
+        "x-required-scope": "requests:edit",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "The statement's ETag (its row version, in quotes).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "companyId"
+                ],
+                "properties": {
+                  "companyId": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "An active or ambiguous company."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The statement with its new company and no validation, as the v2 detail (the same shape as `GET /api/v2/saved-requests/{id}`).",
+            "headers": {
+              "ETag": {
+                "description": "The new row version, in quotes.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestDetailV2"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid-request`: no `companyId`, or a company that does not exist or is missing or disabled. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not-editable`: the statement is not `pending`, or a post of it is in progress. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: `If-Match` is not the current row version. The body carries the current `rowVersion`, `updatedUtc` and `updatedBy`. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditedBySomeoneElseProblem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`precondition-required`: no `If-Match`. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/saved-requests/{id}/post": {
       "post": {
         "tags": [
@@ -2764,7 +2934,7 @@
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
-            "description": "`already-posting` (with the running `attemptId`, `startedBy` and `startedUtc`), `already-posted` (with the `postId`, and the `attemptId`, `startedBy` and `startedUtc` of the attempt that posted it; all three are null when an admin settled the request by resolve), `not-postable` (partial, unknown or discarded; `savedRequestStatus` names it) or `duplicate-unconfirmed` (`duplicate: { of, status, reasons }`): nothing was claimed or sent. Or validate-and-post's busy `409` with `Retry-After`: recorded as `busy`, the request is `pending` again. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case).",
+            "description": "`already-posting` (with the running `attemptId`, `startedBy` and `startedUtc`), `already-posted` (with the `postId`, and the `attemptId`, `startedBy` and `startedUtc` of the attempt that posted it; all three are null when an admin settled the request by resolve), `not-postable` (partial, unknown or discarded; `savedRequestStatus` names it) or `duplicate-unconfirmed` (`duplicate: { of, status, reasons }`): nothing was claimed or sent. Or validate-and-post's busy `409` with `Retry-After`: recorded as `busy`, the request is `pending` again. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case). M17 §4.6: `company-required` when the statement has no company; `company-not-ready` (with `state` and `access`) when its company is not active and approved. Nothing was validated or sent.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5853,7 +6023,7 @@
       "SavedRequestUploadInput": {
         "type": "object",
         "nullable": true,
-        "description": "Dashboard-api-m12 §7.2: the extraction this save is a reviewed upload of. Only `extractionId` is read; any other field (such as `fileName`) is ignored, since the upload columns come from the extraction record. Not allowed with `email` or `pushId`; only a signed-in user may send it.",
+        "description": "Dashboard-api-m12 §7.2: the extraction this save is a reviewed upload of. Only `extractionId` and (M17) `companyId` are read; any other field (such as `fileName`) is ignored, since the upload columns come from the extraction record. Not allowed with `email` or `pushId`; only a signed-in user may send it.",
         "required": [
           "extractionId"
         ],
@@ -5862,6 +6032,12 @@
             "type": "string",
             "format": "uuid",
             "description": "From `POST /statement-extractions`."
+          },
+          "companyId": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 1,
+            "description": "M17 §4.6: the company the person chose. It must exist and be active or ambiguous, else `400 invalid-request` and nothing is saved. Without it the statement gets the one active company, else the extraction's matched company, else none."
           }
         }
       },
@@ -6800,7 +6976,7 @@
       },
       "SavedRequestSummaryV2": {
         "type": "object",
-        "description": "Dashboard v2 §9.1: the v1 row (§6.5) with `needsAttention` and `validation` from the v2 judgement, plus `pushId`, `email`, `historyCount`, `validationSummary`, `postSummary` and `skipCount`. Dashboard-api-m12 §7.4: plus `upload`.",
+        "description": "Dashboard v2 §9.1: the v1 row (§6.5) with `needsAttention` and `validation` from the v2 judgement, plus `pushId`, `email`, `historyCount`, `validationSummary`, `postSummary` and `skipCount`. Dashboard-api-m12 §7.4: plus `upload`. M17 §5.2: plus `company` and `companySource`.",
         "properties": {
           "id": {
             "type": "integer",
@@ -6891,7 +7067,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Of `edit`, `validate`, `post`, `discard`, `restore`, `resolve`, in that order."
+            "description": "Of `edit`, `validate`, `post`, `discard`, `restore`, `resolve`, in that order. M17 §4.6: `set-company` (after the others) for a `pending` statement and a `requests:edit` user; a statement with no company, or whose company is not active and approved, has no `validate` or `post`."
           },
           "pushId": {
             "type": "string",
@@ -6925,6 +7101,26 @@
           },
           "upload": {
             "$ref": "#/components/schemas/SavedRequestUpload"
+          },
+          "company": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestCompanyRef"
+              }
+            ],
+            "nullable": true,
+            "description": "M17 §4.6: the statement's company; null means it needs one (validate and post answer `409 company-required`)."
+          },
+          "companySource": {
+            "type": "string",
+            "enum": [
+              "matched",
+              "chosen",
+              "migrated",
+              "default"
+            ],
+            "nullable": true,
+            "description": "How the company was decided; null when there is none."
           }
         }
       },
@@ -6953,7 +7149,7 @@
       },
       "SavedRequestDetailV2": {
         "type": "object",
-        "description": "Dashboard v2 §9.1: the v1 detail (§6.2) with `needsAttention`, `validation` (its `versionNumber` is the version judged, §10 4.3) and `readErrors` from the v2 judgement, plus the list row's additions, `otherUnpostedPushes` and `ledgerBatch`. Dashboard-api-m12 §7.4: plus `upload`.",
+        "description": "Dashboard v2 §9.1: the v1 detail (§6.2) with `needsAttention`, `validation` (its `versionNumber` is the version judged, §10 4.3) and `readErrors` from the v2 judgement, plus the list row's additions, `otherUnpostedPushes` and `ledgerBatch`. Dashboard-api-m12 §7.4: plus `upload`. M17 §5.2: plus `company` and `companySource`, and `companyMatch`.",
         "properties": {
           "id": {
             "type": "integer",
@@ -7051,7 +7247,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Of `edit`, `validate`, `post`, `discard`, `restore`, `resolve`, in that order."
+            "description": "Of `edit`, `validate`, `post`, `discard`, `restore`, `resolve`, in that order. M17 §4.6: `set-company` (after the others) for a `pending` statement and a `requests:edit` user; a statement with no company, or whose company is not active and approved, has no `validate` or `post`."
           },
           "pushId": {
             "type": "string",
@@ -7094,12 +7290,41 @@
           },
           "upload": {
             "$ref": "#/components/schemas/SavedRequestUpload"
+          },
+          "company": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestCompanyRef"
+              }
+            ],
+            "nullable": true,
+            "description": "M17 §4.6: the statement's company; null means it needs one (validate and post answer `409 company-required`)."
+          },
+          "companySource": {
+            "type": "string",
+            "enum": [
+              "matched",
+              "chosen",
+              "migrated",
+              "default"
+            ],
+            "nullable": true,
+            "description": "How the company was decided; null when there is none."
+          },
+          "companyMatch": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestCompanyMatch"
+              }
+            ],
+            "nullable": true,
+            "description": "The upload's printed-name match; null for a statement not saved from an upload."
           }
         }
       },
       "SavedRequestStatsV2": {
         "type": "object",
-        "description": "Dashboard v2 §9.3.",
+        "description": "Dashboard v2 §9.3. M17 §5.2: plus `needsCompany`.",
         "properties": {
           "total": {
             "type": "integer",
@@ -7151,6 +7376,11 @@
                 "format": "int32"
               }
             }
+          },
+          "needsCompany": {
+            "type": "integer",
+            "format": "int32",
+            "description": "M17 §5.2: pending statements with no company."
           }
         }
       },
@@ -7807,6 +8037,60 @@
                 "overlapping-rows"
               ]
             }
+          }
+        }
+      },
+      "SavedRequestCompanyRef": {
+        "type": "object",
+        "description": "M17 §5.2: the company a statement belongs to.",
+        "required": [
+          "id",
+          "displayName"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "code": {
+            "type": "string",
+            "nullable": true,
+            "description": "The numeric prefix of the company's folder name, else null."
+          },
+          "displayName": {
+            "type": "string"
+          }
+        }
+      },
+      "SavedRequestCompanyMatch": {
+        "type": "object",
+        "description": "M17 §4.6, §5.2: how the business name printed on an uploaded statement matched a company, copied from the extraction at save.",
+        "required": [
+          "match",
+          "candidates"
+        ],
+        "properties": {
+          "match": {
+            "type": "string",
+            "enum": [
+              "matched",
+              "none",
+              "ambiguous"
+            ]
+          },
+          "printedName": {
+            "type": "string",
+            "nullable": true
+          },
+          "dbaName": {
+            "type": "string",
+            "nullable": true
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "description": "Company ids: the matched one, or every one an ambiguous name names."
           }
         }
       }

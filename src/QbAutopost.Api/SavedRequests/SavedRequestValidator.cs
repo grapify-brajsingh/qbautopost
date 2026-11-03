@@ -22,8 +22,11 @@ public sealed class SavedRequestValidator(DirectPostRunner runner, ILogger<Saved
     /// <summary>Shown to callers when the rules file is missing (spec 10.8).</summary>
     public const string RulesMissing = "rules file missing";
 
-    /// <summary>M17 spec 4.6: shown when the statement has no company to validate against (used from T-1712).</summary>
+    /// <summary>M17 spec 4.6: shown when the statement has no company to validate against.</summary>
     public const string CompanyRequired = "company required";
+
+    /// <summary>Ruling B18 (carried from T-1708): shown when the statement's company no longer exists.</summary>
+    public const string CompanyGone = "company no longer exists";
 
     /// <summary>
     /// Dashboard v2 spec 6.4: the v1 and the v2 judgement of one version, from the same inputs. v1 plans with no row
@@ -33,14 +36,15 @@ public sealed class SavedRequestValidator(DirectPostRunner runner, ILogger<Saved
     /// </summary>
     /// <param name="savedRequestId">For the log line only; null while a new request is being saved.</param>
     /// <param name="company">
-    /// M17 §4.7: the statement's company, whose rules and ledger the plan reads. Null is the default company
-    /// (TRANSITIONAL until T-1712, ruling B2: null will mean "no company").
+    /// M17 §4.6, §4.7: the statement's company, whose rules and lists the plan reads. Null means the statement has no
+    /// company (ruling B2): nothing is planned and a readable payload is <c>unavailable</c> with
+    /// <see cref="CompanyRequired"/>. Callers that auto-assign resolve the company first.
     /// </param>
     public (ValidationSnapshot V1, ValidationSnapshot V2) ValidateBoth(
-        PayloadRead read, NotPostedRead notPosted, int versionNumber, DateTime nowUtc, long? savedRequestId = null,
-        CompanyContext? company = null)
+        PayloadRead read, NotPostedRead notPosted, int versionNumber, DateTime nowUtc, long? savedRequestId,
+        CompanyContext? company)
     {
-        var v1 = Validate(read, versionNumber, nowUtc, savedRequestId, company: company);
+        var v1 = Validate(read, versionNumber, nowUtc, savedRequestId, null, company);
         if (notPosted.Errors.Count > 0)
         {
             // v1's read errors come first, as the v2 detail lists them (spec 6.4, Display).
@@ -54,10 +58,10 @@ public sealed class SavedRequestValidator(DirectPostRunner runner, ILogger<Saved
     /// <param name="notPosted">
     /// Dashboard v2: the rows to set aside as <c>not-to-post</c>. Null (the default) plans every row, as v1 does.
     /// </param>
-    /// <param name="company">The statement's company; null is the default company (TRANSITIONAL until T-1712).</param>
+    /// <param name="company">The statement's company; null: no company, so nothing is planned (see <see cref="ValidateBoth"/>).</param>
     public ValidationSnapshot Validate(
-        PayloadRead read, int versionNumber, DateTime nowUtc, long? savedRequestId = null, IReadOnlySet<int>? notPosted = null,
-        CompanyContext? company = null)
+        PayloadRead read, int versionNumber, DateTime nowUtc, long? savedRequestId, IReadOnlySet<int>? notPosted,
+        CompanyContext? company)
     {
         if (!read.Readable)
         {
@@ -70,11 +74,19 @@ public sealed class SavedRequestValidator(DirectPostRunner runner, ILogger<Saved
             return Snapshot(ValidationState.Refused, versionNumber, nowUtc, unsupported);
         }
 
+        // SPEC-GAP T-1712 (plan conflict 7): spec 4.6 says validate answers company-required but not what a save of a
+        // statement with no company stores. Nothing is planned without the company's lists and rules (planning with the
+        // default company's would judge it against the wrong file), so the snapshot is unavailable, naming why.
+        if (company is null)
+        {
+            return Snapshot(ValidationState.Unavailable, versionNumber, nowUtc, [CompanyRequired]);
+        }
+
         DirectPlan plan;
         try
         {
             var direct = notPosted is null ? request.ToDirectRequest() : request.ToDirectRequest(notPosted);
-            plan = company is null ? runner.Plan(direct) : runner.Plan(direct, company);
+            plan = runner.Plan(direct, company);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

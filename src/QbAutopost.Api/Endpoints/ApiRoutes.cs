@@ -36,6 +36,7 @@ public static class ApiRoutes
         ("POST", "/saved-requests/{id}/restore"),
         ("POST", "/saved-requests/{id}/post"),
         ("POST", "/saved-requests/{id}/resolve"),
+        ("POST", "/saved-requests/{id}/company"),
         ("GET", "/saved-requests/{id}/original"),
         ("GET", "/saved-requests/{id}/versions"),
         ("GET", "/saved-requests/{id}/versions/{n}"),
@@ -314,7 +315,7 @@ public static class ApiRoutes
         // below can open anything, and each falls back to admin rather than to a neighbour's scope.
         if (IsUnder(p, "/saved-requests"))
         {
-            return SavedRequestScope(method, p);
+            return SavedRequestScope(method, p, path.Value!.StartsWith(V2Prefix + "/", Ordinal));
         }
 
         // T-1114 (dashboard v2 spec 8.1, 13.1): the audit feed and its CSV are reads of saved-request history. They exist
@@ -442,8 +443,12 @@ public static class ApiRoutes
     private const string AuthChangePassword = "/auth/change-password";
     private const string AuthLogout = "/auth/logout";
 
-    /// <summary>Spec 6 and 11.3: every GET reads; each change is named; anything else is admin, as everywhere.</summary>
-    private static string SavedRequestScope(string method, string p)
+    /// <summary>
+    /// Spec 6 and 11.3: every GET reads; each change is named; anything else is admin, as everywhere. M17 spec 5.2:
+    /// set-company (<c>POST …/{id}/company</c>) is <c>requests:edit</c> under <c>/api/v2</c> only; v1 has no such route
+    /// and its spelling stays closed to admin.
+    /// </summary>
+    private static string SavedRequestScope(string method, string p, bool v2)
     {
         var segments = p.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (HttpMethods.IsGet(method))
@@ -458,6 +463,7 @@ public static class ApiRoutes
             (3, "POST") => segments[2].ToLowerInvariant() switch
             {
                 "validate" or "discard" => ApiScopes.RequestsEdit,
+                "company" when v2 => ApiScopes.RequestsEdit,
                 "post" => ApiScopes.RequestsPost,
                 "restore" or "resolve" => ApiScopes.RequestsAdmin,
                 _ => ApiScopes.Admin,

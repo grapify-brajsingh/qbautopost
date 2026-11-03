@@ -105,10 +105,12 @@ public sealed partial class EfSavedRequestStore : ISavedRequestV2Store
         return new PagedResult<SavedRequestSummary>(summaries, page, size, total);
     }
 
-    public async Task<SavedRequestStatsV2> StatsV2Async(CancellationToken ct)
+    public async Task<SavedRequestStatsV2> StatsV2Async(CompanyFilter? company, CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        var groups = await db.SavedRequests
+        IQueryable<SavedRequestEntity> rows = db.SavedRequests;
+        if (company is not null) rows = OfCompany(rows, company);
+        var groups = await rows
             .GroupBy(r => r.Status)
             .Select(g => new
             {
@@ -117,6 +119,7 @@ public sealed partial class EfSavedRequestStore : ISavedRequestV2Store
                 Attention = g.Count(r => r.NeedsAttentionV2),
                 Duplicate = g.Count(r => r.DuplicateReasons.Count > 0),
                 Errors = g.Count(r => r.ProblemCount > 0 || r.NeedsAttentionV2),
+                NoCompany = g.Count(r => r.CompanyId == null),
             })
             .ToListAsync(ct);
 
@@ -127,7 +130,10 @@ public sealed partial class EfSavedRequestStore : ISavedRequestV2Store
             groups.Sum(g => g.Count), byStatus,
             new FlagCounts(pending?.Attention ?? 0, groups.Sum(g => g.Attention)),
             new FlagCounts(pending?.Duplicate ?? 0, groups.Sum(g => g.Duplicate)),
-            new FlagCounts(pending?.Errors ?? 0, groups.Sum(g => g.Errors)));
+            new FlagCounts(pending?.Errors ?? 0, groups.Sum(g => g.Errors)))
+        {
+            NeedsCompany = pending?.NoCompany ?? 0,
+        };
     }
 
     public async Task<IReadOnlyDictionary<int, int>> PendingByCompanyAsync(CancellationToken ct)

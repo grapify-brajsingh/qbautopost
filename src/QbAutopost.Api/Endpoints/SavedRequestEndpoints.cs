@@ -65,6 +65,12 @@ public static partial class SavedRequestEndpoints
             group.MapGet("/stats", StatsV2Async);
             group.MapGet("/{id}", GetV2Async);
             group.MapGet("/{id}/attempts/{attemptId}", AttemptV2Async);
+
+            // M17 spec 4.6, 5.2: v2 only; v1 never offers set-company and has no such route.
+            group.MapPost(
+                "/{id}/company",
+                (HttpContext http, string id, SavedRequestIntake intake, ISavedRequestStore store, ActorDirectory actors, CancellationToken ct) =>
+                    SetCompanyAsync(http, id, intake, store, actors, ct));
         }
         else
         {
@@ -292,14 +298,31 @@ public static partial class SavedRequestEndpoints
 
         var page = await store.ListV2Async(query!, ct);
         var names = await actors.ResolveAsync(page.Items.SelectMany(SavedRequestViewsV2.ActorsOf), ct);
+        var companies = await CompaniesOfAsync(http, page.Items.Select(s => s.CompanyId), ct);
         var caller = CallerMiddleware.CallerOf(http)!;
-        var items = page.Items.Select(s => SavedRequestViewsV2.Summary(s, caller, names)).ToList();
+        var items = page.Items.Select(s => SavedRequestViewsV2.Summary(s, caller, names, companies)).ToList();
         return Json(new PageView<SavedRequestSummaryV2View>(items, page.Page, page.PageSize, page.Total));
     }
 
-    /// <summary>Dashboard v2 spec 9.3: every flag counted among pending requests and among all, on the v2 columns.</summary>
-    private static async Task<IResult> StatsV2Async(ISavedRequestV2Store store, CancellationToken ct) =>
-        Json(SavedRequestViewsV2.Stats(await store.StatsV2Async(ct)));
+    /// <summary>
+    /// Dashboard v2 spec 9.3: every flag counted among pending requests and among all, on the v2 columns. M17 spec 5.2:
+    /// <c>company=&lt;id&gt;|none</c> narrows every count, and <c>needsCompany</c> counts pending statements with none.
+    /// </summary>
+    private static async Task<IResult> StatsV2Async(HttpContext http, ISavedRequestV2Store store, CancellationToken ct)
+    {
+        if (!V2QueryParser.TryCompany(http.Request.Query, out var company, out var error))
+        {
+            return BadRequest("Invalid query", error!);
+        }
+
+        return Json(SavedRequestViewsV2.Stats(await store.StatsV2Async(company, ct)));
+    }
+
+    /// <summary>M17 spec 5.2: the companies of the statements of one answer (names, codes and readiness).</summary>
+    private static Task<StatementCompanies> CompaniesOfAsync(HttpContext http, IEnumerable<int?> companyIds, CancellationToken ct) =>
+        StatementCompanies.LoadAsync(
+            companyIds, http.RequestServices.GetService<ICompanyStore>(),
+            http.RequestServices.GetRequiredService<ICompanyResolver>(), ct);
 
     // ---- one request ------------------------------------------------------------------------------------------------
 
@@ -348,8 +371,9 @@ public static partial class SavedRequestEndpoints
             ? LoadDetailLedgerBatch(batches, postId, record.Id, loggers)
             : null;
         var names = await actors.ResolveAsync(SavedRequestViewsV2.ActorsOf(record), ct);
+        var companies = await CompaniesOfAsync(http, [record.CompanyId], ct);
         http.Response.Headers.ETag = $"\"{record.RowVersion.ToString(CultureInfo.InvariantCulture)}\"";
-        return Json(SavedRequestViewsV2.Detail(record, readErrors, others, ledger, CallerMiddleware.CallerOf(http)!, names));
+        return Json(SavedRequestViewsV2.Detail(record, readErrors, others, ledger, CallerMiddleware.CallerOf(http)!, names, companies));
     }
 
     /// <summary>Spec 5.1, 6: the body exactly as it was received, byte for byte; never re-serialised.</summary>
@@ -579,18 +603,74 @@ public static partial class SavedRequestEndpoints
             return NotFound();
         }
 
-        // M17 §4.7: a pending statement whose company may not open a session is answered before anything is revalidated.
-        if (await store.GetAsync(requestId, ct) is { Status: SavedRequestStatus.Pending } current)
+        // M17 §4.6, §4.7 (v1 and v2 alike, plan conflict 8): a statement with no company is answered company-required, and
+        // a pending one whose company may not open a session company-not-ready, before anything is revalidated.
+        if (await store.GetAsync(requestId, ct) is { } current)
         {
-            var company = await intake.CompanyOfAsync(current, ct);
-            if (company is not { CanOpenSession: true })
+            if (current.CompanyId is null)
             {
-                return CompanyNotReady(company, current);
+                return CompanyProblems.Required(current.PublicRef);
+            }
+
+            if (current.Status == SavedRequestStatus.Pending)
+            {
+                var company = await intake.CompanyOfAsync(current, ct);
+                if (company is not { CanOpenSession: true })
+                {
+                    return CompanyNotReady(company, current);
+                }
             }
         }
 
         var result = await intake.RevalidateAsync(requestId, CallerMiddleware.CallerOf(http)!, ct);
         return await MutationAnswerAsync(http, result, "not-editable", "Not editable", "validated", store, actors, flavor, ct);
+    }
+
+    /// <summary>
+    /// M17 spec 4.6, 5.2 (v2 only): body <c>{ "companyId": n }</c>, <c>If-Match</c> required (428 without, 412 when
+    /// stale). A company that does not exist or is missing or disabled is <c>400 invalid-request</c> (ruling B18). Only a
+    /// pending statement with no attempt in progress (409 <c>not-editable</c> otherwise). Clears the stored validation,
+    /// runs the duplicate rules with the new company and writes <c>company-assigned</c>; answers the v2 detail and its ETag.
+    /// </summary>
+    private static async Task<IResult> SetCompanyAsync(
+        HttpContext http, string id, SavedRequestIntake intake, ISavedRequestStore store, ActorDirectory actors, CancellationToken ct)
+    {
+        if (IfMatchOf(http) is not { } expected)
+        {
+            return Problem(
+                StatusCodes.Status428PreconditionRequired, "If-Match required",
+                "Send the request's ETag in If-Match (GET /saved-requests/{id} returns it).", "precondition-required");
+        }
+
+        var (raw, failure) = await ReadBodyAsync(http, ct);
+        if (failure is not null)
+        {
+            return failure;
+        }
+
+        if (!SavedRequestIntake.TryParseObject(raw!, out var body)
+            || !body.TryGetProperty("companyId", out var companyElement)
+            || companyElement.ValueKind != JsonValueKind.Number
+            || !companyElement.TryGetInt32(out var companyId)
+            || companyId < 1)
+        {
+            return BadRequest("Invalid company", "Send { \"companyId\": <company id> }. Nothing was changed.");
+        }
+
+        if (!SavedRequestId.TryParse(id, out var requestId))
+        {
+            return NotFound();
+        }
+
+        var result = await intake.SetCompanyAsync(requestId, expected, companyId, CallerMiddleware.CallerOf(http)!, ct);
+        if (result is null)
+        {
+            return BadRequest(
+                "Company not assignable",
+                $"Company {companyId} does not exist, or is missing or disabled. Choose an active company. Nothing was changed.");
+        }
+
+        return await MutationAnswerAsync(http, result, "not-editable", "Not editable", "changed", store, actors, ApiFlavor.V2, ct);
     }
 
     /// <summary>409 <c>company-not-ready</c>: the company's state and access, or (ruling B18) a company that no longer exists.</summary>

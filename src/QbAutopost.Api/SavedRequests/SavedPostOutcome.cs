@@ -31,7 +31,7 @@ public enum SavedPostKind
     /// <summary>v2 only (dashboard v2 6.2 item 5): every row is marked <c>post: false</c>. Nothing was claimed; no attempt.</summary>
     NothingToPost,
 
-    /// <summary>M17 spec 5.2 (used from T-1712): the statement has no company. Nothing was claimed; no attempt.</summary>
+    /// <summary>M17 spec 5.2: the statement has no company. Nothing was claimed; no attempt.</summary>
     CompanyRequired,
 
     /// <summary>

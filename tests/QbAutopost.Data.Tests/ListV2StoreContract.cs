@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using QbAutopost.Core.Api;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.SavedRequests;
 using QbAutopost.Core.SavedRequests.Audit;
 
@@ -242,7 +243,7 @@ public abstract class ListV2StoreContract
 
         Assert.Equal([v2Only.Id], await IdsAsync(store, Query(Base(needsAttention: true))));
         Assert.Equal([v1Only.Id], await IdsAsync(store, Query(Base(needsAttention: false))));
-        Assert.Equal(new FlagCounts(1, 1), (await V2(store).StatsV2Async(default)).NeedsAttention);
+        Assert.Equal(new FlagCounts(1, 1), (await V2(store).StatsV2Async(null, default)).NeedsAttention);
     }
 
     [ContractFact]
@@ -320,7 +321,7 @@ public abstract class ListV2StoreContract
         await CompleteAsync(
             store, await ClaimAsync(store, posted.Id, T0.AddMinutes(2)), AttemptOutcome.Posted, SavedRequestStatus.Posted, T0.AddMinutes(3));
 
-        var stats = await V2(store).StatsV2Async(default);
+        var stats = await V2(store).StatsV2Async(null, default);
 
         Assert.Equal(4, stats.Total);
         Assert.Equal(
@@ -501,5 +502,135 @@ public abstract class ListV2StoreContract
         Assert.True(row.NeedsAttentionV2);
         Assert.Equal(2, row.ProblemCount);
         Assert.Equal(ValidationState.Ok, row.ValidationState);
+    }
+
+    // ---- company on statements (M17 spec 4.6, 5.2; T-1712) ------------------------------------------------------
+
+    private static CompanyMatch TakomaMatch(int companyId) =>
+        new(CompanyMatchKind.Matched, "TAKOMA PARK GROCERY STORE INC", "DBA ZEMEN MARKET", companyId, [companyId]);
+
+    private static NewSavedRequest WithCompany(NewSavedRequest request, int? companyId, CompanySource? source = CompanySource.Default) =>
+        request with { CompanyId = companyId, CompanySource = companyId is null ? null : source };
+
+    [ContractFact]
+    public async Task Should_RoundTripCompanyAndSource_When_Created()
+    {
+        var companyId = await NewCompanyIdAsync();
+        var store = CreateStore();
+
+        var created = await CreateAsync(store, NewRequest() with
+        {
+            CompanyId = companyId, CompanySource = CompanySource.Matched, CompanyMatch = TakomaMatch(companyId),
+        });
+
+        var read = (await store.GetAsync(created.Id, default))!;
+        var row = Assert.Single((await V2(store).ListV2Async(Query(), default)).Items);
+        Assert.Equal((companyId, CompanySource.Matched), (read.CompanyId, read.CompanySource));
+        Assert.Equal(TakomaMatch(companyId).PrintedName, read.CompanyMatch!.PrintedName);
+        Assert.Equal(CompanyMatchKind.Matched, read.CompanyMatch.Match);
+        Assert.Equal([companyId], read.CompanyMatch.Candidates);
+        Assert.Equal((companyId, CompanySource.Matched), (row.CompanyId, row.CompanySource));
+    }
+
+    [ContractFact]
+    public async Task Should_ClearValidationAndRecordEvent_When_CompanySet()
+    {
+        var companyId = await NewCompanyIdAsync();
+        var store = CreateStore();
+        var created = await CreateAsync(store, NewRequest(snapshot: Snapshot(ValidationState.Held, findings: 1)));
+
+        var result = await store.SetCompanyAsync(
+            created.Id, created.RowVersion, companyId, new DuplicateMatch(null, []), Admin, T0.AddMinutes(1), default);
+
+        Assert.Equal(MutationKind.Ok, result.Kind);
+        var record = result.Record!;
+        Assert.Equal((companyId, CompanySource.Chosen), (record.CompanyId, record.CompanySource));
+        Assert.Null(record.Validation);
+        Assert.Null(record.ValidationV2);
+        Assert.Equal(created.RowVersion + 1, record.RowVersion);
+        var assigned = (await store.EventsAsync(created.Id, default)).Last();
+        Assert.Equal(SavedRequestEvents.CompanyAssigned, assigned.Kind);
+        Assert.Equal(companyId, (int)assigned.Detail!["companyId"]!);
+        Assert.Null(assigned.Detail["from"]);
+        Assert.Equal(companyId, (int)assigned.Detail["to"]!["id"]!);
+        Assert.Equal("chosen", (string)assigned.Detail["source"]!);
+    }
+
+    [ContractFact]
+    public async Task Should_ReturnStale_When_SetCompanyRowVersionIsOld()
+    {
+        var companyId = await NewCompanyIdAsync();
+        var store = CreateStore();
+        var created = await CreateAsync(store, NewRequest());
+
+        var result = await store.SetCompanyAsync(
+            created.Id, created.RowVersion - 1, companyId, new DuplicateMatch(null, []), Admin, T0.AddMinutes(1), default);
+
+        Assert.Equal(MutationKind.Stale, result.Kind);
+        Assert.Null((await store.GetAsync(created.Id, default))!.CompanyId);
+    }
+
+    [ContractFact]
+    public async Task Should_ReturnWrongStatus_When_SettingCompanyWhilePosting()
+    {
+        var companyId = await NewCompanyIdAsync();
+        var store = CreateStore();
+        var created = await CreateAsync(store, NewRequest());
+        await ClaimAsync(store, created.Id, T0.AddMinutes(1));
+        var posting = (await store.GetAsync(created.Id, default))!;
+
+        var result = await store.SetCompanyAsync(
+            created.Id, posting.RowVersion, companyId, new DuplicateMatch(null, []), Admin, T0.AddMinutes(2), default);
+
+        Assert.Equal(MutationKind.WrongStatus, result.Kind);
+        Assert.Null((await store.GetAsync(created.Id, default))!.CompanyId);
+    }
+
+    [ContractFact]
+    public async Task Should_FilterByCompanyAndNone_When_Listing()
+    {
+        var companyId = await NewCompanyIdAsync();
+        var store = CreateStore();
+        var assigned = await CreateAsync(store, WithCompany(NewRequest(Body("R1")), companyId));
+        var unassigned = await CreateAsync(store, WithCompany(NewRequest(Body("R2")), null));
+
+        Assert.Equal([assigned.Id], await IdsAsync(store, Query(Base() with { Company = new CompanyFilter(companyId) })));
+        Assert.Equal([unassigned.Id], await IdsAsync(store, Query(Base() with { Company = CompanyFilter.None })));
+        Assert.Empty(await IdsAsync(store, Query(Base() with { Company = new CompanyFilter(companyId + 1000) })));
+    }
+
+    [ContractFact]
+    public async Task Should_CountNeedsCompany_When_Stats()
+    {
+        var companyId = await NewCompanyIdAsync();
+        var store = CreateStore();
+        await CreateAsync(store, WithCompany(NewRequest(Body("R1")), companyId));
+        await CreateAsync(store, WithCompany(NewRequest(Body("R2")), null));
+        var discarded = await CreateAsync(store, WithCompany(NewRequest(Body("R3")), null));
+        await store.ChangeStatusAsync(
+            discarded.Id, null, SavedRequestStatus.Pending, SavedRequestStatus.Discarded, Admin, T0.AddMinutes(1),
+            SavedRequestEvents.Discarded, null, default);
+
+        var all = await V2(store).StatsV2Async(null, default);
+        var none = await V2(store).StatsV2Async(CompanyFilter.None, default);
+        var ofCompany = await V2(store).StatsV2Async(new CompanyFilter(companyId), default);
+
+        Assert.Equal((3, 1), (all.Total, all.NeedsCompany));
+        Assert.Equal((2, 1), (none.Total, none.NeedsCompany));
+        Assert.Equal((1, 0), (ofCompany.Total, ofCompany.NeedsCompany));
+    }
+
+    [ContractFact]
+    public async Task Should_CarryCompanyId_When_ReadingDuplicateCandidates()
+    {
+        var companyId = await NewCompanyIdAsync();
+        var store = CreateStore();
+        var assigned = await CreateAsync(store, WithCompany(NewRequest(Body("R1")), companyId));
+        var unassigned = await CreateAsync(store, WithCompany(NewRequest(Body("R2")), null));
+
+        var candidates = await store.DuplicateCandidatesAsync(T0.AddDays(-1), null, default);
+
+        Assert.Equal(companyId, candidates.Single(c => c.Id == assigned.Id).CompanyId);
+        Assert.Null(candidates.Single(c => c.Id == unassigned.Id).CompanyId);
     }
 }

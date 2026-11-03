@@ -19,7 +19,7 @@ public static partial class SavedRequestEndpoints
     /// <summary>
     /// Dashboard-api-m12 7.2: a v2 save whose body carries <c>upload</c>. Before any store call: an API-key caller is
     /// <c>403</c>, <c>email</c> or <c>pushId</c> beside <c>upload</c> is <c>400 invalid-request</c>, and an
-    /// <c>extractionId</c> that is not a UUID is <c>400 invalid-request</c>. The store's answer then maps to the v2
+    /// <c>extractionId</c> that is not a UUID (or a <c>companyId</c> that is not a company id) is <c>400 invalid-request</c>. The store's answer then maps to the v2
     /// save's own answers where they mean the same thing (created, replay, key reuse) and to the upload problems
     /// otherwise.
     /// </summary>
@@ -44,10 +44,12 @@ public static partial class SavedRequestEndpoints
 
         if (upload.Kind == UploadFieldKind.Invalid)
         {
-            return BadRequest("Invalid upload", "upload.extractionId must be a UUID. Nothing was saved.");
+            return BadRequest(
+                "Invalid upload",
+                "upload.extractionId must be a UUID, and upload.companyId, when sent, a company id. Nothing was saved.");
         }
 
-        var result = await intake.SaveUploadAsync(raw, upload.ExtractionId, key, caller, ct);
+        var result = await intake.SaveUploadAsync(raw, upload.ExtractionId, upload.CompanyId, key, caller, ct);
         switch (result.Kind)
         {
             case UploadSaveKind.Created:
@@ -77,6 +79,11 @@ public static partial class SavedRequestEndpoints
                         ["savedRequestId"] = result.SavedRequestId,
                         ["publicRef"] = result.PublicRef,
                     });
+            case UploadSaveKind.CompanyNotAssignable:
+                // Ruling B18: request input naming no company, or a missing or disabled one, is the caller's mistake.
+                return BadRequest(
+                    "Company not assignable",
+                    $"Company {upload.CompanyId} does not exist, or is missing or disabled. Choose an active company. Nothing was saved.");
             default:
                 throw new InvalidOperationException($"Unknown upload save result {result.Kind}.");
         }

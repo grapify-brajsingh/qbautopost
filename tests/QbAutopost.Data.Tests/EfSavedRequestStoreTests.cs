@@ -191,7 +191,7 @@ public sealed class EfSavedRequestStoreTests(PostgresFixture postgres)
             {
                 "AppendVersionAsync", "AttemptAsync", "AttemptsAsync", "ChangeStatusAsync", "CompleteAttemptAsync",
                 "CreateAsync", "DuplicateCandidatesAsync", "EventsAsync", "GetAsync", "ListAsync",
-                "RecoverInFlightAsync", "ResolveAsync", "SetValidationAsync", "StatsAsync", "TryClaimAsync",
+                "RecoverInFlightAsync", "ResolveAsync", "SetCompanyAsync", "SetValidationAsync", "StatsAsync", "TryClaimAsync",
                 "VersionAsync", "VersionsAsync",
             },
             methods.Select(m => m.Name).Order(StringComparer.Ordinal));

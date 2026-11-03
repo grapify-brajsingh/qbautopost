@@ -81,6 +81,45 @@ public sealed class SavedRequestRulesTests
     public void Should_ListNothing_When_CallerIsApiClient() =>
         Assert.Empty(SavedRequestRules.AllowedActionNames(SavedRequestStatus.Pending, Admin, false));
 
+    // ---- M17 spec 4.6, 4.7: the company gate (v2 only) ----------------------------------------------------------
+
+    [Fact]
+    public void Should_OfferSetCompanyNotValidateOrPost_When_PendingWithoutCompany() =>
+        Assert.Equal(
+            ["edit", "discard", "set-company"],
+            SavedRequestRules.AllowedActionNames(SavedRequestStatus.Pending, Editor, true, CompanyGate.Required));
+
+    [Fact]
+    public void Should_OmitValidateAndPost_When_CompanyIsNotReady() =>
+        Assert.Equal(
+            ["edit", "discard", "set-company"],
+            SavedRequestRules.AllowedActionNames(SavedRequestStatus.Pending, Editor, true, CompanyGate.NotReady));
+
+    [Theory]
+    [InlineData(SavedRequestStatus.Posting)]
+    [InlineData(SavedRequestStatus.Posted)]
+    [InlineData(SavedRequestStatus.Partial)]
+    [InlineData(SavedRequestStatus.Unknown)]
+    [InlineData(SavedRequestStatus.Discarded)]
+    public void Should_OfferNoSetCompany_When_NotPending(SavedRequestStatus status) =>
+        Assert.DoesNotContain(
+            "set-company", SavedRequestRules.AllowedActionNames(status, Admin, true, CompanyGate.Required));
+
+    [Fact]
+    public void Should_OfferSetCompanyAfterResolve_When_PendingWithReadyCompany() =>
+        Assert.Equal(
+            ["edit", "validate", "post", "discard", "set-company"],
+            SavedRequestRules.AllowedActionNames(SavedRequestStatus.Pending, Editor, true, CompanyGate.Ready));
+
+    [Fact]
+    public void Should_OfferNoSetCompany_When_ScopeIsPostOnly() =>
+        Assert.Empty(SavedRequestRules.AllowedActionNames(
+            SavedRequestStatus.Pending, new HashSet<string> { ApiScopes.RequestsPost }, true, CompanyGate.Required));
+
+    [Fact]
+    public void Should_NeverListSetCompany_When_V1Names() =>
+        Assert.DoesNotContain("set-company", SavedRequestRules.AllowedActionNames(SavedRequestStatus.Pending, Admin, true));
+
     [Theory]
     [InlineData(SavedRequestStatus.Unknown, ResolveOutcome.Posted, true)]
     [InlineData(SavedRequestStatus.Unknown, ResolveOutcome.NotPosted, true)]
