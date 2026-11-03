@@ -14,3 +14,4 @@
 | [0010](0010-dashboard-users-and-jwt.md) | Dashboard users, Identity and short-lived JWTs | accepted | 2026-10-27 |
 | [0011](0011-openrouter-for-model-calls.md) | OpenRouter for all model calls; Hermes retired | accepted | 2026-10-28 |
 | [0012](0012-qb-lists-in-postgres-scheduled-sync.md) | QuickBooks lists in PostgreSQL, refreshed by a scheduled sync on the job worker | accepted | 2026-10-29 |
+| [0013](0013-multiple-company-files.md) | Multiple company files: one installation serves many QuickBooks company files | accepted | 2026-11-04 |
