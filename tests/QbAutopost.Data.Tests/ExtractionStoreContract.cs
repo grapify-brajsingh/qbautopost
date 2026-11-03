@@ -46,6 +46,25 @@ public abstract class ExtractionStoreContract
     }
 
     [ContractFact]
+    public async Task Should_RoundTripCompanyMatch_When_Created()
+    {
+        var (_, uploads) = CreateStores();
+        var match = new QbAutopost.Core.Companies.CompanyMatch(
+            QbAutopost.Core.Companies.CompanyMatchKind.Ambiguous, "TWIN MARKET", "DBA TWIN", null, [11, 12]);
+        var created = Extraction(Guid.NewGuid(), Now.AddHours(23)) with { Company = match };
+
+        await uploads.CreateExtractionAsync(created, default);
+        var read = await uploads.GetExtractionAsync(created.Id, default);
+
+        Assert.NotNull(read?.Company);
+        Assert.Equal(match.Match, read.Company.Match);
+        Assert.Equal(match.PrintedName, read.Company.PrintedName);
+        Assert.Equal(match.DbaName, read.Company.DbaName);
+        Assert.Equal(match.CompanyId, read.Company.CompanyId);
+        Assert.Equal(match.Candidates, read.Company.Candidates);
+    }
+
+    [ContractFact]
     public async Task Should_DeleteOnlyUnsavedExpired_When_DeletingExpired()
     {
         var (requests, uploads) = CreateStores();

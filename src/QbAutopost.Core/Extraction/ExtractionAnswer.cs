@@ -15,6 +15,11 @@ public sealed class ExtractionAnswer : IValidatable
 
     public string? Reference { get; init; }
 
+    /// <summary>The business name printed in the statement header (M17); only the matcher reads it, never the payload.</summary>
+    public string? AccountHolderName { get; init; }
+
+    public string? DbaName { get; init; }
+
     public List<JsonElement>? Transactions { get; init; }
 
     public IReadOnlyList<string> Validate()

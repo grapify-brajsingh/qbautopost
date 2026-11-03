@@ -7624,7 +7624,7 @@
           },
           "promptVersion": {
             "type": "string",
-            "example": "2026-10-28.api-1"
+            "example": "2026-11-03.api-2"
           },
           "extractedUtc": {
             "type": "string",
@@ -7663,6 +7663,57 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/StatementExtractionDuplicate"
+            }
+          },
+          "company": {
+            "type": "object",
+            "description": "M17: which company the statement belongs to, decided by code from the name printed in the PDF header (never from the file name). The same shape is returned in every install; a single-company install matches against its default company.",
+            "properties": {
+              "match": {
+                "type": "string",
+                "enum": [
+                  "matched",
+                  "none",
+                  "ambiguous"
+                ],
+                "description": "`matched`: exactly one company has the printed name; `ambiguous`: several do (see `candidates`); `none`: no name printed or no company has it."
+              },
+              "printedName": {
+                "type": "string",
+                "nullable": true,
+                "description": "The account holder name as printed."
+              },
+              "dbaName": {
+                "type": "string",
+                "nullable": true,
+                "description": "The DBA name as printed."
+              },
+              "companyId": {
+                "type": "integer",
+                "format": "int32",
+                "nullable": true,
+                "description": "Set only when `match` is `matched`."
+              },
+              "candidates": {
+                "type": "array",
+                "description": "`matched`: the one company; `ambiguous`: every company with the name; `none`: empty.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "integer",
+                      "format": "int32"
+                    },
+                    "code": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "displayName": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
             }
           }
         }

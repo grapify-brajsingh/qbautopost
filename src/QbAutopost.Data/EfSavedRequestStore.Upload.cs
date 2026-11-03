@@ -28,6 +28,7 @@ public sealed partial class EfSavedRequestStore : IUploadStore
             ExtractedUtc = extraction.ExtractedUtc,
             ExpiresUtc = extraction.ExpiresUtc,
             SavedRequestId = extraction.SavedRequestId,
+            CompanyId = extraction.Company?.CompanyId,
             CompanyMatch = extraction.Company is { } match ? JsonSerializer.Serialize(match, Json) : null,
         });
         await db.SaveChangesAsync(ct);

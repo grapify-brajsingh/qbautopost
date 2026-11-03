@@ -55,7 +55,7 @@ public sealed class V2ExtractionTests : IDisposable
 
         Assert.Equal(HttpStatusCode.OK, status);
         Assert.Equal(
-            new[] { "extractionId", "file", "model", "promptVersion", "extractedUtc", "expiresUtc", "isBankStatement", "payload", "possibleDuplicates" },
+            new[] { "extractionId", "file", "model", "promptVersion", "extractedUtc", "expiresUtc", "isBankStatement", "payload", "possibleDuplicates", "company" },
             body.EnumerateObject().Select(p => p.Name));
         var id = Guid.Parse(body.GetProperty("extractionId").GetString()!);
         var file = body.GetProperty("file");
@@ -65,7 +65,7 @@ public sealed class V2ExtractionTests : IDisposable
         Assert.True(file.GetProperty("pageCount").GetInt32() >= 1);
         Assert.Empty(file.GetProperty("unreadPages").EnumerateArray());
         Assert.Equal("~google/gemini-pro-latest", body.GetProperty("model").GetString());
-        Assert.Equal("2026-10-28.api-1", body.GetProperty("promptVersion").GetString());
+        Assert.Equal("2026-11-03.api-2", body.GetProperty("promptVersion").GetString());
         var extracted = body.GetProperty("extractedUtc").GetDateTime();
         Assert.Equal(extracted.AddHours(24), body.GetProperty("expiresUtc").GetDateTime());
         Assert.True(body.GetProperty("isBankStatement").GetBoolean());
@@ -658,7 +658,7 @@ public sealed class V2ExtractionTests : IDisposable
         Assert.Equal($"\"{host.Factory.Users.IdOf(token)}\"", line.Properties["UserId"].ToString());
         Assert.Equal("4", line.Properties["RowCount"].ToString());
         Assert.Equal("\"ok\"", line.Properties["Outcome"].ToString());
-        Assert.Equal("\"2026-10-28.api-1\"", line.Properties["PromptVersion"].ToString());
+        Assert.Equal("\"2026-11-03.api-2\"", line.Properties["PromptVersion"].ToString());
         Assert.Equal("\"~google/gemini-pro-latest\"", line.Properties["Model"].ToString());
         Assert.True(line.Properties.ContainsKey("SizeBytes") && line.Properties.ContainsKey("PageCount")
             && line.Properties.ContainsKey("ElapsedMs"));
