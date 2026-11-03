@@ -18,6 +18,8 @@ public static class DataServiceCollectionExtensions
         services.AddPooledDbContextFactory<QbAutopostDbContext>(options =>
             options.UseNpgsql(connectionString, npgsql => npgsql.CommandTimeout(commandTimeoutSeconds)));
         services.AddSingleton<ISavedRequestStore, EfSavedRequestStore>();
+        // M17 (T-1703): the companies table.
+        services.AddSingleton<QbAutopost.Core.Companies.ICompanyStore, EfCompanyStore>();
         // M14 §3: the list sync history; historyRows is QuickBooks:ListSync:HistoryRows, validated by the Api.
         services.AddSingleton(sp => new EfQbListsStore(sp.GetRequiredService<IDbContextFactory<QbAutopostDbContext>>(), historyRows));
         return services;

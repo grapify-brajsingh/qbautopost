@@ -314,6 +314,10 @@ namespace QbAutopost.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("at_utc");
 
+                    b.Property<int?>("CompanyId")
+                        .HasColumnType("integer")
+                        .HasColumnName("company_id");
+
                     b.Property<string>("Detail")
                         .HasColumnType("jsonb")
                         .HasColumnName("detail");
@@ -353,6 +357,107 @@ namespace QbAutopost.Data.Migrations
                     b.ToTable((string)null);
 
                     b.ToView("audit_events", (string)null);
+                });
+
+            modelBuilder.Entity("QbAutopost.Data.Entities.CompanyEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Access")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("access");
+
+                    b.Property<DateTime?>("AccessCheckedUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("access_checked_utc");
+
+                    b.Property<string>("AccessMessage")
+                        .HasColumnType("text")
+                        .HasColumnName("access_message");
+
+                    b.Property<string>("CandidateFiles")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("candidate_files");
+
+                    b.Property<string>("Code")
+                        .HasColumnType("text")
+                        .HasColumnName("code");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_utc");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("display_name");
+
+                    b.Property<string>("FilePath")
+                        .HasColumnType("text")
+                        .HasColumnName("file_path");
+
+                    b.Property<string>("FolderKey")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("text")
+                        .HasColumnName("folder_key")
+                        .HasComputedColumnSql("lower(folder_name)", true);
+
+                    b.Property<string>("FolderName")
+                        .HasColumnType("text")
+                        .HasColumnName("folder_name");
+
+                    b.Property<bool>("IsDefault")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_default");
+
+                    b.Property<string>("MatchNames")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("match_names");
+
+                    b.Property<string>("QbCompanyName")
+                        .HasColumnType("text")
+                        .HasColumnName("qb_company_name");
+
+                    b.Property<string>("QbLegalName")
+                        .HasColumnType("text")
+                        .HasColumnName("qb_legal_name");
+
+                    b.Property<int>("RowVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("integer")
+                        .HasColumnName("row_version");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("state");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_companies");
+
+                    b.HasIndex("FolderKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_companies_folder_name")
+                        .HasFilter("folder_name IS NOT NULL");
+
+                    b.HasIndex("IsDefault")
+                        .IsUnique()
+                        .HasDatabaseName("ix_companies_is_default")
+                        .HasFilter("is_default");
+
+                    b.ToTable("companies", (string)null);
                 });
 
             modelBuilder.Entity("QbAutopost.Data.Entities.PostAttemptEntity", b =>
@@ -444,6 +549,10 @@ namespace QbAutopost.Data.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("accounts");
 
+                    b.Property<int?>("CompanyId")
+                        .HasColumnType("integer")
+                        .HasColumnName("company_id");
+
                     b.Property<int?>("Customers")
                         .HasColumnType("integer")
                         .HasColumnName("customers");
@@ -496,6 +605,10 @@ namespace QbAutopost.Data.Migrations
                     b.HasIndex("Outcome", "Id")
                         .IsDescending(false, true)
                         .HasDatabaseName("ix_qb_list_syncs_outcome_id");
+
+                    b.HasIndex("CompanyId", "Outcome", "Id")
+                        .IsDescending(false, false, true)
+                        .HasDatabaseName("ix_qb_list_syncs_company_id_outcome_id");
 
                     b.ToTable("qb_list_syncs", (string)null);
                 });
@@ -573,6 +686,18 @@ namespace QbAutopost.Data.Migrations
                         .IsRequired()
                         .HasColumnType("char(64)")
                         .HasColumnName("canonical_sha256");
+
+                    b.Property<int?>("CompanyId")
+                        .HasColumnType("integer")
+                        .HasColumnName("company_id");
+
+                    b.Property<string>("CompanyMatch")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("company_match");
+
+                    b.Property<string>("CompanySource")
+                        .HasColumnType("text")
+                        .HasColumnName("company_source");
 
                     b.Property<decimal?>("ControlTotal")
                         .HasColumnType("numeric(18,2)")
@@ -795,6 +920,9 @@ namespace QbAutopost.Data.Migrations
                     b.HasIndex("UploadSha256")
                         .HasDatabaseName("ix_saved_requests_upload_sha256");
 
+                    b.HasIndex("CompanyId", "Status")
+                        .HasDatabaseName("ix_saved_requests_company_id_status");
+
                     b.HasIndex("Source", "IdempotencyKey")
                         .IsUnique()
                         .HasDatabaseName("ix_saved_requests_source_idempotency_key")
@@ -924,6 +1052,14 @@ namespace QbAutopost.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<int?>("CompanyId")
+                        .HasColumnType("integer")
+                        .HasColumnName("company_id");
+
+                    b.Property<string>("CompanyMatch")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("company_match");
+
                     b.Property<DateTime>("ExpiresUtc")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("expires_utc");
@@ -976,6 +1112,9 @@ namespace QbAutopost.Data.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_statement_extractions");
+
+                    b.HasIndex("CompanyId")
+                        .HasDatabaseName("ix_statement_extractions_company_id");
 
                     b.HasIndex("ExpiresUtc")
                         .HasDatabaseName("ix_statement_extractions_expires")
@@ -1098,6 +1237,15 @@ namespace QbAutopost.Data.Migrations
                         .HasConstraintName("fk_post_attempts_saved_requests_saved_request_id");
                 });
 
+            modelBuilder.Entity("QbAutopost.Data.Entities.QbListSyncEntity", b =>
+                {
+                    b.HasOne("QbAutopost.Data.Entities.CompanyEntity", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_qb_list_syncs_companies_company_id");
+                });
+
             modelBuilder.Entity("QbAutopost.Data.Entities.RefreshTokenEntity", b =>
                 {
                     b.HasOne("QbAutopost.Data.Entities.AppUser", null)
@@ -1106,6 +1254,15 @@ namespace QbAutopost.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_refresh_tokens_users_user_id");
+                });
+
+            modelBuilder.Entity("QbAutopost.Data.Entities.SavedRequestEntity", b =>
+                {
+                    b.HasOne("QbAutopost.Data.Entities.CompanyEntity", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_saved_requests_companies_company_id");
                 });
 
             modelBuilder.Entity("QbAutopost.Data.Entities.SavedRequestEventEntity", b =>
@@ -1130,6 +1287,12 @@ namespace QbAutopost.Data.Migrations
 
             modelBuilder.Entity("QbAutopost.Data.Entities.StatementExtractionEntity", b =>
                 {
+                    b.HasOne("QbAutopost.Data.Entities.CompanyEntity", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_statement_extractions_companies_company_id");
+
                     b.HasOne("QbAutopost.Data.Entities.SavedRequestEntity", null)
                         .WithMany()
                         .HasForeignKey("SavedRequestId")

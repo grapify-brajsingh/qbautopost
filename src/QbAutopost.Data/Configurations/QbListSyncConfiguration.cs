@@ -18,6 +18,10 @@ public sealed class QbListSyncConfiguration : IEntityTypeConfiguration<QbListSyn
         builder.Property(e => e.MissingInRules).HasColumnType("jsonb");
         builder.Property(e => e.Lists).HasColumnType("jsonb");
 
+        // M17 (T-1703): lists and sync history per company.
+        builder.HasOne<CompanyEntity>().WithMany().HasForeignKey(e => e.CompanyId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasIndex(e => new { e.CompanyId, e.Outcome, e.Id }).IsDescending(false, false, true).HasDatabaseName("ix_qb_list_syncs_company_id_outcome_id");
+
         // "Newest ok row" and "newest row" both walk this index from the top.
         builder.HasIndex(e => new { e.Outcome, e.Id }).IsDescending(false, true).HasDatabaseName("ix_qb_list_syncs_outcome_id");
     }

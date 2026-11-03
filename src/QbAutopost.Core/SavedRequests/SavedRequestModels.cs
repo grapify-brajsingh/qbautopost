@@ -158,6 +158,14 @@ public sealed record SavedRequest(
     public int HistoryCount { get; init; }
     /// <summary>The upload columns (dashboard-api-m12 7.4), or null when the request was not saved from an upload.</summary>
     public UploadMeta? Upload { get; init; }
+
+    // ---- M17 (T-1703). Init-only with defaults, so v1 call sites and views are unchanged. ----
+
+    public int? CompanyId { get; init; }
+    public QbAutopost.Core.Companies.CompanySource? CompanySource { get; init; }
+
+    /// <summary>How the printed name matched (statements saved from an upload); null otherwise.</summary>
+    public QbAutopost.Core.Companies.CompanyMatch? CompanyMatch { get; init; }
 }
 
 /// <summary>What a v2 list row and detail show of the last post (spec 9.1; built by <see cref="PostSummaries.Of"/>).</summary>
@@ -212,6 +220,11 @@ public sealed record SavedRequestSummary(
     public int HistoryCount { get; init; }
     /// <summary>The upload columns (dashboard-api-m12 7.4); filled by v2 lists only.</summary>
     public UploadMeta? Upload { get; init; }
+
+    // ---- M17 (T-1703) ----
+
+    public int? CompanyId { get; init; }
+    public QbAutopost.Core.Companies.CompanySource? CompanySource { get; init; }
 }
 
 public sealed record SavedRequestVersion(

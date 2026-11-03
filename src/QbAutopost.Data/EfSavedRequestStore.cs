@@ -204,14 +204,18 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
             {
                 r.Id, r.Status, r.Source, r.Reference, r.ControlTotal, r.TransactionCount, r.CurrentVersion, r.NeedsAttention,
                 r.DuplicateOfId, r.DuplicateReasons, r.Validation, r.ValidatedUtc, r.PostId, r.CreatedUtc, r.CreatedBy,
-                r.UpdatedUtc, r.UpdatedBy, r.RowVersion,
+                r.UpdatedUtc, r.UpdatedBy, r.RowVersion, r.CompanyId, r.CompanySource,
             })
             .ToListAsync(ct);
 
         var summaries = items.Select(r => new SavedRequestSummary(
             r.Id, r.Status, r.Source, r.Reference, r.ControlTotal, r.TransactionCount, r.CurrentVersion, r.NeedsAttention,
             r.DuplicateOfId, r.DuplicateReasons.ToList(), ReadSnapshot(r.Validation)?.State, r.ValidatedUtc, r.PostId,
-            r.CreatedUtc, r.CreatedBy, r.UpdatedUtc, r.UpdatedBy, r.RowVersion)).ToList();
+            r.CreatedUtc, r.CreatedBy, r.UpdatedUtc, r.UpdatedBy, r.RowVersion)
+        {
+            CompanyId = r.CompanyId,
+            CompanySource = r.CompanySource,
+        }).ToList();
         return new PagedResult<SavedRequestSummary>(summaries, page, size, total);
     }
 
@@ -634,6 +638,9 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
             ValidationV2 = ReadSnapshot(r.ValidationV2),
             NeedsAttentionV2 = r.NeedsAttentionV2,
             ProblemCount = r.ProblemCount,
+            CompanyId = r.CompanyId,
+            CompanySource = r.CompanySource,
+            CompanyMatch = ReadCompanyMatch(r.CompanyMatch),
             Upload = UploadOf(r.UploadExtractionId, r.UploadFileName, r.UploadSizeBytes, r.UploadSha256, r.UploadModel,
                 r.UploadPromptVersion, r.UploadExtractedUtc),
         };
@@ -796,6 +803,10 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
 
     private static ValidationSnapshot? ReadSnapshot(string? json) =>
         json is null ? null : JsonSerializer.Deserialize<ValidationSnapshot>(json, Json);
+    /// <summary>The stored <c>company_match</c> JSON (M17), or null.</summary>
+    private static QbAutopost.Core.Companies.CompanyMatch? ReadCompanyMatch(string? json) =>
+        json is null ? null : JsonSerializer.Deserialize<QbAutopost.Core.Companies.CompanyMatch>(json, Json);
+
 
     private static JsonElement ParseElement(string json)
     {

@@ -129,6 +129,14 @@ public abstract class AuditEventsStoreContract
         users.Add(await AddUserAuditAsync(store, new UserAuditEntry(
             0, null, "anonymous", "login-failed", JsonNode.Parse("""{"email":"nobody@example.com"}"""), at)));
         users.Add(await AddUserAuditAsync(store, new UserAuditEntry(0, Admin, "anonymous", "locked-out", null, at)));
+
+        // M17: the company kinds written to user_audit (no subject user, detail names the company).
+        foreach (var kind in new[] { "companies-scanned", "company-updated", "company-checked" })
+        {
+            users.Add(await AddUserAuditAsync(store, new UserAuditEntry(
+                0, null, Admin, kind, JsonNode.Parse("""{"companyId":3,"added":1}"""), at)));
+        }
+
         return new Seeded(a.Id, b.Id, users);
     }
 
@@ -211,7 +219,9 @@ public abstract class AuditEventsStoreContract
         var feed = await Feed(store).AuditEventsAsync(Query(), default);
         var expected = await MapperOutputAsync(store, seeded);
 
-        Assert.Equal(AuditActions.All.Order(StringComparer.Ordinal), feed.Items.Select(e => e.Action).Distinct().Order(StringComparer.Ordinal));
+        // company-assigned is a request event written by the set-company action (T-1712); no seed here produces it.
+        var producible = AuditActions.All.Where(a => a != AuditActions.CompanyAssigned);
+        Assert.Equal(producible.Order(StringComparer.Ordinal), feed.Items.Select(e => e.Action).Distinct().Order(StringComparer.Ordinal));
         Assert.Equal(expected.Count, feed.Total);
         Assert.Equal(expected.Select(Describe), feed.Items.Select(Describe));
     }
@@ -244,7 +254,8 @@ public abstract class AuditEventsStoreContract
         var feed = await Feed(store).AuditEventsAsync(Query(includeUserEvents: false), default);
 
         Assert.DoesNotContain(feed.Items, e => e.Id.StartsWith('u'));
-        Assert.Equal(all.Count - seeded.Users.Count, feed.Total);
+        // Company events (id prefix 'c', M17) are not user events: they stay.
+        Assert.Equal(all.Count(e => !e.Id.StartsWith('u')), feed.Total);
         Assert.Equal(feed.Total, await Feed(store).AuditEventCountAsync(Query(includeUserEvents: false), default));
     }
 

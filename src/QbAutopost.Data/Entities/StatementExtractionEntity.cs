@@ -16,4 +16,11 @@ public sealed class StatementExtractionEntity
     public DateTime ExtractedUtc { get; set; }
     public DateTime ExpiresUtc { get; set; }
     public long? SavedRequestId { get; set; }
+
+    // ---- M17 (T-1703) ----
+
+    public int? CompanyId { get; set; }
+
+    /// <summary>The <c>CompanyMatch</c> as JSON text, typed <c>jsonb</c>.</summary>
+    public string? CompanyMatch { get; set; }
 }

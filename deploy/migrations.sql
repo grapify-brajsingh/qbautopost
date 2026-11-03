@@ -849,3 +849,306 @@ BEGIN
     END IF;
 END $EF$;
 COMMIT;
+
+START TRANSACTION;
+
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261103195420_MultiCompany') THEN
+    ALTER TABLE statement_extractions ADD company_id integer;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261103195420_MultiCompany') THEN
+    ALTER TABLE statement_extractions ADD company_match jsonb;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261103195420_MultiCompany') THEN
+    ALTER TABLE saved_requests ADD company_id integer;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261103195420_MultiCompany') THEN
+    ALTER TABLE saved_requests ADD company_match jsonb;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261103195420_MultiCompany') THEN
+    ALTER TABLE saved_requests ADD company_source text;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261103195420_MultiCompany') THEN
+    ALTER TABLE qb_list_syncs ADD company_id integer;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261103195420_MultiCompany') THEN
+    CREATE TABLE companies (
+        id integer GENERATED ALWAYS AS IDENTITY,
+        folder_name text,
+        folder_key text GENERATED ALWAYS AS (lower(folder_name)) STORED,
+        code text,
+        display_name text NOT NULL,
+        file_path text,
+        candidate_files jsonb NOT NULL,
+        state text NOT NULL,
+        access text NOT NULL,
+        access_checked_utc timestamp with time zone,
+        access_message text,
+        qb_company_name text,
+        qb_legal_name text,
+        match_names jsonb NOT NULL,
+        is_default boolean NOT NULL,
+        created_utc timestamp with time zone NOT NULL,
+        updated_utc timestamp with time zone NOT NULL,
+        row_version integer NOT NULL,
+        CONSTRAINT pk_companies PRIMARY KEY (id)
+    );
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261103195420_MultiCompany') THEN
+    CREATE INDEX ix_statement_extractions_company_id ON statement_extractions (company_id);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261103195420_MultiCompany') THEN
+    CREATE INDEX ix_saved_requests_company_id_status ON saved_requests (company_id, status);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261103195420_MultiCompany') THEN
+    CREATE INDEX ix_qb_list_syncs_company_id_outcome_id ON qb_list_syncs (company_id, outcome, id DESC);
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261103195420_MultiCompany') THEN
+    CREATE UNIQUE INDEX ix_companies_folder_name ON companies (folder_key) WHERE folder_name IS NOT NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261103195420_MultiCompany') THEN
+    CREATE UNIQUE INDEX ix_companies_is_default ON companies (is_default) WHERE is_default;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261103195420_MultiCompany') THEN
+    ALTER TABLE qb_list_syncs ADD CONSTRAINT fk_qb_list_syncs_companies_company_id FOREIGN KEY (company_id) REFERENCES companies (id) ON DELETE RESTRICT;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261103195420_MultiCompany') THEN
+    ALTER TABLE saved_requests ADD CONSTRAINT fk_saved_requests_companies_company_id FOREIGN KEY (company_id) REFERENCES companies (id) ON DELETE RESTRICT;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261103195420_MultiCompany') THEN
+    ALTER TABLE statement_extractions ADD CONSTRAINT fk_statement_extractions_companies_company_id FOREIGN KEY (company_id) REFERENCES companies (id) ON DELETE RESTRICT;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261103195420_MultiCompany') THEN
+    DROP VIEW audit_events;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261103195420_MultiCompany') THEN
+    CREATE VIEW audit_events AS
+    SELECT
+        'e' || e.id AS id,
+        e.at_utc AS at_utc,
+        e.actor AS actor_id,
+        CASE WHEN e.actor = 'system' THEN 'system'
+             WHEN e.actor = 'anonymous' THEN 'anonymous'
+             WHEN starts_with(e.actor, 'api-client:') THEN 'api-client'
+             ELSE 'user' END AS actor_kind,
+        ea.action AS action,
+        e.saved_request_id AS request_id,
+        NULL::integer AS row_index,
+        NULL::text AS row_external_id,
+        NULL::text AS field,
+        NULL::jsonb AS old,
+        NULL::jsonb AS new,
+        CASE WHEN e.kind IN ('validated', 'post-started') THEN (e.detail ->> 'version')::integer END AS version_number,
+        CASE ea.action
+            WHEN 'validated' THEN jsonb_build_object(
+                'state', lower(regexp_replace(e.detail ->> 'state', '([a-z0-9])([A-Z])', '\1-\2', 'g')))
+            WHEN 'post-started' THEN jsonb_build_object('attemptId', e.detail -> 'attemptId')
+            WHEN 'posted' THEN jsonb_build_object('attemptId', e.detail -> 'attemptId', 'postId', e.detail -> 'postId')
+            WHEN 'post-failed' THEN jsonb_build_object(
+                'attemptId', e.detail -> 'attemptId',
+                'outcome', lower(regexp_replace(e.detail ->> 'outcome', '([a-z0-9])([A-Z])', '\1-\2', 'g')),
+                'status', lower(regexp_replace(e.detail ->> 'status', '([a-z0-9])([A-Z])', '\1-\2', 'g')),
+                'postId', e.detail -> 'postId')
+            WHEN 'resolved' THEN jsonb_build_object(
+                'outcome', lower(regexp_replace(e.detail ->> 'outcome', '([a-z0-9])([A-Z])', '\1-\2', 'g')),
+                'note', e.detail -> 'note',
+                'from', lower(regexp_replace(e.detail ->> 'from', '([a-z0-9])([A-Z])', '\1-\2', 'g')))
+            ELSE e.detail
+        END AS detail,
+        (SELECT r.company_id FROM saved_requests r WHERE r.id = e.saved_request_id) AS company_id
+    FROM saved_request_events e
+    CROSS JOIN LATERAL (SELECT CASE e.kind
+        WHEN 'created' THEN 'received'
+        WHEN 'post-finished' THEN
+            CASE WHEN lower(regexp_replace(e.detail ->> 'outcome', '([a-z0-9])([A-Z])', '\1-\2', 'g')) = 'posted'
+                 THEN 'posted' ELSE 'post-failed' END
+        ELSE e.kind END AS action) ea
+    WHERE e.kind <> 'edited'
+
+    UNION ALL
+
+    SELECT
+        'v' || v.id || '-' || (c.ord - 1) AS id,
+        v.created_utc AS at_utc,
+        v.created_by AS actor_id,
+        CASE WHEN v.created_by = 'system' THEN 'system'
+             WHEN v.created_by = 'anonymous' THEN 'anonymous'
+             WHEN starts_with(v.created_by, 'api-client:') THEN 'api-client'
+             ELSE 'user' END AS actor_kind,
+        va.action AS action,
+        v.saved_request_id AS request_id,
+        CASE WHEN va.is_row THEN ch.row_index END AS row_index,
+        CASE WHEN va.action = 'row-deleted' THEN p.payload -> 'transactions' -> ch.row_index ->> 'externalId'
+             WHEN va.is_row THEN v.payload -> 'transactions' -> ch.row_index ->> 'externalId' END AS row_external_id,
+        CASE va.action
+            WHEN 'row-post-off' THEN 'post'
+            WHEN 'row-post-on' THEN 'post'
+            WHEN 'row-edited' THEN regexp_replace(ch.rest, '^\.', '')
+            WHEN 'control-total-changed' THEN 'controlTotal'
+            WHEN 'request-edited' THEN NULLIF(regexp_replace(coalesce(ch.path, ''), '^\$\.?', ''), '')
+        END AS field,
+        ch.old AS old,
+        ch.new AS new,
+        v.number AS version_number,
+        jsonb_build_object('note', v.note) AS detail,
+        (SELECT r.company_id FROM saved_requests r WHERE r.id = v.saved_request_id) AS company_id
+    FROM saved_request_versions v
+    LEFT JOIN saved_request_versions p ON p.saved_request_id = v.saved_request_id AND p.number = v.number - 1
+    CROSS JOIN LATERAL jsonb_array_elements(v.changes) WITH ORDINALITY AS c(change, ord)
+    CROSS JOIN LATERAL (SELECT
+        c.change ->> 'op' AS op,
+        c.change ->> 'path' AS path,
+        NULLIF(c.change -> 'old', 'null'::jsonb) AS old,
+        NULLIF(c.change -> 'new', 'null'::jsonb) AS new,
+        substring(c.change ->> 'path' from '^\$\.transactions\[([0-9]+)\]')::integer AS row_index,
+        substring(c.change ->> 'path' from '^\$\.transactions\[[0-9]+\](.*)$') AS rest) ch
+    CROSS JOIN LATERAL (SELECT r.action, r.action LIKE 'row-%' AS is_row FROM (SELECT CASE
+        WHEN ch.rest = '' AND ch.op = 'add' THEN 'row-added'
+        WHEN ch.rest = '' AND ch.op = 'remove' THEN 'row-deleted'
+        WHEN ch.rest = '.post' THEN CASE WHEN ch.new = 'false'::jsonb THEN 'row-post-off' ELSE 'row-post-on' END
+        WHEN ch.rest <> '' THEN 'row-edited'
+        WHEN ch.path = '$.controlTotal' THEN 'control-total-changed'
+        ELSE 'request-edited' END AS action) r) va
+
+    UNION ALL
+
+    SELECT
+        'u' || u.id AS id,
+        u.at_utc AS at_utc,
+        u.actor AS actor_id,
+        CASE WHEN u.actor = 'system' THEN 'system'
+             WHEN u.actor = 'anonymous' THEN 'anonymous'
+             WHEN starts_with(u.actor, 'api-client:') THEN 'api-client'
+             ELSE 'user' END AS actor_kind,
+        CASE u.kind
+            WHEN 'created' THEN 'user-created'
+            WHEN 'role-changed' THEN 'user-role-changed'
+            WHEN 'disabled' THEN 'user-disabled'
+            WHEN 'enabled' THEN 'user-enabled'
+            WHEN 'password-reset' THEN 'user-password-reset'
+            WHEN 'unlocked' THEN 'user-unlocked'
+            WHEN 'password-changed' THEN 'user-password-changed'
+            WHEN 'login' THEN 'user-signed-in'
+            WHEN 'login-failed' THEN 'user-sign-in-failed'
+            WHEN 'locked-out' THEN 'user-locked-out'
+            WHEN 'refresh-reuse' THEN 'user-session-revoked'
+            ELSE 'user-other' END AS action,
+        NULL::bigint AS request_id,
+        NULL::integer AS row_index,
+        NULL::text AS row_external_id,
+        NULL::text AS field,
+        NULL::jsonb AS old,
+        NULL::jsonb AS new,
+        NULL::integer AS version_number,
+        CASE
+            WHEN u.kind = 'refresh-reuse' THEN jsonb_build_object('familyId', u.detail -> 'familyId')
+            WHEN u.kind IN ('created', 'role-changed', 'disabled', 'enabled', 'password-reset', 'unlocked',
+                            'password-changed', 'login', 'login-failed', 'locked-out')
+                THEN (CASE WHEN jsonb_typeof(u.detail) = 'object' THEN u.detail ELSE '{}'::jsonb END)
+                     || jsonb_build_object('userId', u.user_id)
+            ELSE jsonb_build_object('kind', u.kind)
+        END AS detail,
+        NULL::integer AS company_id
+    FROM user_audit u
+    WHERE u.kind NOT IN ('companies-scanned', 'company-updated', 'company-checked')
+
+    UNION ALL
+
+    SELECT
+        'c' || u.id AS id,
+        u.at_utc AS at_utc,
+        u.actor AS actor_id,
+        CASE WHEN u.actor = 'system' THEN 'system'
+             WHEN u.actor = 'anonymous' THEN 'anonymous'
+             WHEN starts_with(u.actor, 'api-client:') THEN 'api-client'
+             ELSE 'user' END AS actor_kind,
+        u.kind AS action,
+        NULL::bigint AS request_id,
+        NULL::integer AS row_index,
+        NULL::text AS row_external_id,
+        NULL::text AS field,
+        NULL::jsonb AS old,
+        NULL::jsonb AS new,
+        NULL::integer AS version_number,
+        u.detail AS detail,
+        (u.detail ->> 'companyId')::integer AS company_id
+    FROM user_audit u
+    WHERE u.kind IN ('companies-scanned', 'company-updated', 'company-checked');
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261103195420_MultiCompany') THEN
+    INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+    VALUES ('20261103195420_MultiCompany', '8.0.33');
+    END IF;
+END $EF$;
+COMMIT;
+

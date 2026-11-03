@@ -71,7 +71,7 @@ public sealed partial class EfSavedRequestStore : ISavedRequestV2Store
                 r.UpdatedUtc, r.UpdatedBy, r.RowVersion, r.EmailSubject, r.EmailReceivedUtc, r.EmailFrom, r.EmailMessageId,
                 r.PushId, r.MetadataErrors, r.SkipCount, r.ValidationV2, r.NeedsAttentionV2, r.ProblemCount,
                 r.UploadExtractionId, r.UploadFileName, r.UploadSizeBytes, r.UploadSha256, r.UploadModel,
-                r.UploadPromptVersion, r.UploadExtractedUtc,
+                r.UploadPromptVersion, r.UploadExtractedUtc, r.CompanyId, r.CompanySource,
             })
             .ToListAsync(ct);
 
@@ -96,6 +96,8 @@ public sealed partial class EfSavedRequestStore : ISavedRequestV2Store
                 ProblemCount = r.ProblemCount,
                 PostSummary = PostSummaries.Of(r.Status, r.PostId, attempts[r.Id]),
                 HistoryCount = history.GetValueOrDefault(r.Id),
+                CompanyId = r.CompanyId,
+                CompanySource = r.CompanySource,
                 Upload = UploadOf(r.UploadExtractionId, r.UploadFileName, r.UploadSizeBytes, r.UploadSha256, r.UploadModel,
                     r.UploadPromptVersion, r.UploadExtractedUtc),
             };

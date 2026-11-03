@@ -18,4 +18,8 @@ public sealed record StatementExtraction(
     JsonObject Payload,
     DateTime ExtractedUtc,
     DateTime ExpiresUtc,
-    long? SavedRequestId);
+    long? SavedRequestId)
+{
+    /// <summary>How the printed business name matched a company (M17); null for records made before.</summary>
+    public QbAutopost.Core.Companies.CompanyMatch? Company { get; init; }
+}

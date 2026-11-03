@@ -8,6 +8,7 @@
 --   * saved_request_versions, saved_request_events and user_audit are append-only: SELECT and INSERT, nothing else.
 --   * __EFMigrationsHistory is read-only (the app only compares it, spec 5.5).
 --   * The view audit_events is read-only (SELECT).
+--   * M17: companies is SELECT, INSERT, UPDATE (never deleted). qb_list_syncs rows are never updated except company_id, by the one-time backfill.
 
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM qbautopost_app;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM qbautopost_app;
@@ -26,6 +27,7 @@ GRANT SELECT, INSERT, UPDATE ON
     user_logins,
     user_tokens,
     role_claims,
+    companies,
     user_roles
 TO qbautopost_app;
 
@@ -41,8 +43,10 @@ TO qbautopost_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON statement_extractions TO qbautopost_app;
 
 -- T-1403: list sync history and the current QuickBooks lists (M14 spec 3). DELETE only for retention: each insert
--- prunes the rows beyond the newest HistoryRows (never the newest ok row) in the same transaction. Rows are never updated.
+-- prunes the rows beyond the newest HistoryRows (never the newest ok row) in the same transaction. Rows are never updated, except company_id once (below).
 GRANT SELECT, INSERT, DELETE ON qb_list_syncs TO qbautopost_app;
+-- M17: the one-time backfill of company_id (spec 4.4); no other column is ever updated.
+GRANT UPDATE (company_id) ON qb_list_syncs TO qbautopost_app;
 
 -- Migration history: read only.
 GRANT SELECT ON "__EFMigrationsHistory" TO qbautopost_app;

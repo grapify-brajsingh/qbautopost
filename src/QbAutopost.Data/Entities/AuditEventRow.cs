@@ -19,4 +19,7 @@ public sealed class AuditEventRow
     public string? New { get; set; }
     public int? VersionNumber { get; set; }
     public string? Detail { get; set; }
+
+    /// <summary>M17: the company the event is about (company events, or the request's company); null otherwise.</summary>
+    public int? CompanyId { get; set; }
 }

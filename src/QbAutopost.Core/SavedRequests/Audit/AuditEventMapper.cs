@@ -134,12 +134,25 @@ public static class AuditEventMapper
         return events;
     }
 
+    // M17 (T-1703): company events are written to user_audit (no request id) and shown under their own kind with the
+    // id prefix 'c', mirroring the fourth branch of the audit_events view (migration MultiCompany).
+    private static readonly IReadOnlySet<string> CompanyKinds = new HashSet<string>(StringComparer.Ordinal)
+    {
+        AuditActions.CompaniesScanned, AuditActions.CompanyUpdated, AuditActions.CompanyChecked,
+    };
+
     /// <summary>
     /// A <c>user_audit</c> row. <c>refresh-reuse</c> keeps only <c>familyId</c>; a kind not in 8.3 becomes
     /// <c>user-other</c> with <c>{ kind }</c>.
     /// </summary>
     public static AuditEvent FromUserAudit(UserAuditEntry u)
     {
+        if (CompanyKinds.Contains(u.Kind))
+        {
+            return new AuditEvent(
+                $"c{u.Id}", u.AtUtc, u.Actor, ActorKindOf(u.Actor), u.Kind, null, null, null, null, null, null, null, u.Detail?.DeepClone());
+        }
+
         string action;
         JsonNode detail;
         if (u.Kind == RefreshReuse)
