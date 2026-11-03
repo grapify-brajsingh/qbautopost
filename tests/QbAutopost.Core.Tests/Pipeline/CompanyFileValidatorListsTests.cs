@@ -93,6 +93,25 @@ public sealed class CompanyFileValidatorListsTests : IDisposable
         Assert.Equal($"{file} not found; run POST /api/v1/quickbooks/lists/sync", check.Message);
     }
 
+    [Fact]
+    public async Task Should_AskTheSource_When_ADecoratorWrapsTheFileLists()
+    {
+        var file = Path.Combine(_dir.Root, "data", "qb-lists.json");
+
+        var check = await ListsSyncedAsync(new Wrapped(new FileQbLists(file)), file);
+
+        Assert.Equal($"{file} not found; run POST /api/v1/quickbooks/lists/sync", check.Message);
+    }
+
+    private sealed class Wrapped(IQbListsSource inner) : IQbListsSource
+    {
+        public QbLists Current => inner.Current;
+
+        public ListSyncRun? LastAttempt => inner.LastAttempt;
+
+        public QbListsStatus Status() => inner.Status();
+    }
+
     private sealed class FixedLists(QbLists current) : IQbListsSource
     {
         public QbLists Current => current;

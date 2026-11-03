@@ -188,10 +188,15 @@ Unchanged fields (`syncedUtc`, `accounts[{name,type}]`, `vendors`, `customers`),
 
 - **Scope `requests:edit`** (editors and admins; viewers 403). API keys: `qb:read`, like v1. SPEC-GAP → Q-120.
 - Body: none. Rate limit: the **post** bucket (`Api:RateLimits:PostPerMinute`), as it opens a QuickBooks session.
+- With a database configured, the route answers `503 database-unavailable` while the gate is not ready; nothing is
+  sent to QuickBooks, because the result could not be saved.
 - Guard (§6) first: not open → **`409 quickbooks-not-open`** (problem detail: "Open QuickBooks on the company file,
   then sync again."), a `skipped` row recorded.
 - Then runs through `JobQueue.RunExclusiveAsync("qb-sync-lists", …)` and waits, bounded by
-  `Api:SyncPostTimeoutSeconds` (120).
+  `Api:SyncPostTimeoutSeconds` (120). The worker repeats the guard when the sync's turn comes (it may have waited
+  behind a job); not open then → the same `409` and `skipped` row.
+- An answer with no accounts, vendors or customers, when the current lists hold names, is `failed`/`qb-status` (`502`)
+  and the lists are kept (Q-131). With no names to protect it is `ok` (M15 A-8).
 - If a sync is already queued or running, the request **joins it** and answers with its result (no second sync).
 - **200**: the same body as §7.1 (fresh lists, `lastSync` = this run, `nextSyncUtc`) plus
   `"counts": { "accounts": 71, "vendors": 282, "customers": 6 }`. `missingInRules` is **not** returned on v2 (an
@@ -213,8 +218,8 @@ v1 sync is recorded and resets the schedule.
 New Core abstraction `IQbListsSource { QbLists Current { get; } }` (synchronous, memory read):
 
 - **DB mode**: `DbQbListsSource` (Api) loads the newest `ok` row at startup (after the import of §3.3) and is updated
-  by every successful save. A database error at startup → empty lists, logged at Error, readiness shows it; the next
-  successful sync fills it.
+  by every successful save. A database error at startup → empty lists, logged at Error, readiness shows it; the
+  gate's recovery loads them when the database first answers, or the next successful sync fills them (Q-132).
 - **File mode**: `FileQbListsSource` wraps today's `QbListsStore` (reads the file on each `Current`, as today).
 - Switched to `IQbListsSource`: `JobPipeline`, `DirectPostRunner`, `QuickBooksEndpoints` (validate, GET lists),
   `RulesEditor` ("synced" = `Current.SyncedUtc is not null`), `Readiness`.

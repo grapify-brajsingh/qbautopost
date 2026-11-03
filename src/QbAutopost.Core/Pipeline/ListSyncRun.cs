@@ -25,6 +25,18 @@ public sealed record ListSyncRun
 {
     public const int MaxErrorLength = 1000;
 
+    /// <summary>
+    /// An Ok run becomes the current lists, so it must carry them: <c>current</c> in the history (newest Ok row) can then
+    /// never name a different row from the lists in use. Stores call this before they write anything.
+    /// </summary>
+    public static void RequireLists(ListSyncRun run, Models.QbLists? lists)
+    {
+        if (run.Outcome == ListSyncOutcome.Ok && lists is null)
+        {
+            throw new ArgumentException("An Ok run must carry its lists.", nameof(lists));
+        }
+    }
+
     private readonly string? _error;
 
     public required ListSyncTrigger Trigger { get; init; }

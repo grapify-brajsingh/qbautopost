@@ -60,6 +60,7 @@ public static class ApiRoutes
         ("GET", "/auth/me"),
         ("GET", "/quickbooks/lists"),
         ("POST", ListSyncRoute),
+        ("GET", ListSyncHistoryRoute),
         ("GET", "/health"),
         ("GET", "/health/database"),
         ("GET", OpenApiPath),
@@ -77,6 +78,12 @@ public static class ApiRoutes
     /// dashboard's Sync now (<see cref="IsV2ListSync"/>), with its own scope and the posting rate bucket.
     /// </summary>
     public const string ListSyncRoute = "/quickbooks/lists/sync";
+
+    /// <summary>
+    /// M15 §3 (R-17): the list sync history, under <c>/api/v2</c> only: <c>lists:read</c> (a key with <c>qb:read</c> too),
+    /// the default rate bucket. Not <see cref="IsV2ListSync"/>, which is the POST of <see cref="ListSyncRoute"/> exactly.
+    /// </summary>
+    public const string ListSyncHistoryRoute = "/quickbooks/lists/syncs";
 
     public const string HealthPrefix = "/health";
 
@@ -352,6 +359,13 @@ public static class ApiRoutes
         if (get && p.Equals("/quickbooks/lists", Ordinal))
         {
             return ApiScopes.ListsRead;
+        }
+
+        // M15 §3: the sync history reads what the lists page shows, so lists:read; v2 only. Anything but a GET stays admin.
+        // Its v1 and flat spellings are not mapped and keep the /quickbooks/ fall-through below, as before.
+        if (p.Equals(ListSyncHistoryRoute, Ordinal) && path.Value!.StartsWith(V2Prefix + "/", Ordinal))
+        {
+            return get ? ApiScopes.ListsRead : ApiScopes.Admin;
         }
 
         if (p.StartsWith("/rules/", Ordinal))

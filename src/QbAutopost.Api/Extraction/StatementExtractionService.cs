@@ -49,7 +49,7 @@ public sealed class StatementExtractionService(
 
     public bool IsConfigured => ExtractionState.Of(settings.Value) == ExtractionState.Configured;
 
-    public async Task<ExtractionOutcome> ExtractAsync(string userId, string fileName, ReadOnlyMemory<byte> bytes, CancellationToken ct)
+    public async Task<ExtractionOutcome> ExtractAsync(string userId, string fileName, byte[] bytes, CancellationToken ct)
     {
         var s = settings.Value;
         var watch = Stopwatch.StartNew();
@@ -71,7 +71,7 @@ public sealed class StatementExtractionService(
     }
 
     private async Task<ExtractionOutcome> RunAsync(
-        string userId, string fileName, ReadOnlyMemory<byte> bytes, AppSettings s, Action<int> pages, Action<int> rows,
+        string userId, string fileName, byte[] bytes, AppSettings s, Action<int> pages, Action<int> rows,
         CancellationToken ct)
     {
         var x = s.Extraction;
@@ -83,6 +83,13 @@ public sealed class StatementExtractionService(
         if (bytes.Length > x.MaxBytes)
         {
             return ExtractionOutcome.TooManyBytes(x.MaxBytes);
+        }
+
+        // 6.1: before the parse, which is the costly synchronous step, so the per-user limits bound it too.
+        using var slot = limiter.TryStart(userId, clock.UtcNow, out var retryAfter);
+        if (slot is null)
+        {
+            return ExtractionOutcome.TooMany(retryAfter);
         }
 
         var read = UploadPdfReader.Read(bytes, Math.Max(1, x.MaxPages));
@@ -97,12 +104,6 @@ public sealed class StatementExtractionService(
                 return ExtractionOutcome.TooManyPages(x.MaxPages);
             case UploadPdfOutcome.NoText:
                 return ExtractionOutcome.NoText();
-        }
-
-        using var slot = limiter.TryStart(userId, clock.UtcNow, out var retryAfter);
-        if (slot is null)
-        {
-            return ExtractionOutcome.TooMany(retryAfter);
         }
 
         ExtractionAnswer answer;
@@ -159,7 +160,7 @@ public sealed class StatementExtractionService(
         // 7.3: expiry runs in-line, first, on every successful extraction.
         await store.DeleteExpiredExtractionsAsync(now, ct);
 
-        var sha256 = Convert.ToHexString(SHA256.HashData(bytes.Span)).ToLowerInvariant();
+        var sha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
         var reference = payload["reference"]?.GetValue<string>();
         var since = DateTime.SpecifyKind(now.AddDays(-Math.Max(0, s.SavedRequests.DuplicateLookbackDays)), DateTimeKind.Utc);
         var candidates = await store.UploadDuplicateCandidatesAsync(sha256, since, ct);
@@ -180,7 +181,7 @@ public sealed class StatementExtractionService(
             now.AddHours(Math.Max(0, x.RecordHours)),
             null);
         await store.CreateExtractionAsync(record, ct);
-        return ExtractionOutcome.Ok(StatementExtractionView.Of(record, hits));
+        return ExtractionOutcome.Ok(StatementExtractionView.Of(record, read.UnreadPages ?? [], hits));
     }
 
     private void Log(string userId, long size, int pages, string modelName, Stopwatch watch, int rows, string outcome) =>
@@ -249,7 +250,8 @@ public sealed record ExtractionOutcome(
         new(status, type, title, detail, null, null);
 }
 
-public sealed record ExtractionFileView(string Name, long SizeBytes, string Sha256, int PageCount);
+/// <summary><paramref name="UnreadPages"/>: the 1-based pages left out of the extraction as too short to read (6.2, Q-129).</summary>
+public sealed record ExtractionFileView(string Name, long SizeBytes, string Sha256, int PageCount, IReadOnlyList<int> UnreadPages);
 
 public sealed record ExtractionDuplicateView(
     long Id, string PublicRef, string? Reference, string Status, DateTime ReceivedUtc, string Source, IReadOnlyList<string> Reasons);
@@ -266,9 +268,9 @@ public sealed record StatementExtractionView(
     JsonObject Payload,
     IReadOnlyList<ExtractionDuplicateView> PossibleDuplicates)
 {
-    public static StatementExtractionView Of(StatementExtraction e, IReadOnlyList<UploadDuplicateHit> hits) => new(
+    public static StatementExtractionView Of(StatementExtraction e, IReadOnlyList<int> unreadPages, IReadOnlyList<UploadDuplicateHit> hits) => new(
         e.Id,
-        new ExtractionFileView(e.FileName, e.SizeBytes, e.Sha256, e.PageCount),
+        new ExtractionFileView(e.FileName, e.SizeBytes, e.Sha256, e.PageCount, unreadPages),
         e.Model,
         e.PromptVersion,
         e.ExtractedUtc,

@@ -187,6 +187,78 @@ public sealed class QbListsSourceDbWiringTests(PostgresFixture postgres) : IClas
         }
     }
 
+    [PostgresFact]
+    public async Task Should_LoadTheLists_When_TheDatabaseIsBackAfterAFailedStartup()
+    {
+        var connectionString = await postgres.CreateDatabaseAsync();
+        var dir = Directory.CreateTempSubdirectory();
+        try
+        {
+            var file = Path.Combine(dir.FullName, "qb-lists.json");
+            new QbListsStore(file).Save(FileLists);
+            var source = NewSource(connectionString, new ListLogger<DbQbListsSource>(), file);
+
+            await source.InitializeAsync(default); // not migrated yet: the load fails
+            Assert.Null(source.Current.SyncedUtc);
+
+            await TestDatabase.MigrateAsync(connectionString);
+            await source.EnsureLoadedAsync(default);
+
+            Assert.Equal(["Imported Account"], source.Current.Accounts.Select(a => a.Name));
+        }
+        finally
+        {
+            TestDatabase.Release(connectionString);
+            dir.Delete(true);
+        }
+    }
+
+    [PostgresFact]
+    public async Task Should_NotReload_When_TheListsAreAlreadyLoaded()
+    {
+        var connectionString = await postgres.CreateDatabaseAsync();
+        await TestDatabase.MigrateAsync(connectionString);
+        try
+        {
+            var source = NewSource(connectionString, new ListLogger<DbQbListsSource>(), "missing.json");
+            await source.InitializeAsync(default);
+            await NewSource(connectionString, new ListLogger<DbQbListsSource>(), "missing.json").RecordAsync(Run(ListSyncOutcome.Ok, 0), Synced("Other", 0), default);
+
+            await source.EnsureLoadedAsync(default);
+
+            Assert.Empty(source.Current.Accounts);
+        }
+        finally
+        {
+            TestDatabase.Release(connectionString);
+        }
+    }
+
+    [PostgresFact]
+    public async Task Should_Answer503_When_TheDatabaseGoesDownAndTheListRoutesAreCalled()
+    {
+        var connectionString = await postgres.CreateDatabaseAsync();
+        await TestDatabase.MigrateAsync(connectionString);
+        try
+        {
+            using var factory = ApiFactory.WithPostgres(connectionString);
+            using var client = factory.CreateAuthorizedClient();
+            var gate = factory.Services.GetRequiredService<QbAutopost.Api.Database.DatabaseGate>();
+            gate.Set(QbAutopost.Api.Database.DatabaseState.Unreachable);
+
+            using var history = await client.GetAsync("/api/v2/quickbooks/lists/syncs");
+            using var sync = await client.PostAsync("/api/v2/quickbooks/lists/sync", null);
+
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, history.StatusCode);
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, sync.StatusCode);
+            Assert.Empty(factory.Gateway.Requests);
+        }
+        finally
+        {
+            TestDatabase.Release(connectionString);
+        }
+    }
+
     [Fact]
     public async Task Should_LogWarningAndRethrow_When_DatabaseWriteFails()
     {

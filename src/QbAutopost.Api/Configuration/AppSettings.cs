@@ -97,6 +97,14 @@ public sealed class ApiSettings
     public bool AllowInsecureRemote { get; set; }
 
     /// <summary>
+    /// T-1601: the API sits behind nginx on the same server, so every request's peer is 127.0.0.1 and the brute-force
+    /// brake, the audit log and the per-address limits would see one client. On, the <c>X-Forwarded-For</c> and
+    /// <c>X-Forwarded-Proto</c> headers are honoured, but only from the loopback proxy (the framework's default known
+    /// proxies); from any other peer they are ignored. Default false: with no proxy, a client could forge the header.
+    /// </summary>
+    public bool TrustForwardedHeaders { get; set; }
+
+    /// <summary>
     /// T-911 / FR-A-17: the largest request body accepted, in bytes (2 MB). T-909 buffers the whole body to hash it
     /// for the idempotency key, so this cap bounds that buffer as much as it bounds the parser.
     /// </summary>

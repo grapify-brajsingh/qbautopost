@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.AspNetCore.Identity;
@@ -184,7 +185,8 @@ builder.Services.AddSingleton(sp =>
     return QbConnection.Create(
         sp.GetRequiredService<IOptions<AppSettings>>().Value,
         sp.GetRequiredService<IHostEnvironment>(),
-        step => sdkLog.LogInformation("QuickBooks SDK: {Step}", step));
+        step => sdkLog.LogInformation("QuickBooks SDK: {Step}", step),
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger<QbConnection>());
 });
 // T-903 (FR-A-3): the COM probe only where the SDK can exist; everywhere else an honest "unavailable" answer.
 builder.Services.AddSingleton<IQbSdkProbe>(sp =>
@@ -303,9 +305,9 @@ builder.Services.AddHostedService<JobWorker>();
 // InFlightRecovery finishes before Kestrel binds, so the saved-request routes never see a request still `posting`.
 var database = builder.Configuration.GetSection("Database").Get<DatabaseSettings>() ?? new DatabaseSettings();
 var auth = builder.Configuration.GetSection("Auth").Get<AuthSettings>() ?? new AuthSettings();
+var listSync = builder.Configuration.GetSection("QuickBooks:ListSync").Get<ListSyncSettings>() ?? new ListSyncSettings();
 if (database.Configured)
 {
-    var listSync = builder.Configuration.GetSection("QuickBooks:ListSync").Get<ListSyncSettings>() ?? new ListSyncSettings();
     builder.Services.AddQbAutopostData(database.ConnectionString, database.CommandTimeoutSeconds, listSync.HistoryRows);
 
     // M14 §3, §9: database mode. One source is both the store and the reader; qb-lists.json is only imported (§3.3).
@@ -344,8 +346,8 @@ else
 {
     builder.Services.AddSingleton<ISavedRequestStore, DisabledSavedRequestStore>();
 
-    // M14 §3.4: file mode, qb-lists.json is the current lists.
-    builder.Services.AddSingleton(sp => new FileQbLists(sp.GetRequiredService<PipelineOptions>().QbListsFile));
+    // M14 §3.4: file mode, qb-lists.json is the current lists. M15 §3 (Q-125): the history since start, capped in memory.
+    builder.Services.AddSingleton(sp => new FileQbLists(sp.GetRequiredService<PipelineOptions>().QbListsFile, listSync.HistoryRows));
     builder.Services.AddSingleton<IQbListsStore>(sp => sp.GetRequiredService<FileQbLists>());
     builder.Services.AddSingleton<IQbListsSource>(sp => sp.GetRequiredService<FileQbLists>());
 }
@@ -384,6 +386,12 @@ builder.Services.AddSingleton(sp =>
                 .RecoverInFlightAsync(sp.GetRequiredService<IClock>().UtcNow, ct);
             sp.GetRequiredService<ILogger<DatabaseGate>>()
                 .LogInformation("Saved-request recovery: {Count} interrupted post(s) marked unknown", moved);
+
+            // A database that was down at startup left the lists empty; load them before a route can post against them.
+            if (sp.GetService<DbQbListsSource>() is { } lists)
+            {
+                await lists.EnsureLoadedAsync(ct);
+            }
         });
 });
 builder.Services.AddHostedService<InFlightRecovery>();
@@ -398,7 +406,11 @@ var app = builder.Build();
 try
 {
     var settings = app.Services.GetRequiredService<IOptions<AppSettings>>().Value;
-    StartupLog.Write(app.Logger, settings, app.Environment);
+    // M15 §4: in simulated mode the connection is made now, so its seed (or its one Warning) is part of the startup lines.
+    var simulated = QbConnection.SelectMode(settings.QuickBooks.Fake, OperatingSystem.IsWindows()) == QbConnectionMode.Simulated
+        ? app.Services.GetRequiredService<QbConnection>()
+        : null;
+    StartupLog.Write(app.Logger, settings, app.Environment, simulated);
 
     RequireApiKey(app);
 
@@ -474,6 +486,16 @@ try
         app.Logger.LogInformation("QbAutopost ready, listening on {Urls}", string.Join(", ", app.Urls)));
     app.Lifetime.ApplicationStopping.Register(() =>
         app.Logger.LogInformation("QbAutopost stopping; a job still running is closed by startup recovery next time"));
+
+    // T-1601: before everything that reads the caller's address or scheme. Known proxies stay at the framework default
+    // (loopback only), so a header from any other peer is ignored.
+    if (settings.Api.TrustForwardedHeaders)
+    {
+        app.UseForwardedHeaders(new ForwardedHeadersOptions
+        {
+            ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+        });
+    }
 
     if (TransportGuard.UseHsts(settings.Api))
     {

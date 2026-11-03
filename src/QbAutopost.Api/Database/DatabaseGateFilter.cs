@@ -1,4 +1,6 @@
 using System.Globalization;
+using Microsoft.Extensions.Options;
+using QbAutopost.Api.Configuration;
 
 namespace QbAutopost.Api.Database;
 
@@ -16,46 +18,61 @@ public static class DatabaseGateFilter
 
     public static RouteGroupBuilder RequireDatabase(this RouteGroupBuilder group)
     {
-        group.AddEndpointFilter(async (context, next) =>
-        {
-            var gate = context.HttpContext.RequestServices.GetRequiredService<DatabaseGate>();
-            // Request-driven and throttled, no timer: a gate that is not ready is looked at again by the next request
-            // once its last check is older than DatabaseGate.StaleAfter. Concurrent requests share one refresh.
-            if (gate.NeedsLookAgain)
-            {
-                await gate.RefreshSharedAsync(context.HttpContext.RequestAborted);
-            }
-
-            if (!gate.IsReady)
-            {
-                return Unavailable(context.HttpContext, gate);
-            }
-
-            try
-            {
-                return await next(context);
-            }
-            catch (Exception ex) when (DatabaseGate.IsDatabaseFailure(ex))
-            {
-                await gate.RefreshAsync(context.HttpContext.RequestAborted);
-                return Unavailable(context.HttpContext, gate);
-            }
-            catch (Exception ex) when (DatabaseGate.SqlStateOf(ex) is { } sqlState)
-            {
-                // R33: the server refused this statement; the database is fine, so the gate is left alone. The SqlState
-                // and the type only: the exception and its text can echo the payload that was refused.
-                var http = context.HttpContext;
-                http.RequestServices.GetService<ILogger<DatabaseGate>>()?.LogError(
-                    "Request {Method} {Path}: the database refused the statement with SqlState {SqlState} ({ExceptionType})",
-                    http.Request.Method, http.Request.Path.Value, sqlState, ex.GetType().Name);
-                return Results.Problem(
-                    statusCode: StatusCodes.Status500InternalServerError,
-                    title: "The database refused the change",
-                    type: "database-error",
-                    detail: $"The database refused this request (SqlState {sqlState}). The error is in the server log.");
-            }
-        });
+        group.AddEndpointFilter(GateAsync);
         return group;
+    }
+
+    /// <summary>
+    /// The same gate for a route that also works without a database (M15 Q-125: the file-mode history): with none
+    /// configured the route runs as it is.
+    /// </summary>
+    public static RouteHandlerBuilder RequireDatabaseWhenConfigured(this RouteHandlerBuilder route)
+    {
+        route.AddEndpointFilter((context, next) =>
+            context.HttpContext.RequestServices.GetRequiredService<IOptions<AppSettings>>().Value.Database.Configured
+                ? GateAsync(context, next)
+                : next(context));
+        return route;
+    }
+
+    private static async ValueTask<object?> GateAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+    {
+        var gate = context.HttpContext.RequestServices.GetRequiredService<DatabaseGate>();
+        // Request-driven and throttled, no timer: a gate that is not ready is looked at again by the next request
+        // once its last check is older than DatabaseGate.StaleAfter. Concurrent requests share one refresh.
+        if (gate.NeedsLookAgain)
+        {
+            await gate.RefreshSharedAsync(context.HttpContext.RequestAborted);
+        }
+
+        if (!gate.IsReady)
+        {
+            return Unavailable(context.HttpContext, gate);
+        }
+
+        try
+        {
+            return await next(context);
+        }
+        catch (Exception ex) when (DatabaseGate.IsDatabaseFailure(ex))
+        {
+            await gate.RefreshAsync(context.HttpContext.RequestAborted);
+            return Unavailable(context.HttpContext, gate);
+        }
+        catch (Exception ex) when (DatabaseGate.SqlStateOf(ex) is { } sqlState)
+        {
+            // R33: the server refused this statement; the database is fine, so the gate is left alone. The SqlState
+            // and the type only: the exception and its text can echo the payload that was refused.
+            var http = context.HttpContext;
+            http.RequestServices.GetService<ILogger<DatabaseGate>>()?.LogError(
+                "Request {Method} {Path}: the database refused the statement with SqlState {SqlState} ({ExceptionType})",
+                http.Request.Method, http.Request.Path.Value, sqlState, ex.GetType().Name);
+            return Results.Problem(
+                statusCode: StatusCodes.Status500InternalServerError,
+                title: "The database refused the change",
+                type: "database-error",
+                detail: $"The database refused this request (SqlState {sqlState}). The error is in the server log.");
+        }
     }
 
     /// <summary>The one <c>503 database-unavailable</c> answer, shared with <c>CallerMiddleware</c>'s Bearer path.</summary>

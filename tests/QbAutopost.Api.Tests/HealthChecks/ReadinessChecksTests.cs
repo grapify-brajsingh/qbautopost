@@ -93,6 +93,18 @@ public sealed class ReadinessChecksTests : IDisposable
     }
 
     [Fact]
+    public void Should_PassLikeValidateCompany_When_TheFileExistsWithoutASyncTime()
+    {
+        var settings = Ready();
+        File.WriteAllText(settings.Paths.QbLists, """{ "vendors": ["Home Depot"] }""");
+
+        var lists = Check(Readiness.Evaluate(settings, workerStarted: true, ListsOf(settings)), "qb-lists");
+
+        Assert.True(lists.Ok);
+        Assert.Equal(settings.Paths.QbLists, lists.Message);
+    }
+
+    [Fact]
     public void Should_WarnWithoutThrowing_When_QbListsIsCorrupt()
     {
         var settings = Ready();

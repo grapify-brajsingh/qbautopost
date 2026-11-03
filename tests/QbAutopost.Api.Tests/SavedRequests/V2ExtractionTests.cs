@@ -63,6 +63,7 @@ public sealed class V2ExtractionTests : IDisposable
         Assert.Equal(pdf.Length, file.GetProperty("sizeBytes").GetInt64());
         Assert.Equal(Convert.ToHexString(SHA256.HashData(pdf)).ToLowerInvariant(), file.GetProperty("sha256").GetString());
         Assert.True(file.GetProperty("pageCount").GetInt32() >= 1);
+        Assert.Empty(file.GetProperty("unreadPages").EnumerateArray());
         Assert.Equal("~google/gemini-pro-latest", body.GetProperty("model").GetString());
         Assert.Equal("2026-10-28.api-1", body.GetProperty("promptVersion").GetString());
         var extracted = body.GetProperty("extractedUtc").GetDateTime();
@@ -370,6 +371,21 @@ public sealed class V2ExtractionTests : IDisposable
         var seconds = int.Parse(refused.Headers.RetryAfter!.ToString(), System.Globalization.CultureInfo.InvariantCulture);
         Assert.InRange(seconds, 3500, 3600);
         Assert.Single(host.Handler.Requests);
+    }
+
+    [Fact]
+    public async Task Should_Return429BeforeReadingThePdf_When_HourlyLimitReached()
+    {
+        var host = Host(With(("Extraction:MaxPerUserPerHour", "1")));
+        var token = host.TokenFor(DashboardRoles.Editor);
+        using var client = host.ClientWithToken(token);
+
+        var (first, _) = await host.PostAsync(client, ExtractionTestHost.Upload(ExtractionTestHost.Pdf(["Page 1"])));
+        var (refused, body) = await host.PostAsync(client, ExtractionTestHost.Upload(ExtractionTestHost.Pdf(["Page 1"])));
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, first.StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, refused.StatusCode);
+        AssertProblem(body, "too-many-extractions");
     }
 
     [Fact]

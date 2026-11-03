@@ -68,7 +68,7 @@ public sealed class ScheduledListSyncTests : IDisposable
     private static Task RecordAsync(IQbListsStore lists, DateTime finished, ListSyncOutcome outcome = ListSyncOutcome.Ok) =>
         lists.RecordAsync(
             new ListSyncRun { Trigger = ListSyncTrigger.Api, StartedUtc = finished, FinishedUtc = finished, Outcome = outcome },
-            null,
+            outcome == ListSyncOutcome.Ok ? new QbAutopost.Core.Models.QbLists { SyncedUtc = finished } : null,
             CancellationToken.None);
 
     private static async Task UntilAsync(Func<bool> done)
@@ -672,6 +672,9 @@ public sealed class ScheduledListSyncTests : IDisposable
         }
 
         public Task<ListSyncRun?> LastAttemptAsync(CancellationToken ct) => Task.FromResult<ListSyncRun?>(null);
+
+        public Task<ListSyncPage> ListAttemptsAsync(ListSyncQuery query, CancellationToken ct) =>
+            throw new InvalidOperationException("database down");
     }
 
     private sealed class RecordingProcessor : IJobProcessor

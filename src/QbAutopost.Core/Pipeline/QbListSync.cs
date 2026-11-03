@@ -17,7 +17,7 @@ public sealed record ListSyncCompletion(ListSyncResult Result, ListSyncRun Run, 
 /// reports the account names in <c>rules.json</c> that QuickBooks does not have. Every attempt is recorded; the current
 /// lists change only when the rules and the query both succeed. A failure is recorded and then rethrown unchanged.
 /// </summary>
-public sealed class QbListSync(PipelineOptions options, IQbGateway gateway, IClock clock, IQbListsStore store)
+public sealed class QbListSync(PipelineOptions options, IQbGateway gateway, IClock clock, IQbListsStore store, IQbListsSource source)
 {
     /// <summary>SPEC-GAP T-602: sync has no job folder, so its audit copies live next to <c>qb-lists.json</c>.</summary>
     public const string AuditDir = "qb-audit";
@@ -52,6 +52,11 @@ public sealed class QbListSync(PipelineOptions options, IQbGateway gateway, IClo
             AtomicFile.WriteAllText(Path.Combine(AuditFolder, "sync-lists.response.qbxml"), response);
 
             var lists = QbListQuery.Parse(response, clock.UtcNow);
+            if (IsEmpty(lists) && HasCurrentNames())
+            {
+                // M14 §4: an unattended sync must not wipe working lists. A company that never had names still syncs (M15 A-8).
+                throw new QbStatusException("QuickBooks answered with no accounts, vendors or customers");
+            }
 
             // SPEC-GAP T-602: names compare exactly (ordinal); a case difference is reported so the rule can be corrected.
             var known = lists.Accounts.Select(a => a.Name).ToHashSet(StringComparer.Ordinal);
@@ -120,6 +125,22 @@ public sealed class QbListSync(PipelineOptions options, IQbGateway gateway, IClo
             },
             null,
             ct);
+    }
+
+    private static bool IsEmpty(QbLists lists) =>
+        lists.Accounts.Count == 0 && lists.Vendors.Count == 0 && lists.Customers.Count == 0;
+
+    /// <summary>False for a file that cannot be read: it has no names to protect, and a sync may always replace it.</summary>
+    private bool HasCurrentNames()
+    {
+        try
+        {
+            return !IsEmpty(source.Current);
+        }
+        catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or UnauthorizedAccessException or InvalidDataException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

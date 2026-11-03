@@ -168,10 +168,10 @@ public sealed class JobWorker(
         var outcome = ListSyncOutcome.Failed;
         try
         {
-            if (!IsOpen())
+            if (!ListSyncGuard.IsOpen(presence, log))
             {
                 outcome = ListSyncOutcome.Skipped;
-                await RecordSkippedAsync(stoppingToken);
+                await ListSyncGuard.RecordSkippedAsync(listSync, ListSyncTrigger.Schedule, null, log, stoppingToken);
                 LogNotOk(warnOnFailure, outcome, ListSyncReasons.QuickBooksNotOpen, "QuickBooks is not running in this session");
                 release();
                 attempt.TrySetResult(null);
@@ -233,34 +233,6 @@ public sealed class JobWorker(
         }
 
         return true;
-    }
-
-    /// <summary>§6: never start QuickBooks. A check that itself fails counts as "not open" — hold, don't guess.</summary>
-    // SPEC-GAP T-1406 (Q-122): a throwing check is "not open".
-    private bool IsOpen()
-    {
-        try
-        {
-            return presence.IsCompanyOpen();
-        }
-        catch (Exception ex)
-        {
-            log.LogWarning(ex, "QuickBooks presence check failed; the scheduled list sync is skipped");
-            return false;
-        }
-    }
-
-    private async Task RecordSkippedAsync(CancellationToken stoppingToken)
-    {
-        try
-        {
-            await listSync.RecordSkippedAsync(ListSyncTrigger.Schedule, null, ListSyncReasons.QuickBooksNotOpen, stoppingToken);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
-        {
-            // The store has logged it (database mode); the schedule still moves the due time on.
-            log.LogInformation("Scheduled list sync: the skipped attempt could not be recorded: {Error}", ex.Message);
-        }
     }
 
     /// <summary>§5.6: Warning for the first not-Ok attempt after an Ok (or the first ever), Information after that.</summary>

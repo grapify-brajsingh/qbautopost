@@ -1,0 +1,106 @@
+{
+  "syncedUtc": "2026-10-28T06:00:00Z",
+  "accounts": [
+    {
+      "name": "Simulated Account 01",
+      "type": "Bank"
+    },
+    {
+      "name": "Simulated Account 02",
+      "type": "Bank"
+    },
+    {
+      "name": "Simulated Account 03",
+      "type": "CreditCard"
+    },
+    {
+      "name": "Simulated Account 04",
+      "type": "Expense"
+    },
+    {
+      "name": "Simulated Account 05",
+      "type": "Expense"
+    },
+    {
+      "name": "Simulated Account 06",
+      "type": "Expense"
+    },
+    {
+      "name": "Simulated Account 07",
+      "type": "Expense"
+    },
+    {
+      "name": "Simulated Account 08",
+      "type": "Expense"
+    },
+    {
+      "name": "Simulated Account 09",
+      "type": "Expense"
+    },
+    {
+      "name": "Simulated Account 10",
+      "type": "Expense"
+    },
+    {
+      "name": "Simulated Account 11",
+      "type": "Expense"
+    },
+    {
+      "name": "Simulated Account 12",
+      "type": "Expense"
+    },
+    {
+      "name": "Simulated Account 13",
+      "type": "Income"
+    },
+    {
+      "name": "Simulated Account 14",
+      "type": "Income"
+    },
+    {
+      "name": "Simulated Account 15",
+      "type": "OtherCurrentAsset"
+    },
+    {
+      "name": "Simulated Account 16",
+      "type": "AccountsPayable"
+    },
+    {
+      "name": "Simulated Account 17",
+      "type": "AccountsReceivable"
+    },
+    {
+      "name": "Simulated Account 18",
+      "type": "Equity"
+    },
+    {
+      "name": "Simulated Account 19",
+      "type": "CostOfGoodsSold"
+    }
+  ],
+  "vendors": [
+    "Simulated Vendor 01",
+    "Simulated Vendor 02",
+    "Simulated Vendor 03",
+    "Simulated Vendor 04",
+    "Simulated Vendor 05",
+    "Simulated Vendor 06",
+    "Simulated Vendor 07",
+    "Simulated Vendor 08",
+    "Simulated Vendor 09",
+    "Simulated Vendor 10",
+    "Simulated Vendor 11",
+    "Simulated Vendor 12",
+    "Simulated Vendor 13",
+    "Simulated Vendor 14",
+    "Simulated Vendor 15"
+  ],
+  "customers": [
+    "Simulated Customer 1",
+    "Simulated Customer 2",
+    "Simulated Customer 3",
+    "Simulated Customer 4",
+    "Simulated Customer 5",
+    "Simulated Customer 6"
+  ]
+}

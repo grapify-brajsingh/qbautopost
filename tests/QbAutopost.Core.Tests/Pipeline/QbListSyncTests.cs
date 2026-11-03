@@ -31,6 +31,7 @@ public sealed class QbListSyncTests : IDisposable
         },
         _gateway,
         new FixedTime(),
+        Lists,
         Lists);
 
     private static Task<ListSyncResult> Run(QbListSync sync, string? by = null) =>
@@ -86,6 +87,37 @@ public sealed class QbListSyncTests : IDisposable
         await Assert.ThrowsAsync<QbStatusException>(() => Sync().SyncAsync(ListSyncTrigger.Api, null, CancellationToken.None));
 
         Assert.Equal(["Old Vendor"], new QbListsStore(ListsFile).Load().Vendors);
+    }
+
+    private const string EmptyAnswer =
+        "<QBXML><QBXMLMsgsRs>"
+        + "<AccountQueryRs statusCode=\"1\" statusMessage=\"none\" />"
+        + "<VendorQueryRs statusCode=\"1\" statusMessage=\"none\" />"
+        + "<CustomerQueryRs statusCode=\"1\" statusMessage=\"none\" />"
+        + "</QBXMLMsgsRs></QBXML>";
+
+    [Fact]
+    public async Task Should_KeepListsAndRecordFailed_When_AnEmptyAnswerWouldWipeThem()
+    {
+        await Run(Sync());
+        _gateway.Response = EmptyAnswer;
+
+        await Assert.ThrowsAsync<QbStatusException>(() => Run(Sync()));
+
+        Assert.Equal(3, Lists.Current.Accounts.Count);
+        var run = Lists.LastAttempt!;
+        Assert.Equal((ListSyncOutcome.Failed, ListSyncReasons.QbStatus), (run.Outcome, run.Reason));
+    }
+
+    [Fact]
+    public async Task Should_RecordOk_When_AnEmptyAnswerReplacesNothing()
+    {
+        _gateway.Response = EmptyAnswer;
+
+        var result = await Run(Sync());
+
+        Assert.Equal((0, 0, 0), (result.Accounts, result.Vendors, result.Customers));
+        Assert.Equal(ListSyncOutcome.Ok, Lists.LastAttempt!.Outcome);
     }
 
     [Fact]
