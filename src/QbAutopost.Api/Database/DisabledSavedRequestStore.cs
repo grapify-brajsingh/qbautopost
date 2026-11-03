@@ -67,6 +67,8 @@ public sealed class DisabledSavedRequestStore : ISavedRequestStore, ISavedReques
 
     public Task<SavedRequestStatsV2> StatsV2Async(CancellationToken ct) => throw Off();
 
+    public Task<IReadOnlyDictionary<int, int>> PendingByCompanyAsync(CancellationToken ct) => throw Off();
+
     public Task<IReadOnlyList<OtherPush>> OtherUnpostedPushesAsync(long id, CancellationToken ct) => throw Off();
 
     public Task CreateExtractionAsync(StatementExtraction extraction, CancellationToken ct) => throw Off();

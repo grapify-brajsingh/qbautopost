@@ -46,6 +46,9 @@ public static class ApiRoutes
         ("GET", "/audit-events.csv"),
         ("GET", "/dashboard/summary"),
         ("POST", "/statement-extractions"),
+        ("GET", "/companies"),
+        ("POST", "/companies/scan"),
+        ("PATCH", "/companies/{id}"),
         ("GET", "/users"),
         ("POST", "/users"),
         ("GET", "/users/{id}"),
@@ -335,6 +338,21 @@ public static class ApiRoutes
         if (p.Equals("/statement-extractions", Ordinal) && path.Value!.StartsWith(V2Prefix + "/", Ordinal))
         {
             return HttpMethods.IsPost(method) ? ApiScopes.RequestsSubmit : ApiScopes.Admin;
+        }
+
+        // M17 §5.1: the company list reads (lists:read, as the dropdowns do); the scan and edits are admin work
+        // (requests:admin). Under /api/v2 only; anything else under /companies stays admin.
+        if (IsUnder(p, "/companies") && path.Value!.StartsWith(V2Prefix + "/", Ordinal))
+        {
+            if (get && p.Equals("/companies", Ordinal))
+            {
+                return ApiScopes.ListsRead;
+            }
+
+            var changes = (HttpMethods.IsPost(method) && p.Equals("/companies/scan", Ordinal))
+                || (HttpMethods.IsPatch(method) && p.StartsWith("/companies/", Ordinal)
+                    && p.IndexOf('/', "/companies/".Length) < 0 && !p.Equals("/companies/scan", Ordinal));
+            return changes ? ApiScopes.RequestsAdmin : ApiScopes.Admin;
         }
 
         if (IsUnder(p, "/users"))

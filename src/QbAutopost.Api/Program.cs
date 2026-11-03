@@ -117,6 +117,8 @@ builder.Services.AddSingleton<IClock, SystemClock>();
 // M17 §4.4: one resolver for every caller. The store exists only with a database (ruling B9); without one the resolver
 // serves the default company only.
 builder.Services.AddSingleton<CompanyDataFolder>();
+builder.Services.AddSingleton<ICompanyFolderSource, FileSystemCompanyFolderSource>();
+builder.Services.AddSingleton<CompanyFolderScanner>();
 builder.Services.AddSingleton(sp => new CompanyResolver(
     sp.GetRequiredService<IOptions<AppSettings>>(),
     sp.GetRequiredService<CompanyDataFolder>(),
@@ -587,6 +589,7 @@ try
     v2.MapAuthEndpoints(ApiFlavor.V2);
     v2.MapUserEndpoints(ApiFlavor.V2);
     v2.MapSavedRequestEndpoints(ApiFlavor.V2);
+    v2.MapCompanyEndpoints();
     v2.MapAuditEventEndpoints();
     v2.MapDashboardSummaryEndpoints();
     v2.MapStatementExtractionEndpoints();

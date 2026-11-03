@@ -224,6 +224,59 @@ public abstract class CompanyStoreContract
     }
 
     [ContractFact]
+    public async Task Should_ReEnableAsMissing_When_ChosenFileIsNotOnDisk()
+    {
+        var store = CreateStore();
+        var company = (await ScanAsync(store, Folder("100_Alpha"))).Single();
+        var off = await store.UpdateAsync(company.Id, company.RowVersion, new CompanyPatch(null, null, true), "user-1", Now, default);
+
+        var on = await store.UpdateAsync(company.Id, off.Company!.RowVersion, new CompanyPatch(null, null, false, FileExists: false), "user-1", Now, default);
+
+        Assert.Equal(CompanyState.Missing, on.Company!.State);
+    }
+
+    [ContractFact]
+    public async Task Should_ReEnableAsAmbiguous_When_NoFileWasChosenButCandidatesExist()
+    {
+        var store = CreateStore();
+        var company = (await ScanAsync(store, Folder("100_Alpha", @"C:\Root\100_Alpha\a.qbw", @"C:\Root\100_Alpha\b.qbw"))).Single();
+        var off = await store.UpdateAsync(company.Id, company.RowVersion, new CompanyPatch(null, null, true), "user-1", Now, default);
+
+        var on = await store.UpdateAsync(company.Id, off.Company!.RowVersion, new CompanyPatch(null, null, false, FileExists: false), "user-1", Now, default);
+
+        Assert.Equal(CompanyState.Ambiguous, on.Company!.State);
+    }
+
+    [ContractFact]
+    public async Task Should_KeepRowVersionAndCountNoUpdate_When_RescanChangesNothingInAMultiFileCompany()
+    {
+        var store = CreateStore();
+        var folder = Folder("100_Alpha", @"C:\Root\100_Alpha\a.qbw", @"C:\Root\100_Alpha\b.qbw");
+        var company = (await ScanAsync(store, folder)).Single();
+        var chosen = await store.UpdateAsync(company.Id, company.RowVersion, new CompanyPatch(null, folder.Files[1], null), "user-1", Now, default);
+
+        var plan = PlanFor(await store.ListAsync(default), folder);
+        var applied = await store.ApplyScanAsync(plan, "user-1", Now.AddMinutes(1), default);
+
+        Assert.Equal((0, 0), (applied.Updated, applied.Items.Count));
+        Assert.Equal(chosen.Company!.RowVersion, (await store.GetAsync(company.Id, default))!.RowVersion);
+    }
+
+    [ContractFact]
+    public async Task Should_KeepDisabled_When_RacingAddResolvesToADisabledCompany()
+    {
+        var store = CreateStore();
+        var folder = Folder("100_Alpha");
+        var company = (await ScanAsync(store, folder)).Single();
+        await store.UpdateAsync(company.Id, company.RowVersion, new CompanyPatch(null, null, true), "user-1", Now, default);
+
+        var racing = new ScanPlan([new FolderChange(0, folder, folder.Files[0], CompanyState.Active)], [], [], []);
+        await store.ApplyScanAsync(racing, "user-1", Now.AddMinutes(1), default);
+
+        Assert.Equal(CompanyState.Disabled, (await store.GetAsync(company.Id, default))!.State);
+    }
+
+    [ContractFact]
     public async Task Should_RefuseDisable_When_CompanyIsTheDefault()
     {
         var store = CreateStore();

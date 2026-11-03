@@ -30,4 +30,10 @@ public interface ISavedRequestV2Store
     /// or unknown, ordered by received time (then id). Empty when the request is unknown or has no reference.
     /// </summary>
     Task<IReadOnlyList<OtherPush>> OtherUnpostedPushesAsync(long id, CancellationToken ct);
+
+    /// <summary>
+    /// How many pending requests each company has (company id to count; companies with none are absent, requests with
+    /// no company are not counted). The dashboard's "waiting" figure on the company list (M17 spec 5.1).
+    /// </summary>
+    Task<IReadOnlyDictionary<int, int>> PendingByCompanyAsync(CancellationToken ct);
 }

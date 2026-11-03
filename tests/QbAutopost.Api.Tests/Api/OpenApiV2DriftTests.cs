@@ -141,7 +141,9 @@ public sealed class OpenApiV2DriftTests : IDisposable
 
             compared.Add(schema.Name);
             var documented = values.EnumerateArray().Select(value => value.GetString()).OrderBy(v => v, StringComparer.Ordinal);
-            var accepted = Enum.GetNames(type).Select(JsonNamingPolicy.CamelCase.ConvertName).OrderBy(v => v, StringComparer.Ordinal);
+            // M17: the company enums travel as kebab-case text (CompanyText), not through the camelCase serialiser.
+            var policy = type.Namespace == "QbAutopost.Core.Companies" ? JsonNamingPolicy.KebabCaseLower : JsonNamingPolicy.CamelCase;
+            var accepted = Enum.GetNames(type).Select(policy.ConvertName).OrderBy(v => v, StringComparer.Ordinal);
             if (!documented.SequenceEqual(accepted, StringComparer.Ordinal))
             {
                 wrong.Add($"{schema.Name}: documented [{string.Join(", ", documented)}], accepted [{string.Join(", ", accepted)}]");

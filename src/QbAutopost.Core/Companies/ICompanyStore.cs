@@ -7,8 +7,10 @@ public sealed record DefaultCompanyResult(Company Company, bool Created, int Bac
 
 /// <param name="MatchNames">Replaces the alias list when not null.</param>
 /// <param name="FilePath">Must be one of the candidate files; choosing it makes an ambiguous company active.</param>
-/// <param name="Disabled">True disables; false re-enables a disabled company.</param>
-public sealed record CompanyPatch(IReadOnlyList<string>? MatchNames, string? FilePath, bool? Disabled);
+/// <param name="Disabled">True disables; false re-enables a disabled company: active when its file exists (or
+/// <paramref name="FileExists"/> is null), ambiguous when it has no chosen file but has candidates, else missing (ruling B13).</param>
+/// <param name="FileExists">Re-enable only: whether the company's file (after this patch) is on disk. The caller checks; the store has no disk.</param>
+public sealed record CompanyPatch(IReadOnlyList<string>? MatchNames, string? FilePath, bool? Disabled, bool? FileExists = null);
 
 public enum CompanyChangeKind { Changed, NotFound, Stale, Invalid }
 

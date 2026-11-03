@@ -22,6 +22,11 @@ public abstract class ListV2StoreContract
 
     protected abstract ISavedRequestStore CreateStore();
 
+    /// <summary>A company a request can belong to. Called before any request is created (the real store's default company backfills older rows).</summary>
+    protected abstract Task<int> NewCompanyIdAsync();
+
+    protected abstract Task SetCompanyAsync(ISavedRequestStore store, long requestId, int companyId);
+
     private static ISavedRequestV2Store V2(ISavedRequestStore store) => Assert.IsAssignableFrom<ISavedRequestV2Store>(store);
 
     private static ISavedRequestAuditStore Feed(ISavedRequestStore store) => Assert.IsAssignableFrom<ISavedRequestAuditStore>(store);
@@ -270,6 +275,31 @@ public abstract class ListV2StoreContract
         Assert.Equal([pendingFlagged.Id], await IdsAsync(store, Query(pending with { NeedsAttention = true })));
         Assert.Equal([pendingFlagged.Id], await IdsAsync(store, Query(pending with { Duplicate = true })));
         Assert.Equal([pendingFlagged.Id], await IdsAsync(store, Query(pending, hasErrors: true)));
+    }
+
+    // ---- waiting per company (M17 spec 5.1, ruling B13) ------------------------------------------------------
+
+    [ContractFact]
+    public async Task Should_CountOnlyPendingRequestsWithACompany_When_PendingByCompany()
+    {
+        var companyId = await NewCompanyIdAsync();
+        var store = CreateStore();
+        var first = await CreateAsync(store, NewRequest(Body("R1")));
+        var second = await CreateAsync(store, NewRequest(Body("R2")));
+        var discarded = await CreateAsync(store, NewRequest(Body("R3")));
+        await CreateAsync(store, NewRequest(Body("R4")));
+        foreach (var request in new[] { first, second, discarded })
+        {
+            await SetCompanyAsync(store, request.Id, companyId);
+        }
+
+        await store.ChangeStatusAsync(
+            discarded.Id, null, SavedRequestStatus.Pending, SavedRequestStatus.Discarded, Admin, T0.AddMinutes(1),
+            SavedRequestEvents.Discarded, null, default);
+
+        var counts = await V2(store).PendingByCompanyAsync(default);
+
+        Assert.Equal(new Dictionary<int, int> { [companyId] = 2 }, counts);
     }
 
     // ---- stats (9.3) -----------------------------------------------------------------------------------------

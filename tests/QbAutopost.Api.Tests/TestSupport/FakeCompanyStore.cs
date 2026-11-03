@@ -119,13 +119,17 @@ public sealed class FakeCompanyStore : ICompanyStore
                     DisplayName = row.IsDefault ? row.DisplayName : change.Folder.DisplayName,
                     FilePath = change.FilePath,
                     CandidateFiles = [.. change.Folder.Files],
-                    State = change.State,
+                    State = row.State == CompanyState.Disabled ? CompanyState.Disabled : change.State,
                     Access = fileChanged ? CompanyAccess.Unchecked : row.Access,
                     AccessCheckedUtc = fileChanged ? null : row.AccessCheckedUtc,
                     AccessMessage = fileChanged ? null : row.AccessMessage,
-                    UpdatedUtc = nowUtc,
-                    RowVersion = row.RowVersion + 1,
                 };
+                if (next with { CandidateFiles = row.CandidateFiles } == row && next.CandidateFiles.SequenceEqual(row.CandidateFiles))
+                {
+                    continue;
+                }
+
+                next = next with { UpdatedUtc = nowUtc, RowVersion = row.RowVersion + 1 };
                 _companies[index] = next;
                 updated++;
                 touched.Add(next);
@@ -207,7 +211,7 @@ public sealed class FakeCompanyStore : ICompanyStore
                 }
                 else if (!disabled && next.State == CompanyState.Disabled)
                 {
-                    next = next with { State = next.FilePath is null ? CompanyState.Ambiguous : CompanyState.Active };
+                    next = next with { State = CompanyRules.ReEnabledState(next.FilePath, next.CandidateFiles.Count, patch.FileExists) };
                 }
             }
 

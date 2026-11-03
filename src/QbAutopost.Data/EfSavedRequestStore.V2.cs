@@ -130,6 +130,17 @@ public sealed partial class EfSavedRequestStore : ISavedRequestV2Store
             new FlagCounts(pending?.Errors ?? 0, groups.Sum(g => g.Errors)));
     }
 
+    public async Task<IReadOnlyDictionary<int, int>> PendingByCompanyAsync(CancellationToken ct)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var rows = await db.SavedRequests
+            .Where(r => r.CompanyId != null && r.Status == SavedRequestStatus.Pending)
+            .GroupBy(r => r.CompanyId!.Value)
+            .Select(g => new { CompanyId = g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+        return rows.ToDictionary(r => r.CompanyId, r => r.Count);
+    }
+
     public async Task<IReadOnlyList<OtherPush>> OtherUnpostedPushesAsync(long id, CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);

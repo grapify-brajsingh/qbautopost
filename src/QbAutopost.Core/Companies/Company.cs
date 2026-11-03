@@ -45,3 +45,13 @@ public static class CompanyText
 
     private static string Kebab<T>(T value) where T : struct, Enum => JsonNamingPolicy.KebabCaseLower.ConvertName(value.ToString());
 }
+
+public static class CompanyRules
+{
+    /// <summary>State of a disabled company that is switched back on (ruling B13): its chosen file is there, so active
+    /// (<paramref name="fileExists"/> null means "not checked": trust it); no chosen file but candidates, so ambiguous; else missing.</summary>
+    public static CompanyState ReEnabledState(string? filePath, int candidateCount, bool? fileExists) =>
+        filePath is not null ? (fileExists ?? true ? CompanyState.Active : CompanyState.Missing)
+        : candidateCount > 0 ? CompanyState.Ambiguous
+        : CompanyState.Missing;
+}

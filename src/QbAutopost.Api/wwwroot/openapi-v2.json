@@ -38,6 +38,10 @@
       "description": "User management for admins (saved-requests §11.4): temporary passwords, roles, disabling, unlocking, audit."
     },
     {
+      "name": "Companies",
+      "description": "The company folders under Companies:RootFolder (M17): list, scan, choose a file, disable, match names."
+    },
+    {
       "name": "Saved requests",
       "description": "Saved requests (saved-requests §6): n8n saves a validate-and-post body here, people review and post it from the dashboard."
     }
@@ -580,6 +584,202 @@
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v2/companies": {
+      "get": {
+        "tags": [
+          "Companies"
+        ],
+        "operationId": "listCompanies",
+        "summary": "The companies: the default company and every company folder found under `Companies:RootFolder`.",
+        "description": "M17 spec 5.1. `rootConfigured` is false when `Companies:RootFolder` is empty (then only the default company is listed); `rootReachable` is whether that folder exists now. `lastScanUtc` is the newest scan, null if none. Each item carries its `rowVersion` (send it as `If-Match` on a patch), the `candidateFiles` of an ambiguous company, and `waitingCount`, the pending statements of that company. `lists` is null when the company's QuickBooks lists were never synced (only the default company has lists until M17 T-1709). Needs `lists:read`, which every dashboard role holds.",
+        "x-required-scope": "lists:read",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The companies.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/companies/scan": {
+      "post": {
+        "tags": [
+          "Companies"
+        ],
+        "operationId": "scanCompanies",
+        "summary": "Scan `Companies:RootFolder`: one company per subfolder holding a `.qbw` file.",
+        "description": "M17 spec 4.2. One level deep. A new folder becomes a company (`active` with one `.qbw`, `ambiguous` with several, the admin chooses one with a patch); a company whose folder or file vanished becomes `missing` (its statements are kept); a folder with no `.qbw` is listed in `noCompanyFile`. A folder name of the form `<digits>_<name>` gives the `code` and the display name. Each new company gets its own rules file (a copy of `Companies:RulesTemplate`) and an empty ledger. `updated` counts the companies whose stored values changed; a rescan that finds nothing new answers `added` 0 and `updated` 0. `items` are all companies after the scan. Records `companies-scanned`. If the root is not set or cannot be read the answer is `503 company-root-unavailable` and nothing changes. Needs `requests:admin`.",
+        "x-required-scope": "requests:admin",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The scan was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyScan"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`company-root-unavailable` (the path is in `detail`; nothing was changed) or `database-unavailable`.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/companies/{id}": {
+      "patch": {
+        "tags": [
+          "Companies"
+        ],
+        "operationId": "updateCompany",
+        "summary": "Change a company's match names, chosen file or disabled flag.",
+        "description": "M17 spec 5.1. Needs `If-Match`. `filePath` must be one of the company's `candidateFiles`; choosing it makes an ambiguous company `active` and clears its access check when the file changes. `disabled: true` disables (never the default company); `disabled: false` re-enables a disabled company as `active` when its file exists, `ambiguous` when no file was chosen but candidates exist, else `missing`. `matchNames` replaces the alias list: names are trimmed, blanks dropped, at most 50 names of at most 200 characters (else `400 invalid-request`). Records `company-updated`. Needs `requests:admin`.",
+        "x-required-scope": "requests:admin",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The company's id.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "The company's `rowVersion`, in quotes. Missing answers `428 precondition-required`, a stale one `412 edited-by-someone-else` (with the current `rowVersion`).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Changed (or already so). The new `ETag` is set.",
+            "headers": {
+              "ETag": {
+                "description": "The company's ETag (its row version, in quotes), to send back in `If-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Company"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: the company changed; `rowVersion` is the current one. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`precondition-required`: send `If-Match`.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`database-unavailable`, or `company-root-unavailable` when no database is configured.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       }
@@ -3557,6 +3757,228 @@
       }
     },
     "schemas": {
+      "CompanyState": {
+        "type": "string",
+        "enum": [
+          "active",
+          "ambiguous",
+          "missing",
+          "disabled"
+        ],
+        "description": "`active`: one chosen file; `ambiguous`: several `.qbw` files and none chosen yet; `missing`: its folder or file is gone; `disabled`: switched off by an admin. Missing and disabled companies never match a statement."
+      },
+      "CompanyAccess": {
+        "type": "string",
+        "enum": [
+          "unchecked",
+          "approved",
+          "needs-approval",
+          "file-not-found",
+          "error"
+        ],
+        "description": "The result of the admin's Check access. Only an `active`, `approved` company opens a QuickBooks session."
+      },
+      "CompanyLists": {
+        "type": "object",
+        "description": "Null on the company when its lists were never synced.",
+        "properties": {
+          "syncedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "outcome": {
+            "type": "string",
+            "description": "How the newest sync attempt ended: `ok`, `failed` or `skipped`.",
+            "nullable": true
+          }
+        }
+      },
+      "Company": {
+        "type": "object",
+        "required": [
+          "id",
+          "displayName",
+          "state",
+          "candidateFiles",
+          "access",
+          "matchNames",
+          "isDefault",
+          "rowVersion",
+          "waitingCount"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "code": {
+            "type": "string",
+            "description": "The numeric prefix of the folder name (`18_Name`), else null.",
+            "nullable": true
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "folderName": {
+            "type": "string",
+            "nullable": true
+          },
+          "fileName": {
+            "type": "string",
+            "nullable": true
+          },
+          "filePath": {
+            "type": "string",
+            "nullable": true
+          },
+          "state": {
+            "$ref": "#/components/schemas/CompanyState"
+          },
+          "candidateFiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "access": {
+            "$ref": "#/components/schemas/CompanyAccess"
+          },
+          "accessCheckedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "accessMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "qbCompanyName": {
+            "type": "string",
+            "nullable": true
+          },
+          "qbLegalName": {
+            "type": "string",
+            "nullable": true
+          },
+          "matchNames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "isDefault": {
+            "type": "boolean"
+          },
+          "rowVersion": {
+            "type": "integer",
+            "description": "Send as `If-Match` on a patch."
+          },
+          "lists": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CompanyLists"
+              }
+            ]
+          },
+          "waitingCount": {
+            "type": "integer",
+            "description": "Pending statements of this company."
+          }
+        }
+      },
+      "CompanyList": {
+        "type": "object",
+        "required": [
+          "rootFolder",
+          "rootConfigured",
+          "rootReachable",
+          "items"
+        ],
+        "properties": {
+          "rootFolder": {
+            "type": "string"
+          },
+          "rootConfigured": {
+            "type": "boolean"
+          },
+          "rootReachable": {
+            "type": "boolean"
+          },
+          "lastScanUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Company"
+            }
+          }
+        }
+      },
+      "CompanyScan": {
+        "type": "object",
+        "required": [
+          "added",
+          "updated",
+          "missing",
+          "ambiguous",
+          "noCompanyFile",
+          "items"
+        ],
+        "properties": {
+          "added": {
+            "type": "integer"
+          },
+          "updated": {
+            "type": "integer",
+            "description": "Companies whose stored values changed."
+          },
+          "missing": {
+            "type": "integer"
+          },
+          "ambiguous": {
+            "type": "integer"
+          },
+          "noCompanyFile": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Subfolders that hold no `.qbw` file."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Company"
+            }
+          }
+        }
+      },
+      "CompanyPatch": {
+        "type": "object",
+        "minProperties": 1,
+        "additionalProperties": false,
+        "properties": {
+          "matchNames": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          "filePath": {
+            "type": "string",
+            "description": "One of the company's `candidateFiles`."
+          },
+          "disabled": {
+            "type": "boolean"
+          }
+        }
+      },
       "AuditAction": {
         "type": "string",
         "description": "What happened (dashboard v2 spec 8.3).",

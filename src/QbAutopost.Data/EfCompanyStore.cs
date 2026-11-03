@@ -119,9 +119,11 @@ public sealed class EfCompanyStore(IDbContextFactory<QbAutopostDbContext> factor
             }
             else
             {
-                Apply(existing, change, nowUtc);
-                updated++;
-                touched.Add(existing);
+                if (Apply(existing, change, nowUtc))
+                {
+                    updated++;
+                    touched.Add(existing);
+                }
             }
         }
 
@@ -217,7 +219,7 @@ public sealed class EfCompanyStore(IDbContextFactory<QbAutopostDbContext> factor
             }
             else if (!disabled && row.State == CompanyState.Disabled)
             {
-                row.State = row.FilePath is null ? CompanyState.Ambiguous : CompanyState.Active;
+                row.State = CompanyRules.ReEnabledState(row.FilePath, Deserialize(row.CandidateFiles).Count, patch.FileExists);
                 detail["state"] = CompanyText.Of(row.State);
                 changed = true;
             }
@@ -324,20 +326,28 @@ public sealed class EfCompanyStore(IDbContextFactory<QbAutopostDbContext> factor
         RowVersion = 1,
     };
 
-    private static void Apply(CompanyEntity row, FolderChange change, DateTime nowUtc)
+    /// <summary>Applies a scan change and says whether anything changed; a row that already reads the same is left alone
+    /// (no version bump), so a rescan of a multi-file company does not make every open ETag stale. A disabled row stays
+    /// disabled, also when a racing Add resolves to it.</summary>
+    private static bool Apply(CompanyEntity row, FolderChange change, DateTime nowUtc)
     {
         var fileChanged = !SamePath(row.FilePath, change.FilePath);
-        row.FolderName = change.Folder.FolderName;
-        row.Code = change.Folder.Code;
-        if (!row.IsDefault)
+        var displayName = row.IsDefault ? row.DisplayName : change.Folder.DisplayName;
+        var candidates = Serialize(change.Folder.Files);
+        var state = row.State == CompanyState.Disabled ? CompanyState.Disabled : change.State;
+        var same = row.FolderName == change.Folder.FolderName && row.Code == change.Folder.Code && row.DisplayName == displayName
+            && !fileChanged && row.CandidateFiles == candidates && row.State == state;
+        if (same)
         {
-            // The default company keeps the name it was configured with.
-            row.DisplayName = change.Folder.DisplayName;
+            return false;
         }
 
+        row.FolderName = change.Folder.FolderName;
+        row.Code = change.Folder.Code;
+        row.DisplayName = displayName;
         row.FilePath = change.FilePath;
-        row.CandidateFiles = Serialize(change.Folder.Files);
-        row.State = change.State;
+        row.CandidateFiles = candidates;
+        row.State = state;
         if (fileChanged)
         {
             row.Access = CompanyAccess.Unchecked;
@@ -346,6 +356,7 @@ public sealed class EfCompanyStore(IDbContextFactory<QbAutopostDbContext> factor
         }
 
         Touch(row, nowUtc);
+        return true;
     }
 
     private static void Touch(CompanyEntity row, DateTime nowUtc)

@@ -59,6 +59,15 @@ public sealed class V2ScopeMatrixTests(Host host) : IClassFixture<Host>
             return;
         }
 
+        // M17 §5.1: the company routes exist under /api/v2 only (v1's spelling is closed to admin); the list is lists:read,
+        // the scan and the edit are requests:admin.
+        if (relative.StartsWith("/companies", StringComparison.Ordinal))
+        {
+            Assert.Equal(ApiScopes.Admin, ApiRoutes.ScopeFor(method, V1 + relative));
+            Assert.Equal(method == "GET" ? ApiScopes.ListsRead : ApiScopes.RequestsAdmin, ApiRoutes.ScopeFor(method, V2 + relative));
+            return;
+        }
+
         // M14 §7.2 (Q-120): v2's Sync now is for editors and admins (requests:edit) or a key with qb:read; v1's stays qb:read.
         if (method == "POST" && relative == ApiRoutes.ListSyncRoute)
         {
@@ -101,6 +110,9 @@ public sealed class V2ScopeMatrixTests(Host host) : IClassFixture<Host>
     [InlineData("GET", V2 + "/saved-requests/12/unknown")]
     [InlineData("GET", V2 + "/saved-requestsx")]
     [InlineData("GET", V2 + "/usersx")]
+    [InlineData("DELETE", V2 + "/companies/1")]
+    [InlineData("GET", V2 + "/companies/scan")]
+    [InlineData("POST", V2 + "/companiesx")]
     [InlineData("POST", V2 + "/auth/anything")]
     [InlineData("GET", V2)]
     public void Should_CloseTheRoute_When_V2PathIsNotInTheTable(string method, string path) =>

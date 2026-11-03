@@ -988,7 +988,7 @@ public static partial class SavedRequestEndpoints
     /// The row version in <c>If-Match</c>, or null when the header is absent. Something that is not a whole number
     /// can never be a row version, so it becomes -1 and the store answers it as stale.
     /// </summary>
-    private static int? IfMatchOf(HttpContext http)
+    internal static int? IfMatchOf(HttpContext http)
     {
         var header = http.Request.Headers.IfMatch.ToString().Trim();
         if (header.Length == 0)

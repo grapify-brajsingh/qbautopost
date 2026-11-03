@@ -48,6 +48,27 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestV2Store
         }
     }
 
+    /// <summary>Test helper: gives a stored request a company, as the save path will (T-1712).</summary>
+    public void SetCompany(long id, int? companyId, QbAutopost.Core.Companies.CompanySource? source)
+    {
+        lock (_gate)
+        {
+            _requests[id] = _requests[id] with { CompanyId = companyId, CompanySource = source };
+        }
+    }
+
+    public Task<IReadOnlyDictionary<int, int>> PendingByCompanyAsync(CancellationToken ct)
+    {
+        lock (_gate)
+        {
+            IReadOnlyDictionary<int, int> counts = _requests.Values
+                .Where(r => r.Status == SavedRequestStatus.Pending && r.CompanyId is not null)
+                .GroupBy(r => r.CompanyId!.Value)
+                .ToDictionary(g => g.Key, g => g.Count());
+            return Task.FromResult(counts);
+        }
+    }
+
     public Task<SavedRequestStatsV2> StatsV2Async(CancellationToken ct)
     {
         lock (_gate)
