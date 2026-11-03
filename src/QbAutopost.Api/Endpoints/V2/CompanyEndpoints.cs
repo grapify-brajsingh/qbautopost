@@ -66,7 +66,7 @@ public static class CompanyEndpoints
     }
 
     private static async Task<IResult> ListAsync(
-        IOptions<AppSettings> settings, CompanyResolver resolver, IQbListsSource lists, IServiceProvider services, CancellationToken ct)
+        IOptions<AppSettings> settings, CompanyResolver resolver, IQbListsCatalog lists, IServiceProvider services, CancellationToken ct)
     {
         var s = settings.Value;
         var store = services.GetService<ICompanyStore>();
@@ -82,7 +82,7 @@ public static class CompanyEndpoints
     /// <summary>Reads the whole root first and applies only when it could be read, so a bad root changes nothing.</summary>
     private static async Task<IResult> ScanAsync(
         HttpContext http, IOptions<AppSettings> settings, CompanyFolderScanner scanner, CompanyDataFolder folders,
-        IClock clock, IQbListsSource lists, IServiceProvider services, ILoggerFactory loggers, CancellationToken ct)
+        IClock clock, IQbListsCatalog lists, IServiceProvider services, ILoggerFactory loggers, CancellationToken ct)
     {
         var root = settings.Value.Companies.RootFolder;
         if (string.IsNullOrWhiteSpace(root))
@@ -137,7 +137,7 @@ public static class CompanyEndpoints
     }
 
     private static async Task<IResult> PatchAsync(
-        HttpContext http, string id, IClock clock, IQbListsSource lists, IServiceProvider services, CancellationToken ct)
+        HttpContext http, string id, IClock clock, IQbListsCatalog lists, IServiceProvider services, CancellationToken ct)
     {
         if (SavedRequestEndpoints.IfMatchOf(http) is not { } expected)
         {
@@ -293,25 +293,29 @@ public static class CompanyEndpoints
     private static async Task<IReadOnlyDictionary<int, int>> PendingAsync(IServiceProvider services, CancellationToken ct) =>
         await services.GetRequiredService<ISavedRequestV2Store>().PendingByCompanyAsync(ct);
 
-    /// <summary>Maps a stored company to its view: the file name, the default company's lists and the waiting count.</summary>
-    private sealed class CompanyViews(IQbListsSource lists, IReadOnlyDictionary<int, int> pending)
+    /// <summary>Maps a stored company to its view: the file name, its own lists (M17 §4.7) and the waiting count.</summary>
+    private sealed class CompanyViews(IQbListsCatalog lists, IReadOnlyDictionary<int, int> pending)
     {
         public CompanyView Of(Company c) => new(
             c.Id, c.Code, c.DisplayName, c.FolderName, c.FilePath is null ? null : Path.GetFileName(c.FilePath), c.FilePath,
             CompanyText.Of(c.State), c.CandidateFiles, CompanyText.Of(c.Access), c.AccessCheckedUtc, c.AccessMessage,
             c.QbCompanyName, c.QbLegalName, c.MatchNames, c.IsDefault, c.RowVersion,
-            c.IsDefault ? ListsOfDefault() : null, // T-1709: per-company lists
+            ListsOf(c.Id),
             pending.GetValueOrDefault(c.Id));
 
         /// <summary>Without a database there is only the default company, built from <c>Company:*</c>.</summary>
         public CompanyView OfDefault(CompanyContext c, AppSettings s) => new(
             c.Id, null, c.DisplayName, null, Path.GetFileName(s.Company.FilePath), s.Company.FilePath,
             CompanyText.Of(CompanyState.Active), [], CompanyText.Of(CompanyAccess.Approved), null, null, null, null, [], true, 0,
-            ListsOfDefault(), 0);
+            ListsOf(c.Id), 0);
 
-        private CompanyListsView? ListsOfDefault() =>
-            lists.Current.SyncedUtc is { } synced
-                ? new CompanyListsView(synced, lists.LastAttempt?.Outcome.ToString().ToLowerInvariant())
+        /// <summary>Null until the company's lists have been synced once, as the default company's always was.</summary>
+        private CompanyListsView? ListsOf(int companyId)
+        {
+            var source = lists.SourceFor(companyId);
+            return source.Current.SyncedUtc is { } synced
+                ? new CompanyListsView(synced, source.LastAttempt?.Outcome.ToString().ToLowerInvariant())
                 : null;
+        }
     }
 }

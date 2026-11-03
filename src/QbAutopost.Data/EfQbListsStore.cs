@@ -12,8 +12,15 @@ namespace QbAutopost.Data;
 /// <see cref="IQbListsStore"/> on PostgreSQL (M14 spec §3): the lists of the newest Ok attempt are the current lists.
 /// A singleton: every call makes its own context from the pooled factory. <paramref name="historyRows"/> is
 /// <c>QuickBooks:ListSync:HistoryRows</c>, validated by the caller.
+/// <para>
+/// M17 §4.7 (ruling B4): an instance is bound to one company (<paramref name="companyId"/>; <see cref="ForCompany"/>
+/// makes one). It records rows with that <c>company_id</c> and reads, prunes and imports only that company's rows, so
+/// one company's sync never changes another's lists or history (A-8). Null binds to the rows with no company yet, which
+/// start-up gives to the default company.
+/// </para>
 /// </summary>
-public sealed class EfQbListsStore(IDbContextFactory<QbAutopostDbContext> factory, int historyRows = EfQbListsStore.DefaultHistoryRows)
+public sealed class EfQbListsStore(
+    IDbContextFactory<QbAutopostDbContext> factory, int historyRows = EfQbListsStore.DefaultHistoryRows, int? companyId = null)
     : IQbListsStore
 {
     public const int DefaultHistoryRows = 200;
@@ -21,6 +28,15 @@ public sealed class EfQbListsStore(IDbContextFactory<QbAutopostDbContext> factor
     private static readonly JsonSerializerOptions Json = new(JsonOptions.Default) { WriteIndented = false };
 
     private readonly int _historyRows = historyRows > 0 ? historyRows : throw new ArgumentOutOfRangeException(nameof(historyRows));
+
+    /// <summary>The company this instance reads and writes; null for the rows with no company.</summary>
+    public int? CompanyId { get; } = companyId;
+
+    /// <summary>The same store bound to <paramref name="id"/>; 0 (the default company before start-up knows its id) is null.</summary>
+    public EfQbListsStore ForCompany(int id) => new(factory, _historyRows, id == 0 ? null : id);
+
+    /// <summary>This company's rows. A null id compares as IS NULL (EF Core's relational null semantics).</summary>
+    private IQueryable<QbListSyncEntity> Rows(QbAutopostDbContext db) => db.QbListSyncs.Where(r => r.CompanyId == CompanyId);
 
     public async Task RecordAsync(ListSyncRun run, QbLists? lists, CancellationToken ct)
     {
@@ -40,7 +56,7 @@ public sealed class EfQbListsStore(IDbContextFactory<QbAutopostDbContext> factor
     public async Task<ListSyncRun?> LastAttemptAsync(CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        var row = await db.QbListSyncs.AsNoTracking().OrderByDescending(r => r.Id)
+        var row = await Rows(db).AsNoTracking().OrderByDescending(r => r.Id)
             .Select(r => new
             {
                 r.Trigger, r.RequestedBy, r.StartedUtc, r.FinishedUtc, r.Outcome, r.Reason, r.Error,
@@ -67,14 +83,14 @@ public sealed class EfQbListsStore(IDbContextFactory<QbAutopostDbContext> factor
 
     /// <summary>
     /// M15 §3.1: newest first, filtered, one page. A projection: <c>lists</c>, <c>error</c> and <c>missing_in_rules</c>
-    /// are never read. <see cref="ListSyncPage.CurrentId"/> is the newest Ok row of the whole table, whatever the filter.
+    /// are never read. <see cref="ListSyncPage.CurrentId"/> is the company's newest Ok row, whatever the filter.
     /// </summary>
     public async Task<ListSyncPage> ListAttemptsAsync(ListSyncQuery query, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(query);
 
         await using var db = await factory.CreateDbContextAsync(ct);
-        var rows = db.QbListSyncs.AsNoTracking();
+        var rows = Rows(db).AsNoTracking();
         if (query.Triggers is not null)
         {
             var triggers = query.Triggers.ToList();
@@ -97,7 +113,7 @@ public sealed class EfQbListsStore(IDbContextFactory<QbAutopostDbContext> factor
                 r.Id, r.Trigger, r.RequestedBy, r.StartedUtc, r.FinishedUtc, r.Outcome, r.Reason, r.Accounts, r.Vendors, r.Customers,
             })
             .ToListAsync(ct);
-        var currentId = await db.QbListSyncs.Where(r => r.Outcome == ListSyncOutcome.Ok).MaxAsync(r => (long?)r.Id, ct);
+        var currentId = await Rows(db).Where(r => r.Outcome == ListSyncOutcome.Ok).MaxAsync(r => (long?)r.Id, ct);
 
         var items = page.Select(r => new ListSyncAttempt(r.Id, new ListSyncRun
         {
@@ -118,7 +134,7 @@ public sealed class EfQbListsStore(IDbContextFactory<QbAutopostDbContext> factor
     public async Task<QbLists?> LoadCurrentAsync(CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        var json = await db.QbListSyncs.AsNoTracking()
+        var json = await Rows(db).AsNoTracking()
             .Where(r => r.Outcome == ListSyncOutcome.Ok && r.Lists != null)
             .OrderByDescending(r => r.Id)
             .Select(r => r.Lists)
@@ -137,7 +153,7 @@ public sealed class EfQbListsStore(IDbContextFactory<QbAutopostDbContext> factor
         await using var db = await factory.CreateDbContextAsync(ct);
         await using var transaction = await db.Database.BeginTransactionAsync(ct);
 
-        if (await db.QbListSyncs.AnyAsync(r => r.Outcome == ListSyncOutcome.Ok, ct))
+        if (await Rows(db).AnyAsync(r => r.Outcome == ListSyncOutcome.Ok, ct))
         {
             return false;
         }
@@ -159,21 +175,22 @@ public sealed class EfQbListsStore(IDbContextFactory<QbAutopostDbContext> factor
         return true;
     }
 
-    /// <summary>Deletes the rows beyond the newest <c>historyRows</c>, never the newest Ok row.</summary>
+    /// <summary>Deletes the company's rows beyond its newest <c>historyRows</c>, never its newest Ok row.</summary>
     private async Task PruneAsync(QbAutopostDbContext db, CancellationToken ct)
     {
-        var cutoff = await db.QbListSyncs.OrderByDescending(r => r.Id).Skip(_historyRows).Select(r => (long?)r.Id).FirstOrDefaultAsync(ct);
+        var cutoff = await Rows(db).OrderByDescending(r => r.Id).Skip(_historyRows).Select(r => (long?)r.Id).FirstOrDefaultAsync(ct);
         if (cutoff is null)
         {
             return;
         }
 
-        var newestOk = await db.QbListSyncs.Where(r => r.Outcome == ListSyncOutcome.Ok).MaxAsync(r => (long?)r.Id, ct);
-        await db.QbListSyncs.Where(r => r.Id <= cutoff && r.Id != newestOk).ExecuteDeleteAsync(ct);
+        var newestOk = await Rows(db).Where(r => r.Outcome == ListSyncOutcome.Ok).MaxAsync(r => (long?)r.Id, ct);
+        await Rows(db).Where(r => r.Id <= cutoff && r.Id != newestOk).ExecuteDeleteAsync(ct);
     }
 
-    private static QbListSyncEntity ToEntity(ListSyncRun run, QbLists? lists) => new()
+    private QbListSyncEntity ToEntity(ListSyncRun run, QbLists? lists) => new()
     {
+        CompanyId = CompanyId,
         Trigger = run.Trigger,
         RequestedBy = run.RequestedBy,
         StartedUtc = run.StartedUtc,

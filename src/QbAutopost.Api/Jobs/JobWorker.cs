@@ -1,4 +1,6 @@
 using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Api;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Pipeline;
 
@@ -13,6 +15,10 @@ namespace QbAutopost.Api.Jobs;
 /// The wait for the due time; <see cref="Task.Delay(TimeSpan, CancellationToken)"/> unless a test replaces it. It must
 /// honour its token.
 /// </param>
+/// <param name="companies">
+/// M17 §4.7: with several companies (<see cref="CompanySweepSource.Enabled"/>) a scheduled attempt is a sweep of the
+/// companies <c>Companies:ScheduledSync</c> selects, one at a time; otherwise (or null) the default company as before.
+/// </param>
 public sealed class JobWorker(
     JobQueue queue,
     IJobProcessor processor,
@@ -21,7 +27,8 @@ public sealed class JobWorker(
     ListSyncSchedule schedule,
     QbListSync listSync,
     IQbPresence presence,
-    Func<TimeSpan, CancellationToken, Task>? delay = null)
+    Func<TimeSpan, CancellationToken, Task>? delay = null,
+    CompanySweepSource? companies = null)
     : BackgroundService
 {
     public const string InterruptedPosting = "interrupted — run duplicates before re-post";
@@ -156,6 +163,11 @@ public sealed class JobWorker(
     /// </summary>
     private async Task<bool> RunClaimedAttemptAsync(Action release, CancellationToken stoppingToken)
     {
+        if (companies is { Enabled: true } sweep)
+        {
+            return await RunSweepAsync(sweep, release, stoppingToken);
+        }
+
         var warnOnFailure = schedule.LastKnownWasOk;
         var started = schedule.UtcNow;
         if (schedule.BeginAttempt() is not { } attempt)
@@ -233,6 +245,122 @@ public sealed class JobWorker(
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// M17 §4.7: one scheduled sweep, with the slot held throughout. The presence check runs once; QuickBooks not open is
+    /// a skipped <c>quickbooks-not-open</c> row for every selected company. Otherwise each company is synced in id order
+    /// from its own file into its own lists; a company that fails or cannot be opened (its skipped row is recorded by
+    /// <see cref="QbListSync"/>) is logged and the sweep goes on. Ok only when every selected company synced. Nobody
+    /// joins a sweep: a dashboard sync of one company queues its own flight behind it.
+    /// </summary>
+    private async Task<bool> RunSweepAsync(CompanySweepSource sweep, Action release, CancellationToken stoppingToken)
+    {
+        var warnOnFailure = schedule.LastKnownWasOk;
+        if (schedule.BeginAttempt(null) is not { } attempt)
+        {
+            log.LogDebug("Scheduled list sync deferred: a dashboard sync is queued");
+            return false;
+        }
+
+        var outcome = ListSyncOutcome.Failed;
+        try
+        {
+            var selected = await sweep.SelectAsync(stoppingToken);
+            if (selected.Count == 0)
+            {
+                outcome = ListSyncOutcome.Ok;
+                log.LogInformation("Scheduled list sync ({Mode}): no company to sync", sweep.Mode);
+            }
+            else if (!ListSyncGuard.IsOpen(presence, log))
+            {
+                outcome = ListSyncOutcome.Skipped;
+                foreach (var company in selected)
+                {
+                    await RecordNotOpenAsync(company, stoppingToken);
+                }
+
+                LogNotOk(warnOnFailure, outcome, ListSyncReasons.QuickBooksNotOpen, $"QuickBooks is not running in this session ({selected.Count} companies)");
+            }
+            else
+            {
+                var synced = 0;
+                foreach (var company in selected)
+                {
+                    synced += await SyncCompanyAsync(company, warnOnFailure, stoppingToken) ? 1 : 0;
+                }
+
+                outcome = synced == selected.Count ? ListSyncOutcome.Ok : ListSyncOutcome.Failed;
+            }
+
+            release();
+            attempt.TrySetResult(null);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            release();
+            attempt.TrySetCanceled(stoppingToken);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // The companies could not be read (the database is down): nothing was synced. Never crash the loop.
+            log.LogError(ex, "Scheduled list sync: the companies to sync could not be chosen");
+            release();
+            attempt.TrySetException(ex);
+            _ = attempt.Task.Exception;
+        }
+        finally
+        {
+            schedule.EndAttempt(outcome);
+        }
+
+        return true;
+    }
+
+    /// <summary>One company of a sweep. False when it did not sync; its row was recorded by <see cref="QbListSync"/>.</summary>
+    private async Task<bool> SyncCompanyAsync(CompanyContext company, bool warnOnFailure, CancellationToken stoppingToken)
+    {
+        try
+        {
+            var result = (await listSync.SyncWithRunAsync(company, ListSyncTrigger.Schedule, null, stoppingToken)).Result;
+            log.LogInformation(
+                "QuickBooks lists sync ({Trigger}, by {RequestedBy}, company {CompanyId}): {Outcome}, {Accounts} accounts, {Vendors} vendors, {Customers} customers",
+                Lower(ListSyncTrigger.Schedule), ScheduledRequestedBy, company.Id, Lower(ListSyncOutcome.Ok), result.Accounts, result.Vendors, result.Customers);
+            if (result.MissingInRules.Count > 0)
+            {
+                log.LogWarning("Names in the rules of company {CompanyId} that QuickBooks does not have: {Missing}", company.Id, string.Join("; ", result.MissingInRules));
+            }
+
+            return true;
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var refusal = CompanyFileRefusal.Of(ex);
+            log.Log(
+                warnOnFailure ? LogLevel.Warning : LogLevel.Information,
+                "QuickBooks lists sync ({Trigger}, by {RequestedBy}, company {CompanyId}): {Outcome} ({Reason}): {Error}",
+                Lower(ListSyncTrigger.Schedule), ScheduledRequestedBy, company.Id,
+                Lower(refusal is null ? ListSyncOutcome.Failed : ListSyncOutcome.Skipped), refusal?.Type ?? QbListSync.ReasonOf(ex) ?? "error", ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>A skipped <c>quickbooks-not-open</c> row in the company's history; a failure to record it is only logged.</summary>
+    private async Task RecordNotOpenAsync(CompanyContext company, CancellationToken stoppingToken)
+    {
+        try
+        {
+            await listSync.RecordSkippedAsync(company, ListSyncTrigger.Schedule, null, ListSyncReasons.QuickBooksNotOpen, stoppingToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
+        {
+            log.LogInformation("QuickBooks lists sync: the skipped attempt of company {CompanyId} could not be recorded: {Error}", company.Id, ex.Message);
+        }
     }
 
     /// <summary>§5.6: Warning for the first not-Ok attempt after an Ok (or the first ever), Information after that.</summary>

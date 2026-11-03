@@ -130,7 +130,7 @@
         ],
         "operationId": "getLists",
         "summary": "The stored QuickBooks account, vendor and customer names, with the last sync attempt and the next automatic sync.",
-        "description": "Read from the stored lists (the newest successful sync), so it answers while QuickBooks is shut down and never queues behind a post. A `syncedUtc` of `null` with empty lists means no sync has succeeded yet; it is not an error. `syncedUtc` stays the time of the lists in use, while `lastSync` is the newest attempt of any outcome (null before any attempt), so \"synced 12 min ago\" and \"the last attempt failed\" can both be shown. `nextSyncUtc` is when the next automatic sync is due, null when `QuickBooks:ListSync:IntervalMinutes` is 0. Needs `lists:read`, which every dashboard role holds; an API key holding `qb:read` satisfies it too. The v1 route answers without `lastSync` and `nextSyncUtc`.",
+        "description": "Read from the stored lists (the newest successful sync), so it answers while QuickBooks is shut down and never queues behind a post. A `syncedUtc` of `null` with empty lists means no sync has succeeded yet; it is not an error. `syncedUtc` stays the time of the lists in use, while `lastSync` is the newest attempt of any outcome (null before any attempt), so \"synced 12 min ago\" and \"the last attempt failed\" can both be shown. `nextSyncUtc` is when the next automatic sync is due, null when `QuickBooks:ListSync:IntervalMinutes` is 0. Needs `lists:read`, which every dashboard role holds; an API key holding `qb:read` satisfies it too. The v1 route answers without `lastSync` and `nextSyncUtc`. M17 §5.3: `company=<id>` reads that company's own lists and last attempt; without it, the default company's.",
         "x-required-scope": "lists:read",
         "responses": {
           "200": {
@@ -139,6 +139,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/QbListsV2"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid-request`: `company` is not a company id, is given more than once, or names no company.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -152,7 +162,19 @@
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "description": "M17 §5.3: the company whose lists these are (a company id). Missing: the default company, as before M17. Not a positive integer, or given more than once: `400 invalid-request`. An id no company has: `400 invalid-request`.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ]
       }
     },
     "/api/v2/quickbooks/lists/sync": {
@@ -162,7 +184,7 @@
         ],
         "operationId": "syncListsV2",
         "summary": "Sync now: fetch the active accounts, vendors and customers from QuickBooks and store them.",
-        "description": "M14 §7.2 (R-16). No body. In order: if QuickBooks is not running on the server the answer is `409 quickbooks-not-open` and a `skipped` attempt is recorded (the API never starts QuickBooks); if a sync is already queued or running (the automatic one, or another Sync now) this request **joins it** and answers with its result, so two presses make one QuickBooks call; otherwise the sync runs on the job worker after any job ahead of it. The caller waits at most `Api:SyncPostTimeoutSeconds` (120): past that the answer is `504 sync-timeout`, the sync carries on and `GET /api/v2/quickbooks/lists` shows its result. A failed sync never replaces the stored lists. The `200` is built from the run and lists this sync produced (or the sync it joined), not read back afterwards. Needs `requests:edit` (editors and admins; viewers get `403`) or, for an API key, `qb:read` as on v1. A dashboard user's sync is recorded with trigger `dashboard` and their id; an API key's with trigger `api` and the client's name. Counts against the posting rate limit (`Api:RateLimits:PostPerMinute`), because it opens a QuickBooks session. Not an audit-feed event.",
+        "description": "M14 §7.2 (R-16). No body, or `{\"company\": <id>}`. In order: if QuickBooks is not running on the server the answer is `409 quickbooks-not-open` and a `skipped` attempt is recorded (the API never starts QuickBooks); if a sync is already queued or running (the automatic one, or another Sync now) this request **joins it** and answers with its result, so two presses make one QuickBooks call; otherwise the sync runs on the job worker after any job ahead of it. The caller waits at most `Api:SyncPostTimeoutSeconds` (120): past that the answer is `504 sync-timeout`, the sync carries on and `GET /api/v2/quickbooks/lists` shows its result. A failed sync never replaces the stored lists. The `200` is built from the run and lists this sync produced (or the sync it joined), not read back afterwards. Needs `requests:edit` (editors and admins; viewers get `403`) or, for an API key, `qb:read` as on v1. A dashboard user's sync is recorded with trigger `dashboard` and their id; an API key's with trigger `api` and the client's name. Counts against the posting rate limit (`Api:RateLimits:PostPerMinute`), because it opens a QuickBooks session. Not an audit-feed event. M17 §4.7: with `company`, that company's file is queried and its own lists and history are recorded; a sync joins only a sync of the same company. A company that is not `active` + `approved` (or whose file is outside `Companies:RootFolder`) answers `409 company-not-ready` with nothing sent or recorded. Another company file open in QuickBooks answers `409 company-file-open-elsewhere` (`openFile`, `neededFile`); a file that would not open answers `503 company-file-unavailable`; both record a `skipped` attempt with that reason and are never retried.",
         "x-required-scope": "requests:edit|qb:read",
         "security": [
           {
@@ -183,6 +205,16 @@
               }
             }
           },
+          "400": {
+            "description": "`invalid-request`: `company` (query or body) is not a company id, is given twice, or names no company; or the body is not JSON. Nothing was sent.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
@@ -190,7 +222,7 @@
             "$ref": "#/components/responses/Forbidden"
           },
           "409": {
-            "description": "`quickbooks-not-open` (problem `type`): QuickBooks is not running on the server, so nothing was sent; title \"QuickBooks isn't open\", detail \"Open QuickBooks on the company file, then sync again.\" A `skipped` attempt is recorded. Also the answer when the automatic sync this request joined was skipped for the same reason.",
+            "description": "`quickbooks-not-open` (problem `type`): QuickBooks is not running on the server, so nothing was sent; title \"QuickBooks isn't open\", detail \"Open QuickBooks on the company file, then sync again.\" A `skipped` attempt is recorded. Also the answer when the automatic sync this request joined was skipped for the same reason. M17: also `company-not-ready` (with `state`, `access`) and `company-file-open-elsewhere` (with `openFile`, `neededFile`).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -213,7 +245,7 @@
             }
           },
           "503": {
-            "description": "`quickbooks-unavailable` or `quickbooks-busy` (problem `type`): QuickBooks could not be reached, or did not answer in time (title \"QuickBooks is not available\"). The `detail` is fixed text, never the exception message (that stays in the log and the recorded attempt). A `failed` attempt with the same code is recorded; the stored lists are unchanged. Or `api-stopping`: the sync this request waited for was cancelled because the API is shutting down (detail \"The API is stopping; try again in a moment.\").",
+            "description": "`quickbooks-unavailable` or `quickbooks-busy` (problem `type`): QuickBooks could not be reached, or did not answer in time (title \"QuickBooks is not available\"). The `detail` is fixed text, never the exception message (that stays in the log and the recorded attempt). A `failed` attempt with the same code is recorded; the stored lists are unchanged. Or `api-stopping`: the sync this request waited for was cancelled because the API is shutting down (detail \"The API is stopping; try again in a moment.\"). M17: also `company-file-unavailable` (with `neededFile`): the company's file could not be opened; a `skipped` attempt is recorded and it is not retried.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -228,6 +260,35 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "description": "M17 §5.3: the company whose lists these are (a company id). Missing: the default company, as before M17. Not a positive integer, or given more than once: `400 invalid-request`. May instead be sent in the body as `{\"company\": <id>}` (not both). An id no company has: `400 invalid-request`.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "description": "Optional. `company`: the company to sync (M17 §5.3); the same as the `company` query parameter.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "company": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
                 }
               }
             }
@@ -292,6 +353,16 @@
               "minimum": 1,
               "maximum": 100,
               "default": 25
+            }
+          },
+          {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "description": "M17 §5.3: the company whose history this is (a company id). Missing: the default company. Not a positive integer, or given more than once: `400 invalid-request`. An id no company has: an empty page.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
             }
           }
         ],

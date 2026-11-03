@@ -130,6 +130,54 @@ public sealed class QbListSyncStoreTests(PostgresFixture postgres) : IClassFixtu
         Assert.Equal(6, await db.ScalarAsync("SELECT min(id) FROM qb_list_syncs"));
     }
 
+    // ---- T-1709 (M17 spec 4.7, A-8): lists and history per company -------------------------------------------------
+
+    [PostgresFact]
+    public async Task Should_KeepCompaniesApart_When_TwoCompaniesRecord()
+    {
+        await using var db = await Db.CreateAsync(postgres);
+        var (one, two) = (await db.AddCompanyAsync("One"), await db.AddCompanyAsync("Two"));
+        var storeOne = db.Store().ForCompany(one);
+        var storeTwo = db.Store().ForCompany(two);
+        var listsOne = Lists("one");
+        await storeOne.RecordAsync(OkRun(0, listsOne), listsOne, CancellationToken.None);
+        var lastOne = await storeOne.LastAttemptAsync(CancellationToken.None);
+        var query = new ListSyncQuery(null, null, 1, 25);
+
+        var listsTwo = Lists("two");
+        await storeTwo.RecordAsync(OkRun(5, listsTwo), listsTwo, CancellationToken.None);
+        await storeTwo.RecordAsync(FailedRun(10), null, CancellationToken.None);
+
+        Assert.Equal(listsOne, await storeOne.LoadCurrentAsync(CancellationToken.None), new ListsComparer());
+        Assert.Equal(lastOne, await storeOne.LastAttemptAsync(CancellationToken.None), new RunComparer());
+        var pageOne = await storeOne.ListAttemptsAsync(query, CancellationToken.None);
+        Assert.Equal(1, pageOne.Total);
+        Assert.Equal(pageOne.Items[0].Id, pageOne.CurrentId);
+        Assert.Equal(listsTwo, await storeTwo.LoadCurrentAsync(CancellationToken.None), new ListsComparer());
+        Assert.Equal(2, (await storeTwo.ListAttemptsAsync(query, CancellationToken.None)).Total);
+    }
+
+    [PostgresFact]
+    public async Task Should_KeepNewestRowsPerCompany_When_HistoryExceedsLimit()
+    {
+        await using var db = await Db.CreateAsync(postgres);
+        var (one, two) = (await db.AddCompanyAsync("One"), await db.AddCompanyAsync("Two"));
+        var storeOne = db.Store(historyRows: 10).ForCompany(one);
+        var storeTwo = db.Store(historyRows: 10).ForCompany(two);
+        for (var i = 0; i < 4; i++)
+        {
+            await storeOne.RecordAsync(SkippedRun(i), null, CancellationToken.None);
+        }
+
+        for (var i = 0; i < 15; i++)
+        {
+            await storeTwo.RecordAsync(SkippedRun(10 + i), null, CancellationToken.None);
+        }
+
+        Assert.Equal(4, await db.ScalarAsync($"SELECT count(*) FROM qb_list_syncs WHERE company_id = {one}"));
+        Assert.Equal(10, await db.ScalarAsync($"SELECT count(*) FROM qb_list_syncs WHERE company_id = {two}"));
+    }
+
     [PostgresFact]
     public async Task Should_KeepNewestOkRow_When_ItIsOlderThanTheLimit()
     {
@@ -426,6 +474,12 @@ public sealed class QbListSyncStoreTests(PostgresFixture postgres) : IClassFixtu
 
         public EfQbListsStore Store(int historyRows = EfQbListsStore.DefaultHistoryRows) =>
             new(_services.GetRequiredService<IDbContextFactory<QbAutopostDbContext>>(), historyRows);
+
+        /// <summary>A company row (as the owner), so list rows can name it; returns its id.</summary>
+        public async Task<int> AddCompanyAsync(string folder) =>
+            (int)await ScalarAsync(
+                "INSERT INTO companies (folder_name, display_name, candidate_files, state, access, match_names, is_default, created_utc, updated_utc, row_version) "
+                + $"VALUES ('{folder}', '{folder}', '[]', 'active', 'approved', '[]', false, now(), now(), 1) RETURNING id");
 
         public async Task<long> ScalarAsync(string sql) => long.Parse((await StringsAsync(sql)).Single(), CultureInfo.InvariantCulture);
 

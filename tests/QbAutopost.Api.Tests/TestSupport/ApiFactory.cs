@@ -205,6 +205,10 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             services.AddSingleton<QbAutopost.Core.Companies.ICompanyStore>(Companies);
             services.AddSingleton<QbAutopost.Api.Companies.CompanyBootstrap>();
             services.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter, FakeCompanyBootstrapFilter>();
+            // Ruling B3: file mode serves the default company only; this host has more, so each gets its own lists.
+            services.RemoveAll<IQbListsCatalog>();
+            services.AddSingleton<IQbListsCatalog>(sp => new FakeQbListsCatalog(
+                sp.GetRequiredService<IQbListsStore>(), sp.GetRequiredService<QbAutopost.Core.Companies.ICompanyResolver>()));
             services.RemoveAll<DatabaseGate>();
             services.AddSingleton(_fakeGate);
             services.RemoveAll<IUserGate>();

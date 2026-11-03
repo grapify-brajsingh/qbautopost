@@ -312,6 +312,8 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton<IJobProcessor, JobRunner>();
 builder.Services.AddSingleton<JobAdmission>();
 builder.Services.AddSingleton<StartupRecovery>();
+// M17 §4.7: what the worker's scheduled attempt sweeps when there are several companies. Not a hosted service.
+builder.Services.AddSingleton<CompanySweepSource>();
 builder.Services.AddHostedService<JobWorker>();
 
 // Saved-requests spec 4.2, 5.5, 10.6, 10.7. Without a connection string the feature is off (DisabledSavedRequestStore,
@@ -329,6 +331,8 @@ if (database.Configured)
     builder.Services.AddSingleton<DbQbListsSource>();
     builder.Services.AddSingleton<IQbListsStore>(sp => sp.GetRequiredService<DbQbListsSource>());
     builder.Services.AddSingleton<IQbListsSource>(sp => sp.GetRequiredService<DbQbListsSource>());
+    // M17 §4.7: the same source holds every company's lists; the two above are the default company's view.
+    builder.Services.AddSingleton<IQbListsCatalog>(sp => sp.GetRequiredService<DbQbListsSource>());
 
     // T-1009 (spec 11.2, 11.3): Identity's stores need a scoped context; the pool still hands it out and takes it back.
     builder.Services.AddScoped(sp => sp.GetRequiredService<IDbContextFactory<QbAutopostDbContext>>().CreateDbContext());
@@ -365,6 +369,9 @@ else
     builder.Services.AddSingleton(sp => new FileQbLists(sp.GetRequiredService<PipelineOptions>().QbListsFile, listSync.HistoryRows));
     builder.Services.AddSingleton<IQbListsStore>(sp => sp.GetRequiredService<FileQbLists>());
     builder.Services.AddSingleton<IQbListsSource>(sp => sp.GetRequiredService<FileQbLists>());
+    // M17 ruling B9: without a database there is only the default company, whose lists are qb-lists.json.
+    builder.Services.AddSingleton<IQbListsCatalog>(sp => new FileQbListsCatalog(
+        sp.GetRequiredService<FileQbLists>(), sp.GetRequiredService<ICompanyResolver>()));
 }
 
 // T-1111: the dashboard v2 reads and the audit feed are served by the same store instance, whichever one is

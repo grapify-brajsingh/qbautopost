@@ -29,17 +29,17 @@ public class DirectPostRunner(
     IQbGateway gateway,
     IClock clock,
     ILogger<DirectPostRunner> log,
-    IQbListsSource listsSource,
+    IQbListsCatalog lists,
     ICompanyResolver resolver)
 {
     /// <summary>FR-A-6/FR-A-8 share this: the post is the plan plus the SDK call. v1 plans for the default company.</summary>
     public virtual DirectPlan Plan(DirectRequest request) => Plan(request, resolver.Default);
 
-    /// <summary>M17 §4.7: the plan against <paramref name="company"/>'s rules and ledger.</summary>
+    /// <summary>M17 §4.7: the plan against <paramref name="company"/>'s rules, QuickBooks lists and ledger.</summary>
     public virtual DirectPlan Plan(DirectRequest request, CompanyContext company) => planner.Plan(
         request,
         Rules.Load(company.RulesFile),
-        listsSource.Current, // T-1709: per-company lists
+        lists.SourceFor(company.Id).Current,
         new LedgerStore(company.LedgerFile).Load(),
         DateOnly.FromDateTime(clock.UtcNow),
         options.QbXmlVersion);

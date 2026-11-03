@@ -19,6 +19,10 @@ public static class ListSyncMessages
             (ListSyncOutcome.Ok, _) => "The lists were synced from QuickBooks.",
             (ListSyncOutcome.Skipped, ListSyncReasons.QuickBooksNotOpen) => "QuickBooks was not open, so nothing was synced." + Kept,
             (ListSyncOutcome.Skipped, ListSyncReasons.WorkerBusy) => "The server was busy, so nothing was synced." + Kept,
+            (ListSyncOutcome.Skipped, ListSyncReasons.CompanyFileOpenElsewhere) =>
+                "Another company file was open in QuickBooks, so nothing was synced." + Kept,
+            (ListSyncOutcome.Skipped, ListSyncReasons.CompanyFileUnavailable) =>
+                "The company file could not be opened, so nothing was synced." + Kept,
             (ListSyncOutcome.Skipped, _) => "The sync was skipped." + Kept,
             (ListSyncOutcome.Failed, ListSyncReasons.QuickBooksUnavailable) => "QuickBooks could not be reached." + Kept,
             (ListSyncOutcome.Failed, ListSyncReasons.QuickBooksBusy) => "QuickBooks did not answer in time." + Kept,

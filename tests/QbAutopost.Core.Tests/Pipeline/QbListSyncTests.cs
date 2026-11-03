@@ -33,7 +33,12 @@ public sealed class QbListSyncTests : IDisposable
         _gateway,
         new FixedTime(),
         Lists,
-        Lists);
+        Lists,
+        new CompanyCatalog(id => id == 2 ? TakomaLists : Lists));
+
+    private FileQbLists TakomaLists => _takomaLists ??= new FileQbLists(Path.Combine(_dir.Root, "companies", "2", "qb-lists.json"));
+
+    private FileQbLists? _takomaLists;
 
     private static Task<ListSyncResult> Run(QbListSync sync, string? by = null) =>
         sync.SyncAsync(ListSyncTrigger.Api, by, CancellationToken.None);
@@ -316,8 +321,52 @@ public sealed class QbListSyncTests : IDisposable
         await Assert.ThrowsAsync<QuickBooksWrongCompanyException>(
             () => Sync().SyncWithRunAsync(Takoma(), ListSyncTrigger.Schedule, null, CancellationToken.None));
 
-        var run = Assert.IsType<ListSyncRun>(Lists.LastAttempt);
+        var run = Assert.IsType<ListSyncRun>(TakomaLists.LastAttempt);
         Assert.Equal((ListSyncOutcome.Skipped, ListSyncReasons.CompanyFileOpenElsewhere), (run.Outcome, run.Reason));
+    }
+
+    [Fact]
+    public async Task Should_RecordSkippedUnavailable_When_CompanyFileCannotBeOpened()
+    {
+        _gateway.Failure = new QuickBooksCompanyFileUnavailableException(TakomaFile, "0x80040408: could not open");
+
+        await Assert.ThrowsAsync<QuickBooksCompanyFileUnavailableException>(
+            () => Sync().SyncWithRunAsync(Takoma(), ListSyncTrigger.Schedule, null, CancellationToken.None));
+
+        var run = Assert.IsType<ListSyncRun>(TakomaLists.LastAttempt);
+        Assert.Equal((ListSyncOutcome.Skipped, ListSyncReasons.CompanyFileUnavailable), (run.Outcome, run.Reason));
+    }
+
+    [Fact]
+    public async Task Should_RecordIntoTheCompanysStore_When_SyncingAContext()
+    {
+        await Sync().SyncWithRunAsync(Takoma(), ListSyncTrigger.Api, null, CancellationToken.None);
+
+        Assert.Equal(ListSyncOutcome.Ok, TakomaLists.LastAttempt?.Outcome);
+        Assert.NotEmpty(TakomaLists.Current.Accounts);
+        Assert.Null(Lists.LastAttempt);
+        Assert.False(File.Exists(ListsFile));
+    }
+
+    [Fact]
+    public async Task Should_RefuseWithoutASession_When_CompanyCannotOpenSession()
+    {
+        var takoma = Takoma() with { Access = CompanyAccess.NeedsApproval };
+
+        var ex = await Assert.ThrowsAsync<CompanyNotReadyException>(
+            () => Sync().SyncWithRunAsync(takoma, ListSyncTrigger.Api, null, CancellationToken.None));
+
+        Assert.Same(takoma, ex.Company);
+        Assert.Empty(_gateway.Requests);
+        Assert.Null(TakomaLists.LastAttempt);
+    }
+
+    /// <summary>T-1709: the default company (0 here) is <see cref="Lists"/>; Takoma (2) has its own lists.</summary>
+    private sealed class CompanyCatalog(Func<int, FileQbLists> listsOf) : IQbListsCatalog
+    {
+        public IQbListsSource SourceFor(int companyId) => listsOf(companyId);
+
+        public IQbListsStore StoreFor(int companyId) => listsOf(companyId);
     }
 
     private static ListSyncRun OkRun() => new()
