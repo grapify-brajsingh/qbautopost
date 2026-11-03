@@ -79,10 +79,27 @@ public sealed class ScheduledCompanySweepTests : IDisposable
         new(id, null, null, $"Company {id}", file, [file], CompanyState.Active, access, T0, null, null, null, [], false, T0, T0, 1);
 
     /// <summary>Runs one scheduled attempt (due at once) and returns when the worker waits for the next one.</summary>
-    private async Task SweepOnceAsync(IQbGateway? gateway = null)
+    private async Task SweepOnceAsync(IQbGateway? gateway = null, IJobProcessor? processor = null)
     {
         var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var schedule = new ListSyncSchedule(new ListSyncSettings { IntervalMinutes = 30, FirstDelayMinutes = 0 }, _defaultLists, _clock);
+        using var worker = Worker(out _, gateway, processor, (_, ct) =>
+        {
+            waiting.TrySetResult();
+            return Task.Delay(Timeout.Infinite, ct);
+        });
+
+        await worker.StartAsync(CancellationToken.None);
+        await waiting.Task.WaitAsync(Patience);
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    /// <summary>A worker over the companies above; the schedule is due at once (or off, as the sweep says).</summary>
+    private JobWorker Worker(
+        out ListSyncSchedule schedule, IQbGateway? gateway, IJobProcessor? processor, Func<TimeSpan, CancellationToken, Task> delay)
+    {
+        var sweep = new CompanySweepSource(_resolver, _catalog, Options.Create(_settings), new FakeSavedRequestStore(), _companies);
+        schedule = new ListSyncSchedule(
+            new ListSyncSettings { IntervalMinutes = 30, FirstDelayMinutes = 0 }, _defaultLists, _clock, () => sweep.Off);
         var sync = new QbListSync(
             new PipelineOptions
             {
@@ -96,26 +113,8 @@ public sealed class ScheduledCompanySweepTests : IDisposable
             _defaultLists,
             _defaultLists,
             _catalog);
-        var sweep = new CompanySweepSource(_resolver, _catalog, Options.Create(_settings), new FakeSavedRequestStore(), _companies);
         var store = new JobStore(Options.Create(_settings), _clock, NullLogger<JobStore>.Instance);
-        using var worker = new JobWorker(
-            _queue,
-            new IdleProcessor(),
-            store,
-            _log,
-            schedule,
-            sync,
-            _presence,
-            (_, ct) =>
-            {
-                waiting.TrySetResult();
-                return Task.Delay(Timeout.Infinite, ct);
-            },
-            sweep);
-
-        await worker.StartAsync(CancellationToken.None);
-        await waiting.Task.WaitAsync(Patience);
-        await worker.StopAsync(CancellationToken.None);
+        return new JobWorker(_queue, processor ?? new IdleProcessor(), store, _log, schedule, sync, _presence, delay, sweep);
     }
 
     private ListSyncRun? LastOf(int companyId) => _catalog.SourceFor(companyId).LastAttempt;
@@ -192,6 +191,79 @@ public sealed class ScheduledCompanySweepTests : IDisposable
         Assert.Equal([TakomaFile, SaFile], _gateway.Targets); // the default company has synced before and has nothing waiting
     }
 
+    // ---- review fix round 1 ------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Should_RunAQueuedItemBeforeTheNextCompany_When_ItArrivesDuringTheSweep()
+    {
+        var targetsWhenItemRan = -1;
+        var processor = new IdleProcessor { OnProcess = () => targetsWhenItemRan = _gateway.Targets.Count };
+        var gateway = new HookGateway(_gateway, () => _queue.Enqueue(new JobWorkItem("a", JobAction.Analyse)));
+
+        await SweepOnceAsync(gateway, processor);
+
+        Assert.Equal(1, targetsWhenItemRan); // after the first company, before the second
+        Assert.Equal([null, TakomaFile, SaFile], _gateway.Targets);
+        Assert.Equal(0, _queue.Outstanding);
+    }
+
+    [Fact]
+    public async Task Should_NeverSyncOrScheduleASync_When_ScheduledSyncIsOff()
+    {
+        _settings.Companies.ScheduledSync = ScheduledSyncModes.Off;
+        var processed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var delays = 0;
+        using var worker = Worker(
+            out var schedule,
+            null,
+            new IdleProcessor { OnProcess = () => processed.TrySetResult() },
+            (_, ct) =>
+            {
+                Interlocked.Increment(ref delays);
+                return Task.Delay(Timeout.Infinite, ct);
+            });
+
+        await worker.StartAsync(CancellationToken.None);
+        _queue.Enqueue(new JobWorkItem("a", JobAction.Analyse));
+        await processed.Task.WaitAsync(Patience);
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.Empty(_gateway.Requests);
+        Assert.Null(schedule.NextSyncUtc);
+        Assert.Equal(0, delays);
+        Assert.Null(LastOf(DefaultId));
+    }
+
+    /// <summary>Runs <paramref name="onFirstCall"/> once, at the first call (the default company's sync), then forwards.</summary>
+    private sealed class HookGateway(IQbGateway inner, Action onFirstCall) : IQbGateway
+    {
+        private int _calls;
+
+        public Task<string> ProcessAsync(string qbxml, CancellationToken ct)
+        {
+            Hook();
+            return inner.ProcessAsync(qbxml, ct);
+        }
+
+        public Task<string> CurrentCompanyFileAsync(CancellationToken ct) => inner.CurrentCompanyFileAsync(ct);
+
+        public Task<string> ProcessAsync(QbTarget target, string qbxml, CancellationToken ct)
+        {
+            Hook();
+            return inner.ProcessAsync(target, qbxml, ct);
+        }
+
+        public Task<string> CurrentCompanyFileAsync(QbTarget target, CancellationToken ct) => inner.CurrentCompanyFileAsync(target, ct);
+
+        private void Hook()
+        {
+            if (Interlocked.Increment(ref _calls) == 1)
+            {
+                onFirstCall();
+            }
+        }
+    }
+
     /// <summary>QuickBooks has <paramref name="openFile"/> open, so a session on <paramref name="refusedFile"/> is refused.</summary>
     private sealed class RefusingGateway(IQbGateway inner, string refusedFile, string openFile) : IQbGateway
     {
@@ -209,6 +281,12 @@ public sealed class ScheduledCompanySweepTests : IDisposable
 
     private sealed class IdleProcessor : IJobProcessor
     {
-        public Task ProcessAsync(JobWorkItem item, CancellationToken ct) => Task.CompletedTask;
+        public Action? OnProcess { get; init; }
+
+        public Task ProcessAsync(JobWorkItem item, CancellationToken ct)
+        {
+            OnProcess?.Invoke();
+            return Task.CompletedTask;
+        }
     }
 }

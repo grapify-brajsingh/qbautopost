@@ -23,7 +23,11 @@ namespace QbAutopost.Api.Jobs;
 /// database is down) the source does not move, and without the second the worker would try again at once, forever.
 /// </para>
 /// </summary>
-public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource source, IClock clock)
+/// <param name="off">
+/// M17 §4.1: true when <c>Companies:ScheduledSync</c> is <c>off</c> with several companies; the schedule is then off as
+/// with <c>IntervalMinutes</c> 0 (no due time, no attempt). Null: never off. Read once per question; settings do not reload.
+/// </param>
+public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource source, IClock clock, Func<bool>? off = null)
 {
     private readonly object _gate = new();
     private DateTime? _workerStartedUtc;
@@ -38,8 +42,11 @@ public sealed class ListSyncSchedule(ListSyncSettings settings, IQbListsSource s
     /// </summary>
     public const int SingleCompany = 0;
 
-    /// <summary>False when <c>IntervalMinutes</c> is 0: the worker never syncs on its own.</summary>
-    public bool Enabled => settings.IntervalMinutes > 0;
+    /// <summary>
+    /// False when <c>IntervalMinutes</c> is 0, or when the multi-company sweep is <c>off</c>: the worker never syncs on
+    /// its own and <see cref="NextSyncUtc"/> is null.
+    /// </summary>
+    public bool Enabled => settings.IntervalMinutes > 0 && !(off?.Invoke() ?? false);
 
     public TimeSpan Interval => TimeSpan.FromMinutes(settings.IntervalMinutes);
 

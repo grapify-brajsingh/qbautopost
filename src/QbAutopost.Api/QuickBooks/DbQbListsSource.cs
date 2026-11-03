@@ -30,6 +30,9 @@ public sealed class DbQbListsSource(
     private readonly ConcurrentDictionary<int, CompanyLists> _lists = new();
     private volatile bool _loaded;
 
+    /// <summary>The default company's id when the lists were last loaded; a later id (bootstrap succeeded since) reloads.</summary>
+    private int _loadedDefaultId;
+
     public QbLists Current => Default.Current;
 
     public ListSyncRun? LastAttempt => Default.LastAttempt;
@@ -50,17 +53,18 @@ public sealed class DbQbListsSource(
     /// </summary>
     public async Task InitializeAsync(CancellationToken ct)
     {
+        var defaultId = DefaultId;
         try
         {
             var fileLists = ReadFileLists();
-            if (fileLists is not null && await store.ForCompany(DefaultId).ImportIfEmptyAsync(fileLists, clock.UtcNow, ct))
+            if (fileLists is not null && await store.ForCompany(defaultId).ImportIfEmptyAsync(fileLists, clock.UtcNow, ct))
             {
                 log.LogInformation(
                     "QuickBooks lists imported from {File} into the database ({Accounts} accounts, {Vendors} vendors, {Customers} customers)",
                     options.QbListsFile, fileLists.Accounts.Count, fileLists.Vendors.Count, fileLists.Customers.Count);
             }
 
-            var ids = new SortedSet<int> { DefaultId };
+            var ids = new SortedSet<int> { defaultId };
             if (companies is not null)
             {
                 ids.UnionWith((await companies.ListAsync(ct)).Select(c => c.Id));
@@ -71,6 +75,7 @@ public sealed class DbQbListsSource(
                 await ListsOf(id).LoadAsync(ct);
             }
 
+            Volatile.Write(ref _loadedDefaultId, defaultId);
             _loaded = true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -80,10 +85,13 @@ public sealed class DbQbListsSource(
     }
 
     /// <summary>
-    /// Loads the lists if the startup load failed. Called by <c>DatabaseGate</c>'s recovery when the database first
-    /// answers, which is before any saved-request route can post against empty lists. No timer (CLAUDE.md).
+    /// Loads the lists if the startup load failed, or if it ran before the default company had its id (bootstrap
+    /// failed then and has succeeded since: the default view moved to a company not loaded yet, whose rows bootstrap has
+    /// just backfilled). Called by <c>DatabaseGate</c>'s recovery, after bootstrap, when the database first answers,
+    /// which is before any saved-request route can post against empty lists. No timer (CLAUDE.md).
     /// </summary>
-    public Task EnsureLoadedAsync(CancellationToken ct) => _loaded ? Task.CompletedTask : InitializeAsync(ct);
+    public Task EnsureLoadedAsync(CancellationToken ct) =>
+        _loaded && Volatile.Read(ref _loadedDefaultId) == DefaultId ? Task.CompletedTask : InitializeAsync(ct);
 
     public Task RecordAsync(ListSyncRun run, QbLists? lists, CancellationToken ct) => Default.RecordAsync(run, lists, ct);
 

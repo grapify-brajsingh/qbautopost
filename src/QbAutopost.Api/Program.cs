@@ -301,7 +301,8 @@ builder.Services.AddSingleton<QbListSync>();
 builder.Services.AddSingleton(sp => new ListSyncSchedule(
     sp.GetRequiredService<IOptions<AppSettings>>().Value.QuickBooks.ListSync,
     sp.GetRequiredService<IQbListsSource>(),
-    sp.GetRequiredService<IClock>()));
+    sp.GetRequiredService<IClock>(),
+    () => sp.GetRequiredService<CompanySweepSource>().Off)); // M17 §4.1: ScheduledSync=off stops the sweep
 builder.Services.AddSingleton<BatchUndo>();
 builder.Services.AddSingleton<QbHealth>();
 builder.Services.AddSingleton(sp =>

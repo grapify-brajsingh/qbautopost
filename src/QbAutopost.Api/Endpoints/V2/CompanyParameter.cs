@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http.Features;
 using QbAutopost.Core.Companies;
 
 namespace QbAutopost.Api.Endpoints.V2;
@@ -82,19 +83,30 @@ public static class CompanyParameter
     }
 
     /// <summary>
-    /// The JSON body of a route that may carry <c>company</c>: null when there is none (no content). False when it is
-    /// not JSON (a 400 detail in <paramref name="error"/>).
+    /// The JSON body of a route that may carry <c>company</c>: null when there is none (the server says the request can
+    /// have no body, or it has zero bytes or only white space). False when it is not JSON (a 400 detail). The body is
+    /// read to its end, never judged by headers alone: an HTTP/2 or HTTP/3 body may come without a length or
+    /// <c>Transfer-Encoding</c>, and dropping it would sync the default company instead of the one asked for. Its size is
+    /// bounded by the request size limits.
     /// </summary>
     public static async Task<(bool Ok, JsonElement? Body, string? Error)> ReadBodyAsync(HttpRequest request, CancellationToken ct)
     {
-        if (request.ContentLength is 0 || (request.ContentLength is null && !request.Headers.TransferEncoding.Any()))
+        if (request.HttpContext.Features.Get<IHttpRequestBodyDetectionFeature>() is { CanHaveBody: false })
+        {
+            return (true, null, null);
+        }
+
+        using var buffer = new MemoryStream();
+        await request.Body.CopyToAsync(buffer, ct);
+        var bytes = buffer.ToArray();
+        if (bytes.All(b => b is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n'))
         {
             return (true, null, null);
         }
 
         try
         {
-            using var document = await JsonDocument.ParseAsync(request.Body, cancellationToken: ct);
+            using var document = JsonDocument.Parse(bytes);
             return (true, document.RootElement.Clone(), null);
         }
         catch (JsonException)

@@ -53,6 +53,9 @@ public sealed class CompanySweepSource(
 
     public string Mode => settings.Value.Companies.ScheduledSync;
 
+    /// <summary>Several companies and <c>Companies:ScheduledSync</c> = <c>off</c>: no scheduled sync at all (no slot, no read).</summary>
+    public bool Off => Enabled && Mode == ScheduledSyncModes.Off;
+
     public async Task<IReadOnlyList<CompanyContext>> SelectAsync(CancellationToken ct)
     {
         if (companies is null)

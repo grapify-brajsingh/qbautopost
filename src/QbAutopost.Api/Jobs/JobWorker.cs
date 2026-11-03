@@ -50,6 +50,9 @@ public sealed class JobWorker(
 
     private readonly Func<TimeSpan, CancellationToken, Task> _delay = delay ?? Task.Delay;
 
+    /// <summary>M17 §4.7: the multi-company sweep in progress, or null. Only the worker's loop reads or writes it.</summary>
+    private SweepCursor? _sweep;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         schedule.WorkerStarted();
@@ -73,8 +76,9 @@ public sealed class JobWorker(
                 stoppingToken.ThrowIfCancellationRequested();
 
                 // At most MaxWait at a time: Task.Delay refuses more than ~24.8 days (a future FinishedUtc from a
-                // skewed clock gets there), and the loop re-checks the due time on every wake anyway.
-                var wait = schedule.TimeUntilDue() ?? TimeSpan.Zero;
+                // skewed clock gets there), and the loop re-checks the due time on every wake anyway. A sweep in
+                // progress is due at once: its next company follows whatever is waiting.
+                var wait = _sweep is not null ? TimeSpan.Zero : schedule.TimeUntilDue() ?? TimeSpan.Zero;
                 wait = wait > MaxWait ? MaxWait : wait;
                 var delayFor = fallback ? Task.Delay : _delay;
                 fallback = false;
@@ -106,7 +110,7 @@ public sealed class JobWorker(
                     continue; // re-check: another item may be waiting, and an attempt of any trigger moves the due time
                 }
 
-                if (schedule.TimeUntilDue() is { } left && left > TimeSpan.Zero)
+                if (_sweep is null && schedule.TimeUntilDue() is { } left && left > TimeSpan.Zero)
                 {
                     continue; // woke early, or the due time moved while waiting
                 }
@@ -117,6 +121,7 @@ public sealed class JobWorker(
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             // Host is stopping; a job left in analysing/posting is fixed by startup recovery.
+            CancelSweep(stoppingToken);
         }
     }
 
@@ -165,7 +170,7 @@ public sealed class JobWorker(
     {
         if (companies is { Enabled: true } sweep)
         {
-            return await RunSweepAsync(sweep, release, stoppingToken);
+            return await RunSweepStepAsync(sweep, release, stoppingToken);
         }
 
         var warnOnFailure = schedule.LastKnownWasOk;
@@ -248,74 +253,128 @@ public sealed class JobWorker(
     }
 
     /// <summary>
-    /// M17 §4.7: one scheduled sweep, with the slot held throughout. The presence check runs once; QuickBooks not open is
-    /// a skipped <c>quickbooks-not-open</c> row for every selected company. Otherwise each company is synced in id order
-    /// from its own file into its own lists; a company that fails or cannot be opened (its skipped row is recorded by
-    /// <see cref="QbListSync"/>) is logged and the sweep goes on. Ok only when every selected company synced. Nobody
-    /// joins a sweep: a dashboard sync of one company queues its own flight behind it.
+    /// M17 §4.7: one step of a scheduled sweep, with the slot held for that step only. The first step begins the
+    /// attempt (nobody joins it), chooses the companies and checks QuickBooks once: not open is a skipped
+    /// <c>quickbooks-not-open</c> row for every selected company and ends the attempt. Otherwise each step syncs the next
+    /// company of the cursor from its own file into its own lists, then gives the slot back, so a post is refused for one
+    /// company's sync at most and anything queued meanwhile (a job, a Sync now) runs before the next company. A company
+    /// that fails or cannot be opened (its skipped row is recorded by <see cref="QbListSync"/>) is logged and the sweep
+    /// goes on. The attempt ends with the last company: Ok only when every selected company synced.
     /// </summary>
-    private async Task<bool> RunSweepAsync(CompanySweepSource sweep, Action release, CancellationToken stoppingToken)
+    private async Task<bool> RunSweepStepAsync(CompanySweepSource sweep, Action release, CancellationToken stoppingToken)
     {
-        var warnOnFailure = schedule.LastKnownWasOk;
-        if (schedule.BeginAttempt(null) is not { } attempt)
+        if (_sweep is null)
         {
-            log.LogDebug("Scheduled list sync deferred: a dashboard sync is queued");
-            return false;
-        }
+            var warnOnFailure = schedule.LastKnownWasOk;
+            if (schedule.BeginAttempt(null) is not { } attempt)
+            {
+                log.LogDebug("Scheduled list sync deferred: a dashboard sync is queued");
+                return false;
+            }
 
-        var outcome = ListSyncOutcome.Failed;
-        try
-        {
-            var selected = await sweep.SelectAsync(stoppingToken);
+            IReadOnlyList<CompanyContext> selected;
+            try
+            {
+                selected = await sweep.SelectAsync(stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                release();
+                attempt.TrySetCanceled(stoppingToken);
+                schedule.EndAttempt(ListSyncOutcome.Failed);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // The companies could not be read (the database is down): nothing was synced. Never crash the loop.
+                log.LogError(ex, "Scheduled list sync: the companies to sync could not be chosen");
+                release();
+                attempt.TrySetException(ex);
+                _ = attempt.Task.Exception;
+                schedule.EndAttempt(ListSyncOutcome.Failed);
+                return true;
+            }
+
             if (selected.Count == 0)
             {
-                outcome = ListSyncOutcome.Ok;
                 log.LogInformation("Scheduled list sync ({Mode}): no company to sync", sweep.Mode);
+                EndSweep(attempt, release, ListSyncOutcome.Ok);
+                return true;
             }
-            else if (!ListSyncGuard.IsOpen(presence, log))
+
+            if (!ListSyncGuard.IsOpen(presence, log))
             {
-                outcome = ListSyncOutcome.Skipped;
                 foreach (var company in selected)
                 {
                     await RecordNotOpenAsync(company, stoppingToken);
                 }
 
-                LogNotOk(warnOnFailure, outcome, ListSyncReasons.QuickBooksNotOpen, $"QuickBooks is not running in this session ({selected.Count} companies)");
+                LogNotOk(warnOnFailure, ListSyncOutcome.Skipped, ListSyncReasons.QuickBooksNotOpen, $"QuickBooks is not running in this session ({selected.Count} companies)");
+                EndSweep(attempt, release, ListSyncOutcome.Skipped);
+                return true;
             }
-            else
+
+            _sweep = new SweepCursor(attempt, selected, warnOnFailure);
+        }
+
+        var cursor = _sweep;
+        var next = cursor.Remaining.Dequeue();
+        try
+        {
+            if (await SyncCompanyAsync(next, cursor.WarnOnFailure, stoppingToken))
             {
-                var synced = 0;
-                foreach (var company in selected)
-                {
-                    synced += await SyncCompanyAsync(company, warnOnFailure, stoppingToken) ? 1 : 0;
-                }
-
-                outcome = synced == selected.Count ? ListSyncOutcome.Ok : ListSyncOutcome.Failed;
+                cursor.Synced++;
             }
-
-            release();
-            attempt.TrySetResult(null);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
-            release();
-            attempt.TrySetCanceled(stoppingToken);
+            CancelSweep(stoppingToken);
             throw;
         }
-        catch (Exception ex)
+
+        if (cursor.Remaining.Count == 0)
         {
-            // The companies could not be read (the database is down): nothing was synced. Never crash the loop.
-            log.LogError(ex, "Scheduled list sync: the companies to sync could not be chosen");
-            release();
-            attempt.TrySetException(ex);
-            _ = attempt.Task.Exception;
-        }
-        finally
-        {
-            schedule.EndAttempt(outcome);
+            _sweep = null;
+            EndSweep(cursor.Attempt, release, cursor.Synced == cursor.Selected ? ListSyncOutcome.Ok : ListSyncOutcome.Failed);
         }
 
         return true;
+    }
+
+    /// <summary>Frees the slot, then publishes the end of the attempt (nobody joins a sweep) and moves the due time.</summary>
+    private void EndSweep(TaskCompletionSource<ListSyncCompletion?> attempt, Action release, ListSyncOutcome outcome)
+    {
+        release();
+        attempt.TrySetResult(null);
+        schedule.EndAttempt(outcome);
+    }
+
+    /// <summary>The host is stopping with a sweep part done: the attempt ends cancelled; the next start sweeps again.</summary>
+    private void CancelSweep(CancellationToken stoppingToken)
+    {
+        if (_sweep is not { } cursor)
+        {
+            return;
+        }
+
+        _sweep = null;
+        cursor.Attempt.TrySetCanceled(stoppingToken);
+        schedule.EndAttempt(ListSyncOutcome.Failed);
+    }
+
+    /// <summary>The sweep in progress: the companies still to sync, one per step. Touched only by the worker's loop.</summary>
+    private sealed class SweepCursor(
+        TaskCompletionSource<ListSyncCompletion?> attempt, IReadOnlyList<CompanyContext> selected, bool warnOnFailure)
+    {
+        public TaskCompletionSource<ListSyncCompletion?> Attempt { get; } = attempt;
+
+        public Queue<CompanyContext> Remaining { get; } = new(selected);
+
+        public int Selected { get; } = selected.Count;
+
+        public bool WarnOnFailure { get; } = warnOnFailure;
+
+        public int Synced { get; set; }
     }
 
     /// <summary>One company of a sweep. False when it did not sync; its row was recorded by <see cref="QbListSync"/>.</summary>

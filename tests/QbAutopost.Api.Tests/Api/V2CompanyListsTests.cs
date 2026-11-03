@@ -187,6 +187,39 @@ public sealed class V2CompanyListsTests : IDisposable
     }
 
     [Fact]
+    public async Task Should_ReadTheBodysCompany_When_TheBodyIsStreamedWithoutALength()
+    {
+        SeedCompanies();
+        using var client = Editor();
+        using var content = new StreamedContent($$"""{"company": {{TakomaId}}}""");
+
+        using var response = await client.PostAsync(Sync, content);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("Automobile Expense", AccountNames(await SavedRequestTestHost.BodyOf(response)));
+        Assert.All(Gateway.Targets, t => Assert.Equal(TakomaFile, t));
+    }
+
+    [Fact]
+    public async Task Should_ShowNoNextSync_When_ScheduledSyncIsOff()
+    {
+        using var host = _factory.WithSettings(new Dictionary<string, string?>
+        {
+            ["Companies:RootFolder"] = Root,
+            ["Companies:ScheduledSync"] = "off",
+            ["QuickBooks:ListSync:IntervalMinutes"] = "30",
+        });
+        using var client = host.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", _factory.Users.TokenFor(DashboardRoles.Editor));
+
+        using var response = await client.GetAsync(Lists);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(JsonValueKind.Null, (await SavedRequestTestHost.BodyOf(response)).GetProperty("nextSyncUtc").ValueKind);
+    }
+
+    [Fact]
     public async Task Should_UseTheDefaultCompany_When_NoCompanyParameter()
     {
         SeedCompanies();
@@ -354,5 +387,26 @@ public sealed class V2CompanyListsTests : IDisposable
         Assert.Equal(HttpStatusCode.OK, status);
         Assert.Empty(page.GetProperty("items").EnumerateArray());
         Assert.Equal(0, Total(page));
+    }
+
+    /// <summary>JSON with no Content-Length and no Transfer-Encoding header, as an HTTP/2 or HTTP/3 body may arrive.</summary>
+    private sealed class StreamedContent : HttpContent
+    {
+        private readonly byte[] _bytes;
+
+        public StreamedContent(string json)
+        {
+            _bytes = Encoding.UTF8.GetBytes(json);
+            Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        }
+
+        protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context) =>
+            stream.WriteAsync(_bytes, 0, _bytes.Length);
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
     }
 }
