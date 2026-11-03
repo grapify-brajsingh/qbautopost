@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using QbAutopost.Api.Configuration;
+using QbAutopost.Api.Health;
 using QbAutopost.Api.QuickBooks;
 
 namespace QbAutopost.Api.Logging;
@@ -66,6 +67,28 @@ public static class StartupLog
         {
             log.LogWarning("Rules file {RulesFile} is {State}: every job will fail until it exists", s.Company.RulesFile, State(s.Company.RulesFile));
         }
+    }
+
+    /// <summary>
+    /// M17 §3: the company root, how many companies and how many active ones are not approved. A null summary with a
+    /// root set means there is no database (or its read failed, which the caller logged): the root is then ignored.
+    /// </summary>
+    public static void WriteCompanies(ILogger log, CompaniesSettings settings, CompanySummary? summary)
+    {
+        if (!settings.Configured)
+        {
+            return;
+        }
+
+        if (summary is null)
+        {
+            log.LogWarning("Companies:RootFolder is ignored without a database; {Root} is not scanned", settings.RootFolder);
+            return;
+        }
+
+        log.LogInformation(
+            "Companies: root {Root} ({RootState}), {Count} companies, {NotApproved} not approved",
+            settings.RootFolder, summary.RootReachable ? Found : "missing", summary.Count, summary.NotApproved);
     }
 
     // M15 §4: counts only, never the names.

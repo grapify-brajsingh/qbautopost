@@ -254,4 +254,42 @@ public sealed class ReadinessChecksTests : IDisposable
             ["settings", "rules", "qb-lists", "logFolder", "worker"],
             view.Checks.Select(c => c.Name));
     }
+
+    [Fact]
+    public void Should_AddNoCompaniesCheck_When_RootFolderIsEmpty()
+    {
+        var view = Readiness.Evaluate(Ready(), workerStarted: true, ListsOf(Ready()), companies: new CompanySummary(false, false, 0, 0));
+
+        Assert.DoesNotContain(view.Checks, c => c.Name == "companies");
+        Assert.DoesNotContain(Readiness.Evaluate(Ready(), workerStarted: true, ListsOf(Ready())).Checks, c => c.Name == "companies");
+    }
+
+    [Fact]
+    public void Should_WarnWithCounts_When_SomeCompaniesAreNotApproved()
+    {
+        var settings = Ready();
+        settings.Companies.RootFolder = @"D:\QB\Companies";
+
+        var view = Readiness.Evaluate(settings, workerStarted: true, ListsOf(settings), companies: new CompanySummary(true, true, 3, 1));
+
+        var check = Check(view, "companies");
+        Assert.Equal(Readiness.Warning, check.Severity);
+        Assert.Equal(@"root D:\QB\Companies: 3 companies, 1 not approved", check.Message);
+        Assert.True(view.Ok);
+    }
+
+    [Fact]
+    public void Should_Warn_When_RootFolderIsUnreachable()
+    {
+        var settings = Ready();
+        settings.Companies.RootFolder = @"D:\QB\Gone";
+
+        var view = Readiness.Evaluate(settings, workerStarted: true, ListsOf(settings), companies: new CompanySummary(true, false, 0, 0));
+
+        var check = Check(view, "companies");
+        Assert.False(check.Ok);
+        Assert.Equal(Readiness.Warning, check.Severity);
+        Assert.Contains(@"D:\QB\Gone", check.Message, StringComparison.Ordinal);
+        Assert.True(view.Ok);
+    }
 }

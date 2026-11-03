@@ -523,6 +523,24 @@ try
         await app.Services.GetRequiredService<DbQbListsSource>().InitializeAsync(app.Lifetime.ApplicationStopping);
     }
 
+    // M17 §3: the company root, count and unapproved count (or "ignored without a database"). A store error is logged
+    // and the line skipped; it never stops startup.
+    try
+    {
+        QbAutopost.Api.Health.CompanySummary? companySummary = null;
+        if (database.Configured && settings.Companies.Configured)
+        {
+            var all = await app.Services.GetRequiredService<QbAutopost.Core.Companies.ICompanyStore>().ListAsync(app.Lifetime.ApplicationStopping);
+            companySummary = QbAutopost.Api.Health.CompanySummary.Of(settings.Companies.RootFolder, all);
+        }
+
+        QbAutopost.Api.Logging.StartupLog.WriteCompanies(app.Logger, settings.Companies, companySummary);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        app.Logger.LogWarning(ex, "Companies could not be counted for the start-up line");
+    }
+
     app.Lifetime.ApplicationStarted.Register(() =>
         app.Logger.LogInformation("QbAutopost ready, listening on {Urls}", string.Join(", ", app.Urls)));
     app.Lifetime.ApplicationStopping.Register(() =>

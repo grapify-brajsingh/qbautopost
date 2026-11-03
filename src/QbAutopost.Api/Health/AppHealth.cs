@@ -8,6 +8,7 @@ using QbAutopost.Api.Database;
 using QbAutopost.Api.Jobs;
 using QbAutopost.Api.QuickBooks;
 using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.Jobs;
 
 namespace QbAutopost.Api.Health;
@@ -61,7 +62,9 @@ public sealed class AppHealth(
     JobQueue queue,
     IJobStore store,
     DatabaseGate database,
-    IQbListsSource lists)
+    IQbListsSource lists,
+    ICompanyStore? companies = null,
+    ILogger<AppHealth>? log = null)
 {
     /// <summary>Process start, read once: it never changes and reading it costs a syscall.</summary>
     private static readonly DateTime ProcessStartedUtc = StartTimeUtc();
@@ -95,8 +98,34 @@ public sealed class AppHealth(
     }
 
     /// <summary>Readiness (FR-A-2) shares the lifetime signal: the worker starts with the host.</summary>
-    public ReadinessView Ready() =>
-        Readiness.Evaluate(settings.Value, lifetime.ApplicationStarted.IsCancellationRequested, lists, database);
+    public async Task<ReadinessView> ReadyAsync(CancellationToken ct) =>
+        Readiness.Evaluate(
+            settings.Value, lifetime.ApplicationStarted.IsCancellationRequested, lists, database,
+            await CompanySummaryAsync(ct));
+
+    /// <summary>
+    /// M17 §3: null (no check) when no root is set, there is no store, or the store cannot be read (logged, never
+    /// thrown: a health poll must not become a 500).
+    /// </summary>
+    public async Task<CompanySummary?> CompanySummaryAsync(CancellationToken ct)
+    {
+        var root = settings.Value.Companies;
+        if (!root.Configured || companies is null || !database.IsReady)
+        {
+            return null;
+        }
+
+        try
+        {
+            var all = await companies.ListAsync(ct);
+            return CompanySummary.Of(root.RootFolder, all);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log?.LogWarning(ex, "Companies could not be read for the readiness check");
+            return null;
+        }
+    }
 
     internal static string BuildVersion =>
         typeof(AppHealth).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
