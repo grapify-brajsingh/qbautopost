@@ -22,7 +22,7 @@ public sealed class MultiCompanyUpgradeTests(PostgresFixture postgres) : IClassF
         """
         insert into saved_requests (status, source, transaction_count, current_version, original_body, original_sha256, canonical_sha256,
             needs_attention, duplicate_reasons, row_fingerprints, created_utc, created_by, updated_utc, updated_by, row_version)
-        values ('received', 'api-client:n8n', 1, 1, '{}', repeat('a', 64), repeat('b', 64),
+        values ('pending','api-client:n8n', 1, 1, '{}', repeat('a', 64), repeat('b', 64),
             false, '{}', '{}', now(), 'test', now(), 'test', 1)
         """,
         """
@@ -105,19 +105,30 @@ public sealed class MultiCompanyUpgradeTests(PostgresFixture postgres) : IClassF
             using var lists = await client.GetAsync("/api/v2/quickbooks/lists");
 
             Assert.Equal((HttpStatusCode.OK, HttpStatusCode.OK), (requests.StatusCode, lists.StatusCode));
-            // Ruling B11: every field the list had before M17 is still there; new fields are allowed.
-            var body = await requests.Content.ReadFromJsonAsync<JsonElement>();
-            var item = body.GetProperty("items")[0];
-            Assert.All(
-                new[] { "id", "publicRef", "status", "rowVersion", "source", "reference", "controlTotal", "transactionCount", "currentVersion", "needsAttention" },
-                field => Assert.True(item.TryGetProperty(field, out _), field));
-            Assert.Equal(1, body.GetProperty("total").GetInt32());
+            // Ruling B11: every field the pre-M17 views had is still there (golden names from 68c330c); new fields are allowed.
+            var baseline = JsonDocument.Parse(await File.ReadAllTextAsync(Fixtures.PathOf("multi-company", "pre-m17-fields.json"))).RootElement;
+            var page = await requests.Content.ReadFromJsonAsync<JsonElement>();
+            AssertHasAll(baseline, "savedRequestsPage", page);
+            Assert.Equal(1, page.GetProperty("total").GetInt32());
+            AssertHasAll(baseline, "savedRequestListItem", page.GetProperty("items")[0]);
+
+            var body = await lists.Content.ReadFromJsonAsync<JsonElement>();
+            AssertHasAll(baseline, "qbLists", body);
+            if (body.GetProperty("lastSync") is { ValueKind: JsonValueKind.Object } lastSync)
+            {
+                AssertHasAll(baseline, "lastSync", lastSync);
+            }
         }
         finally
         {
             TestDatabase.Release(connectionString);
         }
     }
+
+    private static void AssertHasAll(JsonElement baseline, string set, JsonElement actual) =>
+        Assert.All(
+            baseline.GetProperty(set).EnumerateArray().Select(f => f.GetString()!),
+            field => Assert.True(actual.TryGetProperty(field, out _), $"{set}: missing '{field}'"));
 
     /// <summary>One row in each table M17 adds company_id to, company_id left null as before the upgrade.</summary>
     private static async Task SeedOldRowsAsync(string connectionString)

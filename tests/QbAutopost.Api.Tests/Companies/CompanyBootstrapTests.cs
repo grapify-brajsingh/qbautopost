@@ -72,6 +72,47 @@ public sealed class CompanyBootstrapTests : IDisposable
     }
 
     [Fact]
+    public async Task Should_NameTheDefaultCompany_When_CompanyNameIsEmpty()
+    {
+        _settings.Company.Name = "";
+
+        var company = (await _bootstrap.RunAsync(default)).Company;
+
+        Assert.Equal("Default company", company.DisplayName);
+    }
+
+    [Fact]
+    public async Task Should_LeaveResolverWithoutDefault_When_RunFails()
+    {
+        var options = Options.Create(_settings);
+        var failing = new CompanyBootstrap(new FailingStore(), options, _resolver, new FixedClock(), NullLogger<CompanyBootstrap>.Instance);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => failing.RunAsync(default));
+
+        Assert.False(_resolver.HasDefault);
+        Assert.Null(await _resolver.AutoAssignAsync(default));
+    }
+
+    private sealed class FailingStore : ICompanyStore
+    {
+        public Task<DefaultCompanyResult> EnsureDefaultAsync(NewDefaultCompany company, DateTime nowUtc, CancellationToken ct) =>
+            throw new InvalidOperationException("database down");
+
+        public Task<IReadOnlyList<Company>> ListAsync(CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<Company?> GetAsync(int id, CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<ScanApplied> ApplyScanAsync(ScanPlan plan, string actor, DateTime nowUtc, CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<CompanyChange> UpdateAsync(int id, int expectedRowVersion, CompanyPatch patch, string actor, DateTime nowUtc, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<CompanyChange> RecordAccessAsync(int id, CompanyAccessCheck check, string actor, CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<DateTime?> LastScanUtcAsync(CancellationToken ct) => throw new NotSupportedException();
+    }
+
+    [Fact]
     public async Task Should_DoNothing_When_RunTwice()
     {
         var first = await _bootstrap.RunAsync(default);

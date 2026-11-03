@@ -15,6 +15,9 @@ public sealed class CompanyResolver(IOptions<AppSettings> settings, CompanyDataF
 
     public void UseDefaultId(int id) => Volatile.Write(ref _defaultId, id);
 
+    /// <summary>False until bootstrap has set the default id; a context with Id 0 is never handed out (callers treat null as "no company").</summary>
+    public bool HasDefault => Volatile.Read(ref _defaultId) != 0;
+
     public bool MultiCompany => settings.Value.Companies.Configured && store is not null;
 
     public CompanyContext Default
@@ -33,7 +36,7 @@ public sealed class CompanyResolver(IOptions<AppSettings> settings, CompanyDataF
     {
         if (store is null)
         {
-            return companyId == Volatile.Read(ref _defaultId) ? Default : null;
+            return HasDefault && companyId == Volatile.Read(ref _defaultId) ? Default : null;
         }
 
         var company = await store.GetAsync(companyId, ct);
@@ -42,6 +45,11 @@ public sealed class CompanyResolver(IOptions<AppSettings> settings, CompanyDataF
 
     public async Task<CompanyContext?> AutoAssignAsync(CancellationToken ct)
     {
+        if (!HasDefault)
+        {
+            return null;
+        }
+
         if (!MultiCompany)
         {
             return Default;

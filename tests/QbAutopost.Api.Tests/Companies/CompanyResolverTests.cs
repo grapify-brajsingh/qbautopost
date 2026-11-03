@@ -95,6 +95,7 @@ public sealed class CompanyResolverTests : IDisposable
     public async Task Should_AutoAssignTheOnlyActiveCompany_When_OneIsActive()
     {
         var resolver = Resolver();
+        resolver.UseDefaultId(1);
         _store.Add(Scanned(2));
         _store.Add(Scanned(3, CompanyState.Missing));
 
@@ -107,10 +108,35 @@ public sealed class CompanyResolverTests : IDisposable
     public async Task Should_AutoAssignNothing_When_TwoCompaniesAreActive()
     {
         var resolver = Resolver();
+        resolver.UseDefaultId(1);
         _store.Add(Scanned(2));
         _store.Add(Scanned(3));
 
         Assert.Null(await resolver.AutoAssignAsync(default));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Should_HandOutNoContext_When_DefaultIdIsNotKnownYet(bool rootFolderSet)
+    {
+        if (!rootFolderSet)
+        {
+            _settings.Companies.RootFolder = "";
+        }
+
+        var resolver = Resolver();
+        _store.Add(Scanned(2));
+
+        Assert.Equal((false, null), (resolver.HasDefault, await resolver.AutoAssignAsync(default)));
+    }
+
+    [Fact]
+    public async Task Should_HandOutNoDefaultContext_When_NoDatabaseAndDefaultIdIsNotKnownYet()
+    {
+        var resolver = Resolver(withStore: false);
+
+        Assert.Null(await resolver.GetAsync(0, default));
     }
 
     [Fact]

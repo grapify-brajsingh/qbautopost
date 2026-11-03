@@ -1,0 +1,11 @@
+{
+  "_source": "Field names of the v2 views at commit 68c330c (before M17): SavedRequestSummaryV2View, PageView, QbListsViewV2, LastSyncView. Ruling B11: every field here must stay present with the same value; new fields are allowed.",
+  "savedRequestsPage": ["items", "page", "pageSize", "total"],
+  "savedRequestListItem": [
+    "id", "publicRef", "status", "rowVersion", "source", "reference", "controlTotal", "transactionCount", "currentVersion",
+    "needsAttention", "duplicate", "validation", "postId", "created", "updated", "allowedActions", "pushId", "email",
+    "historyCount", "validationSummary", "postSummary", "skipCount", "upload"
+  ],
+  "qbLists": ["syncedUtc", "accounts", "vendors", "customers", "lastSync", "nextSyncUtc"],
+  "lastSync": ["trigger", "outcome", "reason", "startedUtc", "finishedUtc", "requestedBy", "message"]
+}

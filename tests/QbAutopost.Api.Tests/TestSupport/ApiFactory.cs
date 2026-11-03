@@ -203,6 +203,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             services.AddSingleton<ISavedRequestStore>(Store);
             services.RemoveAll<QbAutopost.Core.Companies.ICompanyStore>();
             services.AddSingleton<QbAutopost.Core.Companies.ICompanyStore>(Companies);
+            services.AddSingleton<QbAutopost.Api.Companies.CompanyBootstrap>();
+            services.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter, FakeCompanyBootstrapFilter>();
             services.RemoveAll<DatabaseGate>();
             services.AddSingleton(_fakeGate);
             services.RemoveAll<IUserGate>();
@@ -264,4 +266,18 @@ public static class ApiClientExtensions
     }
 
     private static string FolderReaderJobId(string folder) => FolderReader.JobIdOf(folder);
+}
+
+/// <summary>
+/// A host without PostgreSQL never runs <c>CompanyBootstrap</c> (it is registered only with a database, ruling B9), so
+/// this runs it against the <see cref="FakeCompanyStore"/> when the pipeline is built: the default company gets a real
+/// id, as in production. A startup filter, not a hosted service, so <c>JobWorker</c> stays the only background service.
+/// </summary>
+internal sealed class FakeCompanyBootstrapFilter(QbAutopost.Api.Companies.CompanyBootstrap bootstrap) : Microsoft.AspNetCore.Hosting.IStartupFilter
+{
+    public Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> Configure(Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> next)
+    {
+        bootstrap.RunAsync(CancellationToken.None).GetAwaiter().GetResult();
+        return next;
+    }
 }
