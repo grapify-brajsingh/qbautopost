@@ -1,5 +1,6 @@
 using QbAutopost.Api.Jobs;
 using QbAutopost.Core.Api;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.SavedRequests;
 
 namespace QbAutopost.Api.SavedRequests;
@@ -21,6 +22,9 @@ public sealed class SavedRequestValidator(DirectPostRunner runner, ILogger<Saved
     /// <summary>Shown to callers when the rules file is missing (spec 10.8).</summary>
     public const string RulesMissing = "rules file missing";
 
+    /// <summary>M17 spec 4.6: shown when the statement has no company to validate against (used from T-1712).</summary>
+    public const string CompanyRequired = "company required";
+
     /// <summary>
     /// Dashboard v2 spec 6.4: the v1 and the v2 judgement of one version, from the same inputs. v1 plans with no row
     /// set aside, exactly as <see cref="Validate"/> always has. v2 plans with the rows marked <c>post: false</c> set
@@ -28,25 +32,32 @@ public sealed class SavedRequestValidator(DirectPostRunner runner, ILogger<Saved
     /// snapshot as it is.
     /// </summary>
     /// <param name="savedRequestId">For the log line only; null while a new request is being saved.</param>
+    /// <param name="company">
+    /// M17 §4.7: the statement's company, whose rules and ledger the plan reads. Null is the default company
+    /// (TRANSITIONAL until T-1712, ruling B2: null will mean "no company").
+    /// </param>
     public (ValidationSnapshot V1, ValidationSnapshot V2) ValidateBoth(
-        PayloadRead read, NotPostedRead notPosted, int versionNumber, DateTime nowUtc, long? savedRequestId = null)
+        PayloadRead read, NotPostedRead notPosted, int versionNumber, DateTime nowUtc, long? savedRequestId = null,
+        CompanyContext? company = null)
     {
-        var v1 = Validate(read, versionNumber, nowUtc, savedRequestId);
+        var v1 = Validate(read, versionNumber, nowUtc, savedRequestId, company: company);
         if (notPosted.Errors.Count > 0)
         {
             // v1's read errors come first, as the v2 detail lists them (spec 6.4, Display).
             return (v1, Snapshot(ValidationState.Unreadable, versionNumber, nowUtc, [.. read.Errors, .. notPosted.Errors]));
         }
 
-        return (v1, Validate(read, versionNumber, nowUtc, savedRequestId, notPosted.Indexes));
+        return (v1, Validate(read, versionNumber, nowUtc, savedRequestId, notPosted.Indexes, company));
     }
 
     /// <param name="savedRequestId">For the log line only; null while a new request is being saved.</param>
     /// <param name="notPosted">
     /// Dashboard v2: the rows to set aside as <c>not-to-post</c>. Null (the default) plans every row, as v1 does.
     /// </param>
+    /// <param name="company">The statement's company; null is the default company (TRANSITIONAL until T-1712).</param>
     public ValidationSnapshot Validate(
-        PayloadRead read, int versionNumber, DateTime nowUtc, long? savedRequestId = null, IReadOnlySet<int>? notPosted = null)
+        PayloadRead read, int versionNumber, DateTime nowUtc, long? savedRequestId = null, IReadOnlySet<int>? notPosted = null,
+        CompanyContext? company = null)
     {
         if (!read.Readable)
         {
@@ -62,7 +73,8 @@ public sealed class SavedRequestValidator(DirectPostRunner runner, ILogger<Saved
         DirectPlan plan;
         try
         {
-            plan = runner.Plan(notPosted is null ? request.ToDirectRequest() : request.ToDirectRequest(notPosted));
+            var direct = notPosted is null ? request.ToDirectRequest() : request.ToDirectRequest(notPosted);
+            plan = company is null ? runner.Plan(direct) : runner.Plan(direct, company);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

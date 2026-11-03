@@ -1,0 +1,7 @@
+{
+  "reference": "t1708-takoma-2026-08",
+  "controlTotal": 61.25,
+  "transactions": [
+    { "externalId": "row-1", "kind": "Check", "date": "2026-08-05", "amount": 61.25, "account": "Chase Checking 4521", "payee": "KWIK FILL 2210", "memo": "KWIK FILL 2210", "last4": "4521" }
+  ]
+}

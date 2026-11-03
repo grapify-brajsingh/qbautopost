@@ -1,4 +1,6 @@
 using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Companies;
+using QbAutopost.Core.Gateway;
 using QbAutopost.Core.Mapping;
 using QbAutopost.Core.Models;
 using QbAutopost.Core.QbXml;
@@ -28,7 +30,27 @@ public sealed class QbListSync(PipelineOptions options, IQbGateway gateway, IClo
         (await SyncWithRunAsync(trigger, requestedBy, ct)).Result;
 
     /// <summary>As <see cref="SyncAsync"/>, and also returns the run it recorded and the lists it stored (§4.5).</summary>
-    public async Task<ListSyncCompletion> SyncWithRunAsync(ListSyncTrigger trigger, string? requestedBy, CancellationToken ct)
+    public Task<ListSyncCompletion> SyncWithRunAsync(ListSyncTrigger trigger, string? requestedBy, CancellationToken ct) =>
+        SyncWithRunAsync(options.RulesFile, gateway, AuditFolder, trigger, requestedBy, ct);
+
+    /// <summary>
+    /// M17 §4.7: the sync of one company: its rules decide <c>MissingInRules</c>, its file is the one queried, and a
+    /// non-default company keeps its audit copies beside its ledger. QuickBooks having another file open is recorded as
+    /// <c>skipped</c> (<see cref="ListSyncReasons.CompanyFileOpenElsewhere"/>) and rethrown; it is never retried here.
+    /// </summary>
+    public Task<ListSyncCompletion> SyncWithRunAsync(
+        CompanyContext company, ListSyncTrigger trigger, string? requestedBy, CancellationToken ct) =>
+        // T-1709: per-company lists store and history; until then the runs and lists go to the one store.
+        SyncWithRunAsync(
+            company.RulesFile,
+            gateway.For(company.Target),
+            company.IsDefault ? AuditFolder : Path.Combine(Path.GetDirectoryName(Path.GetFullPath(company.LedgerFile))!, AuditDir),
+            trigger,
+            requestedBy,
+            ct);
+
+    private async Task<ListSyncCompletion> SyncWithRunAsync(
+        string rulesFile, IQbGateway target, string auditFolder, ListSyncTrigger trigger, string? requestedBy, CancellationToken ct)
     {
         var started = clock.UtcNow;
         string? reason = null;
@@ -37,7 +59,7 @@ public sealed class QbListSync(PipelineOptions options, IQbGateway gateway, IClo
             Rules rules;
             try
             {
-                rules = Rules.Load(options.RulesFile);
+                rules = Rules.Load(rulesFile);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -46,10 +68,10 @@ public sealed class QbListSync(PipelineOptions options, IQbGateway gateway, IClo
             }
 
             var request = QbListQuery.Build(options.QbXmlVersion);
-            AtomicFile.WriteAllText(Path.Combine(AuditFolder, "sync-lists.request.qbxml"), request);
+            AtomicFile.WriteAllText(Path.Combine(auditFolder, "sync-lists.request.qbxml"), request);
 
-            var response = await gateway.ProcessAsync(request, ct);
-            AtomicFile.WriteAllText(Path.Combine(AuditFolder, "sync-lists.response.qbxml"), response);
+            var response = await target.ProcessAsync(request, ct);
+            AtomicFile.WriteAllText(Path.Combine(auditFolder, "sync-lists.response.qbxml"), response);
 
             var lists = QbListQuery.Parse(response, clock.UtcNow);
             if (IsEmpty(lists) && HasCurrentNames())
@@ -84,6 +106,8 @@ public sealed class QbListSync(PipelineOptions options, IQbGateway gateway, IClo
         }
         catch (Exception ex)
         {
+            // M17 §4.7: another company file open is not a failure of this company's sync; the attempt was not made.
+            var openElsewhere = ex is QuickBooksWrongCompanyException;
             try
             {
                 await store.RecordAsync(
@@ -93,8 +117,8 @@ public sealed class QbListSync(PipelineOptions options, IQbGateway gateway, IClo
                         RequestedBy = requestedBy,
                         StartedUtc = started,
                         FinishedUtc = clock.UtcNow,
-                        Outcome = ListSyncOutcome.Failed,
-                        Reason = reason ?? ReasonOf(ex),
+                        Outcome = openElsewhere ? ListSyncOutcome.Skipped : ListSyncOutcome.Failed,
+                        Reason = openElsewhere ? ListSyncReasons.CompanyFileOpenElsewhere : reason ?? ReasonOf(ex),
                         Error = ex.Message,
                     },
                     null,

@@ -4,11 +4,13 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Options;
+using QbAutopost.Api.Companies;
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Database;
 using QbAutopost.Api.SavedRequests;
 using QbAutopost.Api.Security;
 using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.SavedRequests;
 using QbAutopost.Core.Api;
 using QbAutopost.Core.Store;
@@ -577,9 +579,23 @@ public static partial class SavedRequestEndpoints
             return NotFound();
         }
 
+        // M17 §4.7: a pending statement whose company may not open a session is answered before anything is revalidated.
+        if (await store.GetAsync(requestId, ct) is { Status: SavedRequestStatus.Pending } current)
+        {
+            var company = await intake.CompanyOfAsync(current, ct);
+            if (company is not { CanOpenSession: true })
+            {
+                return CompanyNotReady(company, current);
+            }
+        }
+
         var result = await intake.RevalidateAsync(requestId, CallerMiddleware.CallerOf(http)!, ct);
         return await MutationAnswerAsync(http, result, "not-editable", "Not editable", "validated", store, actors, flavor, ct);
     }
+
+    /// <summary>409 <c>company-not-ready</c>: the company's state and access, or (ruling B18) a company that no longer exists.</summary>
+    private static IResult CompanyNotReady(CompanyContext? company, SavedRequest record) =>
+        company is not null ? CompanyProblems.NotReady(company) : CompanyProblems.NotReady(record.CompanyId ?? 0);
 
     /// <summary>Spec 7.1: pending to discarded, with a reason of 1 to 500 characters after trimming. <c>If-Match</c> is honoured when sent.</summary>
     private static async Task<IResult> DiscardAsync(
@@ -760,6 +776,10 @@ public static partial class SavedRequestEndpoints
                     $"nothing-to-post: every row is marked post: false; nothing would be sent. {record!.PublicRef} is "
                     + "still pending; nothing was claimed or sent.",
                     SkipReasons.NothingToPost);
+            case SavedPostKind.CompanyRequired:
+                return CompanyProblems.Required(record!.PublicRef);
+            case SavedPostKind.CompanyNotReady:
+                return CompanyNotReady(outcome.Company, record!);
             case SavedPostKind.Stale:
                 return await MutationAnswerAsync(
                     http, new MutationResult(MutationKind.Stale, record), "not-postable", "Not postable", "posted", store, actors, flavor, ct);

@@ -53,6 +53,24 @@ public sealed class QbSessionErrorsTests
     }
 
     [Fact]
+    public void Should_ReturnCompanyFileUnavailable_When_NonDefaultSessionHasNoTicket()
+    {
+        var ex = QbSessionErrors.NoSession(File, "BeginSession returned no ticket", defaultCompany: false);
+
+        var unavailable = Assert.IsType<QuickBooksCompanyFileUnavailableException>(ex);
+        Assert.Equal((File, "BeginSession returned no ticket"), (unavailable.NeededFile, unavailable.SdkMessage));
+    }
+
+    [Fact]
+    public void Should_ReturnPlainUnavailableWithTodaysWording_When_DefaultSessionHasNoTicket()
+    {
+        var ex = QbSessionErrors.NoSession(File, "BeginSession returned no ticket", defaultCompany: true);
+
+        Assert.IsType<QuickBooksUnavailableException>(ex);
+        Assert.Equal("BeginSession returned no ticket", ex.Message);
+    }
+
+    [Fact]
     public void Should_StartEmpty_When_NotYetVerifiedOnTheServer()
     {
         Assert.Empty(QbSessionErrors.WrongCompanyFile);

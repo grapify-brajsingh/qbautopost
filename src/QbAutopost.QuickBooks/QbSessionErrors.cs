@@ -41,6 +41,14 @@ public static class QbSessionErrors
         return new QuickBooksCompanyFileUnavailableException(companyFile, description, inner);
     }
 
+    /// <summary>
+    /// A session that could not open without a COM error (a blank file, BeginSession returning no ticket). The default
+    /// company keeps today's plain (retried) exception and wording; another company's file becomes the non-retried
+    /// <see cref="QuickBooksCompanyFileUnavailableException"/> (ruling B1).
+    /// </summary>
+    public static QuickBooksUnavailableException NoSession(string companyFile, string reason, bool defaultCompany) =>
+        defaultCompany ? new QuickBooksUnavailableException(reason) : new QuickBooksCompanyFileUnavailableException(companyFile, reason);
+
     /// <summary>The pre-M17 session failure (retried once by <c>ResilientQbGateway</c>); the wording is unchanged.</summary>
     internal static QuickBooksUnavailableException CouldNotOpenSession(string companyFile, string appName, string description, Exception inner) =>
         new($"could not open a QuickBooks session for '{companyFile}' ({description}); is QuickBooks running with the certificate accepted for {appName}?", inner);

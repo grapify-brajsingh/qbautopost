@@ -1,6 +1,8 @@
 using System.Xml;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Api;
+using QbAutopost.Core.Companies;
+using QbAutopost.Core.Gateway;
 using QbAutopost.Core.Gates;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Mapping;
@@ -27,14 +29,18 @@ public class DirectPostRunner(
     IQbGateway gateway,
     IClock clock,
     ILogger<DirectPostRunner> log,
-    IQbListsSource listsSource)
+    IQbListsSource listsSource,
+    ICompanyResolver resolver)
 {
-    /// <summary>FR-A-6/FR-A-8 share this: the post is the plan plus the SDK call.</summary>
-    public virtual DirectPlan Plan(DirectRequest request) => planner.Plan(
+    /// <summary>FR-A-6/FR-A-8 share this: the post is the plan plus the SDK call. v1 plans for the default company.</summary>
+    public virtual DirectPlan Plan(DirectRequest request) => Plan(request, resolver.Default);
+
+    /// <summary>M17 §4.7: the plan against <paramref name="company"/>'s rules and ledger.</summary>
+    public virtual DirectPlan Plan(DirectRequest request, CompanyContext company) => planner.Plan(
         request,
-        Rules.Load(options.RulesFile),
-        listsSource.Current,
-        new LedgerStore(options.LedgerFile).Load(),
+        Rules.Load(company.RulesFile),
+        listsSource.Current, // T-1709: per-company lists
+        new LedgerStore(company.LedgerFile).Load(),
         DateOnly.FromDateTime(clock.UtcNow),
         options.QbXmlVersion);
 
@@ -53,10 +59,11 @@ public class DirectPostRunner(
     /// Records the batch before any work starts and returns its opening state. A dry run ends here, in <c>ready</c>:
     /// FR-A-6's answer plus a persisted batch, and not one byte sent to QuickBooks.
     /// </summary>
-    public DirectPostResult Begin(string batchId, DirectRequest request, DirectPlan plan, bool dryRun)
+    /// <param name="company">M17 §4.7: the company posted to; null is the default company, exactly as before M17.</param>
+    public DirectPostResult Begin(string batchId, DirectRequest request, DirectPlan plan, bool dryRun, CompanyContext? company = null)
     {
         batches.SaveRequest(batchId, request);
-        var opening = Describe(batchId, request, plan, dryRun, dryRun ? JobStatus.Ready : JobStatus.Posting);
+        var opening = Describe(batchId, request, plan, dryRun, dryRun ? JobStatus.Ready : JobStatus.Posting, company);
         if (!dryRun)
         {
             batches.SaveStatus(opening);
@@ -72,9 +79,15 @@ public class DirectPostRunner(
     }
 
     /// <summary>FR-11/FR-12 for a batch already begun. Runs on the worker, never in parallel with a job.</summary>
-    public async Task<DirectPostResult> RunAsync(string batchId, DirectRequest request, DirectPlan plan, CancellationToken ct)
+    /// <param name="company">
+    /// M17 §4.7: the company posted to — its file (through the one gateway and lock), its ledger and its name. Null is the
+    /// default company, exactly as before M17.
+    /// </param>
+    public async Task<DirectPostResult> RunAsync(
+        string batchId, DirectRequest request, DirectPlan plan, CancellationToken ct, CompanyContext? company = null)
     {
-        var opening = Describe(batchId, request, plan, dryRun: false, JobStatus.Posting);
+        var qb = gateway.For(company?.Target);
+        var opening = Describe(batchId, request, plan, dryRun: false, JobStatus.Posting, company);
         var folder = batches.FolderOf(batchId);
         var toPost = plan.ToPost;
         var held = plan.Rows.Where(r => r.Outcome == DirectOutcome.Held).ToList();
@@ -98,7 +111,7 @@ public class DirectPostRunner(
             try
             {
                 // G4's QuickBooks half (FR-8). Its queries are audited into the batch folder, like a job's output.
-                var decided = await new LiveDuplicateGate(gateway, options.QbXmlVersion, options.DuplicateWindowDays)
+                var decided = await new LiveDuplicateGate(qb, options.QbXmlVersion, options.DuplicateWindowDays)
                     .CheckAsync(toPost, folder, ct);
                 toPost = decided.Where(t => t.Decision == Decision.Post).ToList();
                 held = [.. held, .. decided.Where(t => t.Decision == Decision.Hold).Select(t => Row(plan, t))];
@@ -112,6 +125,7 @@ public class DirectPostRunner(
                 {
                     Error = $"nothing posted: duplicate check (G4) failed: {ex.Message}",
                     Unavailable = true,
+                    CompanyRefusal = CompanyFileRefusal.Of(ex),
                     Held = [.. held, .. toPost.Select(t => Row(plan, t, HoldReasons.DuplicateCheckFailed, ex.Message))],
                     Skipped = skipped,
                 });
@@ -135,7 +149,7 @@ public class DirectPostRunner(
         string? error = null;
         try
         {
-            var response = await gateway.ProcessAsync(qbXml, ct);
+            var response = await qb.ProcessAsync(qbXml, ct);
             batches.SaveResponseQbXml(batchId, response);
             verification = PostVerifier.Verify(toPost, QbXmlParser.ParseAddResponse(response));
         }
@@ -147,6 +161,7 @@ public class DirectPostRunner(
             {
                 Error = $"nothing posted: QuickBooks unavailable ({ex.Message})",
                 Unavailable = true,
+                CompanyRefusal = CompanyFileRefusal.Of(ex),
                 Held = [.. held, .. toPost.Select(t => Row(plan, t, HoldReasons.QuickBooksUnavailable, ex.Message))],
                 Skipped = skipped,
             });
@@ -168,7 +183,7 @@ public class DirectPostRunner(
                 toPost.Select(t => t with { Decision = Decision.Hold, Reason = reason, Note = note }).ToList());
         }
 
-        RecordInLedger(batchId, JobIdOf(request), verification, held.Count, skipped.Count);
+        RecordInLedger(company?.LedgerFile ?? options.LedgerFile, batchId, JobIdOf(request), verification, held.Count, skipped.Count);
 
         var posted = verification.Posted;
         held = [.. held, .. verification.Rejected.Select(t => Row(plan, t))];
@@ -215,13 +230,13 @@ public class DirectPostRunner(
         : JobStatus.Partial;
 
     private DirectPostResult Describe(
-        string batchId, DirectRequest request, DirectPlan plan, bool dryRun, JobStatus status) => new()
+        string batchId, DirectRequest request, DirectPlan plan, bool dryRun, JobStatus status, CompanyContext? company) => new()
         {
             BatchId = batchId,
             Reference = request.Reference,
             Status = status,
             DryRun = dryRun,
-            CompanyFile = options.CompanyName,
+            CompanyFile = company?.DisplayName ?? options.CompanyName,
             StartedUtc = clock.UtcNow,
             Counts = new DirectPostCounts(plan.Submitted, 0, plan.Held, plan.Skipped),
             Totals = new DirectPostTotals(plan.SubmittedTotal, 0m),
@@ -271,9 +286,9 @@ public class DirectPostRunner(
     /// Spec §13. The same ledger a folder job writes: one <see cref="LedgerJob"/> plus an entry per posted line, so
     /// G4 catches a later repeat from either entrance and undo can find this batch by id.
     /// </summary>
-    private void RecordInLedger(string batchId, string jobId, PostVerification verification, int held, int skipped)
+    private void RecordInLedger(string ledgerFile, string batchId, string jobId, PostVerification verification, int held, int skipped)
     {
-        var store = new LedgerStore(options.LedgerFile);
+        var store = new LedgerStore(ledgerFile);
         var ledger = store.Load();
         var entries = verification.Posted.Select(p => new LedgerEntry
         {

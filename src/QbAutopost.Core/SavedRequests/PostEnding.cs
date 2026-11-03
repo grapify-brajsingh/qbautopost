@@ -13,6 +13,12 @@ public enum PostEndingKind
     Completed,
     ErrorBeforeSend,
     ErrorAfterSend,
+
+    /// <summary>M17 §4.7: QuickBooks has another company file open; nothing was sent.</summary>
+    CompanyFileOpenElsewhere,
+
+    /// <summary>M17 §4.7, ruling B1: the company file's session could not open; nothing was sent.</summary>
+    CompanyFileUnavailable,
 }
 
 /// <summary>An ending. <paramref name="Status"/> and <paramref name="Held"/> matter only for <see cref="PostEndingKind.Completed"/>.</summary>

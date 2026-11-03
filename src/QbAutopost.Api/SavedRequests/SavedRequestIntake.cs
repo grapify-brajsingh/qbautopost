@@ -5,6 +5,7 @@ using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Endpoints;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Api;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.Extraction;
 using QbAutopost.Core.SavedRequests;
 using QbAutopost.Core.Text;
@@ -25,6 +26,7 @@ public sealed class SavedRequestIntake(
     ISavedRequestStore store,
     IUploadStore uploads,
     SavedRequestValidator validator,
+    ICompanyResolver resolver,
     DirectLimits limits,
     IOptions<AppSettings> settings,
     IClock clock)
@@ -249,7 +251,7 @@ public sealed class SavedRequestIntake(
 
         var now = clock.UtcNow;
         var read = SavedPayloadReader.Read(next);
-        var (snapshot, snapshotV2) = validator.ValidateBoth(read, NotPostedRows.Read(next), number, now, id);
+        var (snapshot, snapshotV2) = await ValidateBothAsync(current, read, NotPostedRows.Read(next), number, now, ct);
         var canonical = PayloadCanonicalizer.Sha256(next, rules);
         var fingerprints = Fingerprints(read, now);
         var duplicate = await DetectAsync(canonical, read, fingerprints, id, now, ct);
@@ -279,12 +281,36 @@ public sealed class SavedRequestIntake(
 
         var now = clock.UtcNow;
         var read = SavedPayloadReader.Read(current.CurrentPayload);
-        var (snapshot, snapshotV2) = validator.ValidateBoth(
-            read, NotPostedRows.Read(current.CurrentPayload), current.CurrentVersion, now, id);
+        var (snapshot, snapshotV2) = await ValidateBothAsync(
+            current, read, NotPostedRows.Read(current.CurrentPayload), current.CurrentVersion, now, ct);
         var fingerprints = Fingerprints(read, now);
         var duplicate = await DetectAsync(current.CanonicalSha256, read, fingerprints, id, now, ct);
 
         return await store.SetValidationAsync(id, snapshot, snapshotV2, duplicate, caller.Actor, now, ct);
+    }
+
+    /// <summary>
+    /// M17 §4.7: the company <paramref name="record"/> is validated and posted against; the default company when it has
+    /// none yet (TRANSITIONAL until T-1712); null when its company no longer exists (ruling B18).
+    /// </summary>
+    public Task<CompanyContext?> CompanyOfAsync(SavedRequest record, CancellationToken ct) =>
+        resolver.ForStatementAsync(record.CompanyId, ct);
+
+    /// <summary>
+    /// Both snapshots of an existing statement, planned with its own company's rules and ledger. A company that no longer
+    /// exists cannot be planned for: both snapshots are <c>unavailable</c> (the validate route answers 409 before this).
+    /// </summary>
+    private async Task<(ValidationSnapshot V1, ValidationSnapshot V2)> ValidateBothAsync(
+        SavedRequest record, PayloadRead read, NotPostedRead notPosted, int number, DateTime now, CancellationToken ct)
+    {
+        if (await CompanyOfAsync(record, ct) is not { } company)
+        {
+            var unavailable = new ValidationSnapshot(
+                ValidationState.Unavailable, now, number, null, [], [SavedRequestValidator.CompanyRequired], null);
+            return (unavailable, unavailable);
+        }
+
+        return validator.ValidateBoth(read, notPosted, number, now, record.Id, company);
     }
 
     /// <summary>The routes answer <c>400 payload-not-storable</c> before this; reaching the store with such a payload is a bug.</summary>

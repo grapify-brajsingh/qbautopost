@@ -1,4 +1,5 @@
 using QbAutopost.Core.Api;
+using QbAutopost.Core.Companies;
 
 namespace QbAutopost.Api.Jobs;
 
@@ -27,7 +28,8 @@ public sealed record SyncPost(
     IReadOnlyList<string> Errors,
     SyncPostFindings? Findings,
     SyncPostResult? Result,
-    bool Unavailable);
+    bool Unavailable,
+    CompanyFileRefusal? CompanyRefusal = null);
 
 /// <summary>
 /// The synchronous validate-and-post (ADR-0008). It is almost entirely other people's code: <see cref="DirectPlanner"/>
@@ -55,8 +57,13 @@ public sealed class SyncPostRunner(JobQueue queue, DirectPostRunner runner, ILog
     /// T-1113 (dashboard v2 6.1): the row indexes the caller marked <c>post: false</c>, set aside by the engine as
     /// <c>not-to-post</c>. Only the v2 post by id passes it; null (every v1 caller) builds the request exactly as before.
     /// </param>
+    /// <param name="company">
+    /// M17 §4.7: the company the request is planned and posted against. Null (every v1 caller) is the default company,
+    /// exactly as before M17.
+    /// </param>
     public async Task<SyncPost> RunAsync(
-        SyncPostRequest request, CancellationToken ct, Action? onSending = null, IReadOnlySet<int>? notPosted = null)
+        SyncPostRequest request, CancellationToken ct, Action? onSending = null, IReadOnlySet<int>? notPosted = null,
+        CompanyContext? company = null)
     {
         if (UnsupportedFields(request) is { Count: > 0 } unsupported)
         {
@@ -66,7 +73,7 @@ public sealed class SyncPostRunner(JobQueue queue, DirectPostRunner runner, ILog
         }
 
         var direct = notPosted is null ? request.ToDirectRequest() : request.ToDirectRequest(notPosted);
-        var plan = runner.Plan(direct);
+        var plan = company is null ? runner.Plan(direct) : runner.Plan(direct, company);
         if (plan.Errors.Count > 0)
         {
             // Refused before it has an identity: no post id, no evidence folder, nothing to undo later.
@@ -96,7 +103,7 @@ public sealed class SyncPostRunner(JobQueue queue, DirectPostRunner runner, ILog
             workerCt =>
             {
                 onSending?.Invoke();
-                return PostAsync(direct, plan, workerCt);
+                return PostAsync(direct, plan, company, workerCt);
             },
             ct);
 
@@ -111,7 +118,8 @@ public sealed class SyncPostRunner(JobQueue queue, DirectPostRunner runner, ILog
         log.LogInformation(
             "Sync post {PostId}: {Posted} posted, {Held} held, {Skipped} skipped",
             result!.BatchId, result.Counts.Posted, result.Counts.Held, result.Counts.Skipped);
-        return new SyncPost(SyncPostOutcome.Posted, [], null, SyncPostResult.From(result), result.Unavailable);
+        return new SyncPost(
+            SyncPostOutcome.Posted, [], null, SyncPostResult.From(result), result.Unavailable, result.CompanyRefusal);
     }
 
     /// <summary>
@@ -124,12 +132,13 @@ public sealed class SyncPostRunner(JobQueue queue, DirectPostRunner runner, ILog
     /// QuickBooks rather than the ledger, and is skipped there.
     /// </para>
     /// </summary>
-    private async Task<DirectPostResult> PostAsync(DirectRequest request, DirectPlan plan, CancellationToken ct)
+    private async Task<DirectPostResult> PostAsync(
+        DirectRequest request, DirectPlan plan, CompanyContext? company, CancellationToken ct)
     {
         var postId = runner.NextBatchId(request);
-        runner.Begin(postId, request, plan, dryRun: false);
+        runner.Begin(postId, request, plan, dryRun: false, company);
         log.LogInformation("Sync post {PostId}: posting {Rows} row(s)", postId, plan.WouldPost);
-        return await runner.RunAsync(postId, request, plan, ct);
+        return await runner.RunAsync(postId, request, plan, ct, company);
     }
 
     /// <summary>

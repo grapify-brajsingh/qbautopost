@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
+using QbAutopost.Api.Companies;
 using QbAutopost.Api.Jobs;
 using QbAutopost.Core.Api;
 using HttpJsonOptions = Microsoft.AspNetCore.Http.Json.JsonOptions;
@@ -53,6 +54,7 @@ internal static class SyncPostResponses
         SyncPostOutcome.Refused => StatusCodes.Status400BadRequest,
         SyncPostOutcome.Held => StatusCodes.Status422UnprocessableEntity,
         SyncPostOutcome.Busy => StatusCodes.Status409Conflict,
+        _ when post.CompanyRefusal is { } refusal => CompanyProblems.StatusOf(refusal),
         _ => post.Unavailable ? StatusCodes.Status503ServiceUnavailable : StatusCodes.Status200OK,
     };
 
@@ -83,9 +85,17 @@ internal static class SyncPostResponses
         return body;
     }
 
-    /// <summary>The problem for a 400, 422 or 409 ending (with the defaults <c>Results.Problem</c> applies); null for the rest.</summary>
+    /// <summary>
+    /// The problem for a 400, 422 or 409 ending, or a company file QuickBooks would not open (409/503, M17 §4.7), with the
+    /// defaults <c>Results.Problem</c> applies; null for the rest.
+    /// </summary>
     private static ProblemDetails? ProblemOf(SyncPost post, IDictionary<string, object?>? extra)
     {
+        if (post.Outcome == SyncPostOutcome.Posted && post.CompanyRefusal is { } refusal)
+        {
+            return CompanyProblems.ProblemOf(refusal, extra);
+        }
+
         ProblemHttpResult? result = post.Outcome switch
         {
             SyncPostOutcome.Refused => TypedResults.Problem(

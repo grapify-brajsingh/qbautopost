@@ -1,4 +1,5 @@
 using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.Models;
 using QbAutopost.Core.Pipeline;
 using QbAutopost.Core.QbXml;
@@ -263,6 +264,62 @@ public sealed class QbListSyncTests : IDisposable
         Assert.Empty(Lists.Current.Accounts);
     }
 
+    // ---- T-1708: a company context (M17 spec 4.7) ---------------------------------------------------------------
+
+    private const string TakomaFile = @"C:\fake\Takoma.QBW";
+
+    /// <summary>Takoma's own folder: rules that name "Takoma Supplies" where the sample names "Office Supplies".</summary>
+    private CompanyContext Takoma()
+    {
+        var folder = Path.Combine(_dir.Root, "companies", "2");
+        Directory.CreateDirectory(folder);
+        var rules = Path.Combine(folder, "rules.json");
+        File.WriteAllText(
+            rules,
+            File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "samples", "rules.json")).Replace("Office Supplies", "Takoma Supplies"));
+        return new CompanyContext(2, "Takoma Park Grocery Store Inc", TakomaFile, rules, Path.Combine(folder, "ledger.json"));
+    }
+
+    [Fact]
+    public async Task Should_LoadTheCompanysRules_When_SyncingAContext()
+    {
+        var completion = await Sync().SyncWithRunAsync(Takoma(), ListSyncTrigger.Api, null, CancellationToken.None);
+
+        Assert.Contains("Takoma Supplies", completion.Result.MissingInRules);
+        Assert.DoesNotContain("Office Supplies", completion.Result.MissingInRules);
+    }
+
+    [Fact]
+    public async Task Should_SendToTheCompanysFile_When_SyncingAContext()
+    {
+        await Sync().SyncWithRunAsync(Takoma(), ListSyncTrigger.Api, null, CancellationToken.None);
+
+        Assert.Equal([TakomaFile], _gateway.Targets);
+    }
+
+    [Fact]
+    public async Task Should_KeepAuditCopiesInTheCompanysFolder_When_SyncingAContext()
+    {
+        var takoma = Takoma();
+
+        await Sync().SyncWithRunAsync(takoma, ListSyncTrigger.Api, null, CancellationToken.None);
+
+        var audit = Path.Combine(Path.GetDirectoryName(takoma.LedgerFile)!, QbListSync.AuditDir);
+        Assert.True(File.Exists(Path.Combine(audit, "sync-lists.request.qbxml")));
+    }
+
+    [Fact]
+    public async Task Should_RecordSkippedOpenElsewhere_When_SyncFindsAnotherFileOpen()
+    {
+        _gateway.Failure = new QuickBooksWrongCompanyException(TakomaFile, @"C:\fake\SA.QBW", "another file is open");
+
+        await Assert.ThrowsAsync<QuickBooksWrongCompanyException>(
+            () => Sync().SyncWithRunAsync(Takoma(), ListSyncTrigger.Schedule, null, CancellationToken.None));
+
+        var run = Assert.IsType<ListSyncRun>(Lists.LastAttempt);
+        Assert.Equal((ListSyncOutcome.Skipped, ListSyncReasons.CompanyFileOpenElsewhere), (run.Outcome, run.Reason));
+    }
+
     private static ListSyncRun OkRun() => new()
     {
         Trigger = ListSyncTrigger.Api,
@@ -278,6 +335,15 @@ public sealed class QbListSyncTests : IDisposable
         public Exception? Failure { get; set; }
 
         public List<string> Requests { get; } = [];
+
+        /// <summary>The target file of each targeted request.</summary>
+        public List<string> Targets { get; } = [];
+
+        public Task<string> ProcessAsync(QbTarget target, string qbxml, CancellationToken ct)
+        {
+            Targets.Add(target.CompanyFile);
+            return ProcessAsync(qbxml, ct);
+        }
 
         public Task<string> ProcessAsync(string qbxml, CancellationToken ct)
         {

@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using QbAutopost.Api.Jobs;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.SavedRequests;
 
 namespace QbAutopost.Api.SavedRequests;
@@ -29,6 +30,16 @@ public enum SavedPostKind
 
     /// <summary>v2 only (dashboard v2 6.2 item 5): every row is marked <c>post: false</c>. Nothing was claimed; no attempt.</summary>
     NothingToPost,
+
+    /// <summary>M17 spec 5.2 (used from T-1712): the statement has no company. Nothing was claimed; no attempt.</summary>
+    CompanyRequired,
+
+    /// <summary>
+    /// M17 spec 4.7: the statement's company is not <c>active</c> + <c>approved</c> (or no longer exists, or its file is
+    /// outside the root). Nothing was claimed; no attempt; no session. <see cref="SavedPostOutcome.Company"/> is the
+    /// company, null when it no longer exists.
+    /// </summary>
+    CompanyNotReady,
 }
 
 /// <summary>
@@ -43,4 +54,5 @@ public sealed record SavedPostOutcome(
     SavedRequest? Record,
     int? HttpStatus,
     SavedRequestStatus? Status = null,
-    ProblemDetails? Problem = null);
+    ProblemDetails? Problem = null,
+    CompanyContext? Company = null);

@@ -59,14 +59,58 @@ public sealed class CompanyResolver(IOptions<AppSettings> settings, CompanyDataF
         return active.Count == 1 ? ContextOf(active[0]) : null;
     }
 
-    // The one place a row becomes a context, so T-1708's guard (file under Companies:RootFolder, or equal to the default
-    // Company:FilePath) fits here without touching callers. A non-default company with no file gets "" and carries its
-    // state, so callers refuse it.
+    // The one place a row becomes a context. A non-default company with no file gets "" and carries its state, so
+    // callers refuse it; one whose file is outside Companies:RootFolder (and is not Company:FilePath) is never opened
+    // (ruling B14, global constraint "never open a .qbw outside the root").
     private CompanyContext ContextOf(Company company)
     {
         var context = company.IsDefault
             ? Default with { Id = company.Id }
-            : new CompanyContext(company.Id, company.DisplayName, company.FilePath ?? "", folders.RulesFileOf(company.Id), folders.LedgerFileOf(company.Id));
+            : new CompanyContext(company.Id, company.DisplayName, company.FilePath ?? "", folders.RulesFileOf(company.Id), folders.LedgerFileOf(company.Id))
+            {
+                FileOutsideRoot = !MayOpen(company.FilePath),
+            };
         return context with { State = company.State, Access = company.Access };
+    }
+
+    /// <summary>Ruling B14: under <c>Companies:RootFolder</c> or the configured default file; full paths, case-insensitive.</summary>
+    private bool MayOpen(string? filePath)
+    {
+        var s = settings.Value;
+        if (Normalised(filePath) is not { } file)
+        {
+            return false;
+        }
+
+        if (Normalised(s.Company.FilePath) is { } defaultFile && string.Equals(file, defaultFile, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (Normalised(s.Companies.RootFolder) is not { } root)
+        {
+            return false;
+        }
+
+        var prefix = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return file.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>The full path, or null for a blank or unreadable one (which is never opened).</summary>
+    private static string? Normalised(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
     }
 }

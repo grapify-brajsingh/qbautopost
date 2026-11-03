@@ -48,7 +48,7 @@ public sealed class QbSession : IDisposable
         trace ??= _ => { };
         if (string.IsNullOrWhiteSpace(companyFile))
         {
-            throw new QuickBooksUnavailableException("Company:FilePath is not set");
+            throw QbSessionErrors.NoSession(companyFile ?? "", "Company:FilePath is not set", defaultCompany);
         }
 
         trace($"creating {ProgId} in a {Bitness} process");
@@ -85,7 +85,7 @@ public sealed class QbSession : IDisposable
             try
             {
                 session._ticket = (string?)session.Invoke("BeginSession", companyFile, FileOpenDoNotCare)
-                    ?? throw new QuickBooksUnavailableException("BeginSession returned no ticket");
+                    ?? throw QbSessionErrors.NoSession(companyFile, "BeginSession returned no ticket", defaultCompany);
             }
             catch (COMException ex)
             {

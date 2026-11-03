@@ -7,6 +7,8 @@ using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Endpoints;
 using QbAutopost.Api.Jobs;
 using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Api;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.Mapping;
 using QbAutopost.Core.SavedRequests;
 using QbAutopost.Core.Security;
@@ -32,6 +34,7 @@ namespace QbAutopost.Api.SavedRequests;
 public sealed class SavedRequestPoster(
     ISavedRequestStore store,
     SyncPostRunner runner,
+    ICompanyResolver resolver,
     IClock clock,
     IOptions<AppSettings> settings,
     IOptions<HttpJsonOptions> json,
@@ -94,6 +97,13 @@ public sealed class SavedRequestPoster(
             return new SavedPostOutcome(SavedPostKind.NothingToPost, null, null, current, StatusCodes.Status400BadRequest);
         }
 
+        // M17 §4.7: the statement's own company, checked before the duplicate question and the claim, so a company that
+        // may not open a session makes no attempt. Only for a pending request: any other status keeps its own answer.
+        if (current.Status == SavedRequestStatus.Pending && (await CompanyOfAsync(current, ct)).NotReady is { } notReady)
+        {
+            return notReady;
+        }
+
         if (current.Status == SavedRequestStatus.Pending && IsFlagged(current) && !confirmDuplicate)
         {
             log.LogInformation(
@@ -126,6 +136,20 @@ public sealed class SavedRequestPoster(
 
         var attemptId = claim.AttemptId!.Value;
         var record = claim.Record!;
+
+        // Review Focus 3: the company is read again for the claimed record, so a company disabled (or reassigned) in the
+        // moment between the check above and the claim still sends nothing. The attempt already exists, so it is recorded
+        // as refused (nothing sent, back to pending), naming the reason.
+        var (company, raced) = await CompanyOfAsync(record, CancellationToken.None);
+        if (raced is not null)
+        {
+            var refused = new SyncPost(SyncPostOutcome.Refused, [CompanyChangedBeforeSend], null, null, false);
+            var (status, racedProblem) = await FinishAsync(record, attemptId, refused, new PostEnding(PostEndingKind.Refused, null, []));
+            return racedProblem is null
+                ? new SavedPostOutcome(SavedPostKind.Ran, refused, attemptId, record, StatusCodes.Status400BadRequest, status)
+                : new SavedPostOutcome(SavedPostKind.Ran, null, attemptId, record, racedProblem.Status, status, racedProblem);
+        }
+
         using var attemptScope = LogContext.PushProperty(AttemptIdField, attemptId);
         log.LogInformation(
             "Saved request {SavedRequestId}: attempt {AttemptId} claimed version {Version} for {Actor}",
@@ -153,7 +177,7 @@ public sealed class SavedRequestPoster(
         SyncPost post;
         try
         {
-            post = await runner.RunAsync(read.Request!, CancellationToken.None, () => sending = true, notPosted?.Indexes);
+            post = await runner.RunAsync(read.Request!, CancellationToken.None, () => sending = true, notPosted?.Indexes, company);
         }
         catch (Exception ex)
         {
@@ -175,6 +199,29 @@ public sealed class SavedRequestPoster(
         [AttemptIdField] = attemptId,
         [SavedRequestStatusField] = SavedRequestJson.Name(status),
     };
+
+    /// <summary>The refusal of a claimed post whose company stopped being ready before anything was sent.</summary>
+    public const string CompanyChangedBeforeSend =
+        "company-not-ready: the statement's company stopped being active and approved before the post started; nothing was sent";
+
+    /// <summary>
+    /// M17 §4.7: the company <paramref name="record"/> is posted against, or the <see cref="SavedPostKind.CompanyNotReady"/>
+    /// answer when it may not open a session (not active + approved, file outside the root, or gone — ruling B18).
+    /// </summary>
+    private async Task<(CompanyContext? Company, SavedPostOutcome? NotReady)> CompanyOfAsync(SavedRequest record, CancellationToken ct)
+    {
+        var company = await resolver.ForStatementAsync(record.CompanyId, ct);
+        if (company is { CanOpenSession: true })
+        {
+            return (company, null);
+        }
+
+        log.LogInformation(
+            "Saved request {SavedRequestId}: post refused, company {CompanyId} is not ready ({State}, {Access}); nothing was claimed or sent",
+            record.Id, record.CompanyId, company?.State, company?.Access);
+        return (company, new SavedPostOutcome(
+            SavedPostKind.CompanyNotReady, null, null, record, StatusCodes.Status409Conflict, Company: company));
+    }
 
     private static bool IsFlagged(SavedRequest record) => record.DuplicateOfId is not null || record.DuplicateReasons.Count > 0;
 
@@ -202,6 +249,8 @@ public sealed class SavedRequestPoster(
         SyncPostOutcome.Refused => new PostEnding(PostEndingKind.Refused, null, []),
         SyncPostOutcome.Held => new PostEnding(PostEndingKind.Held, null, []),
         SyncPostOutcome.Busy => new PostEnding(PostEndingKind.Busy, null, []),
+        _ when post.CompanyRefusal is { Type: CompanyFileRefusal.OpenElsewhere } => new PostEnding(PostEndingKind.CompanyFileOpenElsewhere, null, []),
+        _ when post.CompanyRefusal is not null => new PostEnding(PostEndingKind.CompanyFileUnavailable, null, []),
         _ when post.Unavailable => new PostEnding(PostEndingKind.Unavailable, null, []),
         // A 200 without a result is unexplained: Completed with no status, which AttemptOutcomes locks as unknown.
         _ => new PostEnding(
