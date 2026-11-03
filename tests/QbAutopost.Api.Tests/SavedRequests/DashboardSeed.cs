@@ -14,7 +14,7 @@ internal static class DashboardSeed
     public const string Client = "api-client:n8n";
     public const string Admin = "user-7";
 
-    public static async Task<long> SaveAsync(FakeSavedRequestStore store, string reference, DateTime at, DateTime? emailReceivedUtc = null)
+    public static async Task<long> SaveAsync(FakeSavedRequestStore store, string reference, DateTime at, DateTime? emailReceivedUtc = null, int? companyId = null)
     {
         var body = $$"""{"reference":"{{reference}}","controlTotal":10.00,"transactions":[{"externalId":"e1","kind":"check","date":"2026-10-01","amount":10.00,"account":"Checking 1234","payee":"Acme","memo":"rent"}]}""";
         var payload = JsonDocument.Parse(body).RootElement.Clone();
@@ -24,6 +24,8 @@ internal static class DashboardSeed
             new DuplicateMatch(null, []), at)
         {
             Metadata = SaveMetadata.None with { EmailReceivedUtc = emailReceivedUtc },
+            CompanyId = companyId,
+            CompanySource = companyId is null ? null : QbAutopost.Core.Companies.CompanySource.Default,
         };
         return (await store.CreateAsync(request, default)).Record.Id;
     }

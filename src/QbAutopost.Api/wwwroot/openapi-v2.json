@@ -3542,6 +3542,16 @@
               "maximum": 200,
               "default": 50
             }
+          },
+          {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "description": "M17 §5.3: only the events of this company (a company id): the company's statements' events and the company events about it. Missing: every company, as before M17. Not a positive integer, `none`, or given more than once: `400 invalid-request`. An id no company has: an empty answer.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            }
           }
         ],
         "responses": {
@@ -3676,6 +3686,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "description": "M17 §5.3: only the events of this company (a company id): the company's statements' events and the company events about it. Missing: every company, as before M17. Not a positive integer, `none`, or given more than once: `400 invalid-request`. An id no company has: an empty answer. The export has the same columns as before.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            }
           }
         ],
         "responses": {
@@ -3808,6 +3828,16 @@
             "schema": {
               "type": "string",
               "default": "UTC"
+            }
+          },
+          {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "description": "M17 §5.3: only the events of this company (a company id): the company's statements' events and the company events about it. Missing: every company, as before M17. Not a positive integer, `none`, or given more than once: `400 invalid-request`. An id no company has: an empty answer. The counts, posted figures, time to post and series (and the compare range) cover only that company.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
             }
           }
         ],
@@ -4434,7 +4464,8 @@
           "old",
           "new",
           "versionNumber",
-          "detail"
+          "detail",
+          "companyId"
         ],
         "properties": {
           "id": {
@@ -4487,6 +4518,11 @@
           "detail": {
             "nullable": true,
             "description": "Action-specific, or null. For `received` (dashboard-api-m12 §7.5): `{ \"source\": \"upload\", \"fileName\": \"…\" }` for a saved upload, `{ \"source\": \"email\" }` for a v2 save that carried email metadata, `null` for every other save and for older rows. For user events (`user-*` except `user-session-revoked` and `user-other`): the stored detail plus `userId`, `email` and `displayName` of the user concerned, looked up when the feed is read (dashboard-integration-m13 §4, R-7.3)."
+          },
+          "companyId": {
+            "type": "integer",
+            "nullable": true,
+            "description": "M17 §5.3: the company of the event's request (its company now), or the company a company event is about; null when there is none."
           }
         }
       },

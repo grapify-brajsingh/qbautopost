@@ -18,7 +18,7 @@ public static class DashboardSummaryEndpoints
 {
     public const int MaxRangeDays = 366;
 
-    private static readonly string[] SingleValued = ["from", "to", "compareFrom", "compareTo", "bucket", "tz"];
+    private static readonly string[] SingleValued = ["from", "to", "compareFrom", "compareTo", "bucket", "tz", "company"];
 
     private static readonly Regex Instant = new(
         @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,7})?)?(Z|[+-]\d{2}:\d{2})\z",
@@ -43,16 +43,16 @@ public static class DashboardSummaryEndpoints
 
         var q = query!;
         var buckets = TimeBuckets.Build(q.FromUtc, q.ToUtc, q.Zone, q.Bucket);
-        var events = await store.EventFactsAsync(q.FromUtc, q.ToUtc, ct);
-        var posted = await store.PostedFactsAsync(q.FromUtc, q.ToUtc, ct);
-        var times = await store.PostTimeFactsAsync(q.FromUtc, q.ToUtc, ct);
+        var events = await store.EventFactsAsync(q.FromUtc, q.ToUtc, q.CompanyId, ct);
+        var posted = await store.PostedFactsAsync(q.FromUtc, q.ToUtc, q.CompanyId, ct);
+        var times = await store.PostTimeFactsAsync(q.FromUtc, q.ToUtc, q.CompanyId, ct);
 
         IReadOnlyList<EventFact>? previousEvents = null;
         IReadOnlyList<PostedFact>? previousPosted = null;
         if (q.Compare is var (compareFrom, compareTo))
         {
-            previousEvents = await store.EventFactsAsync(compareFrom, compareTo, ct);
-            previousPosted = await store.PostedFactsAsync(compareFrom, compareTo, ct);
+            previousEvents = await store.EventFactsAsync(compareFrom, compareTo, q.CompanyId, ct);
+            previousPosted = await store.PostedFactsAsync(compareFrom, compareTo, q.CompanyId, ct);
         }
 
         var summary = DashboardSummaryBuilder.Build(buckets, events, posted, times, previousEvents, previousPosted);
@@ -63,7 +63,7 @@ public static class DashboardSummaryEndpoints
     // ---- the query (spec 4.1) ---------------------------------------------------------------------------------------
 
     private sealed record SummaryQuery(
-        DateTime FromUtc, DateTime ToUtc, (DateTime From, DateTime To)? Compare, BucketSize Bucket, TimeZoneInfo Zone, string ZoneId);
+        DateTime FromUtc, DateTime ToUtc, (DateTime From, DateTime To)? Compare, BucketSize Bucket, TimeZoneInfo Zone, string ZoneId, int? CompanyId);
 
     private static bool TryParse(IQueryCollection q, out SummaryQuery? query, out string? error)
     {
@@ -125,8 +125,13 @@ public static class DashboardSummaryEndpoints
             return false;
         }
 
+        if (!V2QueryParser.TryCompanyId(q, out var companyId, out error))
+        {
+            return false;
+        }
+
         query = new SummaryQuery(
-            from.Value, to.Value, compareFrom is { } f ? (f, compareTo!.Value) : null, bucket, zone!, zoneId);
+            from.Value, to.Value, compareFrom is { } f ? (f, compareTo!.Value) : null, bucket, zone!, zoneId, companyId);
         return true;
     }
 

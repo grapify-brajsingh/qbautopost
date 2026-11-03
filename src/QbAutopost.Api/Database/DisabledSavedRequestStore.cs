@@ -86,9 +86,9 @@ public sealed class DisabledSavedRequestStore : ISavedRequestStore, ISavedReques
     public Task<IReadOnlyList<UploadDuplicateCandidate>> UploadDuplicateCandidatesAsync(
         string sha256, DateTime sinceUtc, CancellationToken ct) => throw Off();
 
-    public Task<IReadOnlyList<EventFact>> EventFactsAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct) => throw Off();
+    public Task<IReadOnlyList<EventFact>> EventFactsAsync(DateTime fromUtc, DateTime toUtc, int? companyId, CancellationToken ct) => throw Off();
 
-    public Task<IReadOnlyList<PostedFact>> PostedFactsAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct) => throw Off();
+    public Task<IReadOnlyList<PostedFact>> PostedFactsAsync(DateTime fromUtc, DateTime toUtc, int? companyId, CancellationToken ct) => throw Off();
 
-    public Task<IReadOnlyList<PostTimeFact>> PostTimeFactsAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct) => throw Off();
+    public Task<IReadOnlyList<PostTimeFact>> PostTimeFactsAsync(DateTime fromUtc, DateTime toUtc, int? companyId, CancellationToken ct) => throw Off();
 }

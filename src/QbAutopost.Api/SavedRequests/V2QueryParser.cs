@@ -154,6 +154,31 @@ public static class V2QueryParser
     }
 
     /// <summary>
+    /// M17 spec 5.3 (ruling B20): the <c>company</c> filter of the summary and the audit feed, sent once: a whole number, 1 or
+    /// more. Absent is every company (<paramref name="companyId"/> null). Unlike <see cref="TryCompany"/> there is no
+    /// <c>none</c>: events and figures of no company are not a view of their own. A well-formed id of no company matches nothing.
+    /// </summary>
+    public static bool TryCompanyId(IQueryCollection q, out int? companyId, out string? error)
+    {
+        companyId = null;
+        error = null;
+        if (!q.TryGetValue("company", out var values))
+        {
+            return true;
+        }
+
+        if (values.Count == 1
+            && int.TryParse(values[0], NumberStyles.None, CultureInfo.InvariantCulture, out var id) && id > 0)
+        {
+            companyId = id;
+            return true;
+        }
+
+        error = "company is a company id (a whole number, 1 or more), sent once.";
+        return false;
+    }
+
+    /// <summary>
     /// A sent <c>tz</c> names a zone: not blank and not padded. Nothing is trimmed, and blank is never read as UTC
     /// (<see cref="DateBounds.TryZone"/> alone would).
     /// </summary>

@@ -43,6 +43,7 @@ public sealed partial class EfSavedRequestStore : ISavedRequestAuditStore
         IQueryable<AuditEventRow> rows = db.AuditEvents.AsNoTracking();
 
         if (!query.IncludeUserEvents) rows = rows.Where(e => !EF.Functions.Like(e.Id, "u%"));
+        if (query.CompanyId is { } companyId) rows = rows.Where(e => e.CompanyId == companyId);
         if (query.From is { } from) rows = rows.Where(e => e.AtUtc >= from);
         if (query.To is { } to) rows = rows.Where(e => e.AtUtc < to);
         if (query.Actor is { Length: > 0 } actor) rows = rows.Where(e => e.ActorId == actor);
@@ -92,5 +93,8 @@ public sealed partial class EfSavedRequestStore : ISavedRequestAuditStore
 
     private static AuditEvent ToModel(AuditEventRow r) => new(
         r.Id, r.AtUtc, r.ActorId, r.ActorKind, r.Action, r.RequestId, r.RowIndex, r.RowExternalId, r.Field,
-        ParseNode(r.Old), ParseNode(r.New), r.VersionNumber, ParseNode(r.Detail));
+        ParseNode(r.Old), ParseNode(r.New), r.VersionNumber, ParseNode(r.Detail))
+    {
+        CompanyId = r.CompanyId,
+    };
 }

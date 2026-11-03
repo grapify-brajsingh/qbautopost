@@ -8,6 +8,8 @@ public sealed class FakeAuditEventsStoreTests : AuditEventsStoreContract
 {
     protected override ISavedRequestStore CreateStore() => new FakeSavedRequestStore();
 
+    protected override Task<int> NewCompanyIdAsync() => Task.FromResult(7);
+
     protected override Task<UserAuditEntry> AddUserAuditAsync(ISavedRequestStore store, UserAuditEntry entry) =>
         Task.FromResult(((FakeSavedRequestStore)store).AddUserAudit(entry));
 }

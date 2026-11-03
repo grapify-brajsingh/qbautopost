@@ -150,7 +150,11 @@ public static class AuditEventMapper
         if (CompanyKinds.Contains(u.Kind))
         {
             return new AuditEvent(
-                $"c{u.Id}", u.AtUtc, u.Actor, ActorKindOf(u.Actor), u.Kind, null, null, null, null, null, null, null, u.Detail?.DeepClone());
+                $"c{u.Id}", u.AtUtc, u.Actor, ActorKindOf(u.Actor), u.Kind, null, null, null, null, null, null, null, u.Detail?.DeepClone())
+            {
+                // As the view: detail.companyId, when it is a whole number.
+                CompanyId = u.Detail is JsonObject d && d["companyId"] is JsonValue v && v.TryGetValue<int>(out var company) ? company : null,
+            };
         }
 
         string action;
