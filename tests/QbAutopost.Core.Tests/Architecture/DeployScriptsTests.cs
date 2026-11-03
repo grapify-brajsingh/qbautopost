@@ -195,9 +195,11 @@ public sealed class DeployScriptsTests
         var text = string.Join(' ', statements);
 
         // T-1209 (dashboard-api-m12 6.6): the second DELETE is on statement_extractions, which holds no history.
-        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(text, "DELETE", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count);
+        // T-1403 (M14 spec 3.2): the third is qb_list_syncs, pruned to the newest HistoryRows on each insert.
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(text, "DELETE", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count);
         Assert.Contains("GRANT DELETE ON user_roles TO qbautopost_app;", text, StringComparison.Ordinal);
         Assert.Contains("GRANT SELECT, INSERT, UPDATE, DELETE ON statement_extractions TO qbautopost_app;", text, StringComparison.Ordinal);
+        Assert.Contains("GRANT SELECT, INSERT, DELETE ON qb_list_syncs TO qbautopost_app;", text, StringComparison.Ordinal);
         Assert.DoesNotContain("password", text, StringComparison.OrdinalIgnoreCase);
     }
 

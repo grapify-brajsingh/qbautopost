@@ -149,7 +149,80 @@ public sealed class V2UsersTests(PostgresFixture postgres) : IClassFixture<Postg
         Assert.Equal($"{Users}/{id}", created.Headers.Location!.ToString());
     }
 
+    [PostgresFact]
+    public async Task Should_CarryEtagValueAsRowVersion_When_Listed()
+    {
+        using var client = Client();
+        var token = await SeedAndSignInAsync(client);
+        var row = await RowAsync(client, token, "off@example.com");
+
+        using var detail = await Send(client, HttpMethod.Get, $"{Users}/{row.GetProperty("id").GetString()}", token);
+
+        Assert.Equal(detail.Headers.ETag!.Tag, $"\"{row.GetProperty("rowVersion").GetString()}\"");
+    }
+
+    [PostgresFact]
+    public async Task Should_EnableUser_When_IfMatchIsListRowVersion()
+    {
+        using var client = Client();
+        var token = await SeedAndSignInAsync(client);
+        var row = await RowAsync(client, token, "off@example.com");
+
+        using var patched = await PatchFromRowAsync(client, token, row, new { disabled = false });
+
+        Assert.Equal(HttpStatusCode.OK, patched.StatusCode);
+        Assert.False((await patched.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("disabled").GetBoolean());
+    }
+
+    [PostgresFact]
+    public async Task Should_Answer412_When_ListRowVersionIsStale()
+    {
+        using var client = Client();
+        var token = await SeedAndSignInAsync(client);
+        var row = await RowAsync(client, token, "off@example.com");
+        using (var first = await PatchFromRowAsync(client, token, row, new { displayName = "Changed" }))
+        {
+            Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        }
+
+        using var stale = await PatchFromRowAsync(client, token, row, new { disabled = false });
+
+        Assert.Equal(HttpStatusCode.PreconditionFailed, stale.StatusCode);
+    }
+
+    [PostgresFact]
+    public async Task Should_OmitRowVersion_When_V1List()
+    {
+        using var client = Client();
+        var token = await SeedAndSignInAsync(client);
+
+        using var response = await Send(client, HttpMethod.Get, "/api/v1/users", token);
+
+        var items = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("items").EnumerateArray();
+        Assert.All(items, item => Assert.False(item.TryGetProperty("rowVersion", out _)));
+    }
+
     // ---- helpers ------------------------------------------------------------------------------------------------
+
+    private static async Task<JsonElement> RowAsync(HttpClient client, string token, string email)
+    {
+        using var response = await Send(client, HttpMethod.Get, Users, token);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var items = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("items").EnumerateArray();
+        return items.Single(i => i.GetProperty("email").GetString() == email).Clone();
+    }
+
+    /// <summary>A PATCH whose If-Match is the list row's <c>rowVersion</c>, as the dashboard's Users list sends it.</summary>
+    private static Task<HttpResponseMessage> PatchFromRowAsync(HttpClient client, string token, JsonElement row, object body)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Patch, $"{Users}/{row.GetProperty("id").GetString()}")
+        {
+            Content = JsonContent.Create(body),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Headers.TryAddWithoutValidation("If-Match", $"\"{row.GetProperty("rowVersion").GetString()}\"");
+        return client.SendAsync(request);
+    }
 
     private HttpClient Client() => Factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false });
 

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using QbAutopost.Api.Configuration;
+using QbAutopost.Api.Endpoints.V2;
 using QbAutopost.Api.Jobs;
 using QbAutopost.Api.Security;
 using QbAutopost.Core.Abstractions;
@@ -21,13 +22,15 @@ public static class QuickBooksEndpoints
     /// <summary>FR-A-4 request; every field optional.</summary>
     public sealed record ConnectionTestRequest(string? CompanyFile, int? TimeoutSeconds, bool? IncludeCompanyInfo);
 
-    /// <param name="flavor">T-1109: <see cref="ApiFlavor.V2"/> maps <c>GET /quickbooks/lists</c> only (dashboard v2 spec 3).</param>
+    /// <param name="flavor">
+    /// T-1109: <see cref="ApiFlavor.V2"/> maps the dashboard's lists routes only (dashboard v2 spec 3); since M14 §7 they
+    /// are <see cref="V2.QuickBooksListsV2Endpoints"/> (the v2 GET shape and Sync now).
+    /// </param>
     public static IEndpointRouteBuilder MapQuickBooksEndpoints(this IEndpointRouteBuilder app, ApiFlavor flavor = ApiFlavor.V1)
     {
         if (flavor == ApiFlavor.V2)
         {
-            app.MapGet("/quickbooks/lists", GetLists);
-            return app;
+            return app.MapQuickBooksListsV2Endpoints();
         }
 
         // T-914 (api-v1 §3): the versioned spelling of the sync, and the read of what it cached. The flat
@@ -168,6 +171,7 @@ public static class QuickBooksEndpoints
         PipelineOptions pipeline,
         DirectPlanner planner,
         IClock clock,
+        IQbListsSource lists,
         ILoggerFactory loggers)
     {
         var log = loggers.CreateLogger(typeof(QuickBooksEndpoints));
@@ -182,7 +186,7 @@ public static class QuickBooksEndpoints
         var plan = planner.Plan(
             request,
             Rules.Load(pipeline.RulesFile),
-            new QbListsStore(pipeline.QbListsFile).Load(),
+            lists.Current,
             new LedgerStore(pipeline.LedgerFile).Load(),
             DateOnly.FromDateTime(clock.UtcNow),
             pipeline.QbXmlVersion);
@@ -365,19 +369,25 @@ public static class QuickBooksEndpoints
     /// error — it means the sync has not run, which the empty lists and the null <c>syncedUtc</c> say plainly.
     /// </para>
     /// </summary>
-    private static IResult GetLists(PipelineOptions pipeline) =>
-        Results.Ok(new QbListsStore(pipeline.QbListsFile).Load());
+    private static IResult GetLists(IQbListsSource lists) =>
+        Results.Ok(lists.Current);
 
-    private static async Task<IResult> SyncLists(JobQueue queue, QbListSync sync, ILoggerFactory loggers, CancellationToken ct)
+    private static async Task<IResult> SyncLists(
+        HttpContext http, JobQueue queue, QbListSync sync, ILoggerFactory loggers, CancellationToken ct)
     {
         var log = loggers.CreateLogger(typeof(QuickBooksEndpoints));
+        var client = CallerMiddleware.ClientOf(http);
+        var requestedBy = client is null ? null : client.Name ?? client.Id;
         try
         {
-            // Through the worker: the sync must not overlap a job that reads qb-lists.json or talks to QuickBooks.
-            var result = await queue.RunExclusiveAsync("qb-sync-lists", sync.SyncAsync, ct);
+            // Through the worker: the sync must not overlap a job that reads the lists or talks to QuickBooks.
+            var result = await queue.RunExclusiveAsync(
+                "qb-sync-lists", token => sync.SyncAsync(ListSyncTrigger.Api, requestedBy, token), ct);
+
+            // M14 §12: the same attempt line as the schedule and the dashboard. Log text only; the response is v1's.
             log.LogInformation(
-                "QuickBooks lists synced: {Accounts} accounts, {Vendors} vendors, {Customers} customers",
-                result.Accounts, result.Vendors, result.Customers);
+                "QuickBooks lists sync ({Trigger}, by {RequestedBy}): {Outcome}, {Accounts} accounts, {Vendors} vendors, {Customers} customers",
+                "api", requestedBy ?? "unknown", "ok", result.Accounts, result.Vendors, result.Customers);
             if (result.MissingInRules.Count > 0)
             {
                 log.LogWarning("Names in rules.json that QuickBooks does not have: {Missing}", string.Join("; ", result.MissingInRules));
@@ -387,7 +397,10 @@ public static class QuickBooksEndpoints
         }
         catch (Exception ex) when (QuickBooksProblem(ex) is { } problem)
         {
-            log.LogWarning("QuickBooks list sync failed, qb-lists.json unchanged: {Error}", ex.Message);
+            // The last good lists are kept in either mode (file or database), so the line names neither.
+            log.LogWarning(
+                "QuickBooks lists sync ({Trigger}, by {RequestedBy}): {Outcome} ({Reason}): {Error}",
+                "api", requestedBy ?? "unknown", "failed", QbListSync.ReasonOf(ex) ?? "error", ex.Message);
             return problem;
         }
     }

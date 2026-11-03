@@ -4,7 +4,7 @@ using QbAutopost.Core.Models;
 namespace QbAutopost.Core.QbXml;
 
 /// <summary>
-/// FR-15: <c>AccountQuery</c>, <c>VendorQuery</c> and <c>CustomerQuery</c> (active only) in one message set, and the
+/// FR-15: <c>AccountQuery</c>, <c>VendorQuery</c> and <c>CustomerQuery</c> (active only, only the fields read) in one message set, and the
 /// reader for their response. Element names are pinned by <c>tests/fixtures/qbxml/list-query.golden.xml</c>.
 /// </summary>
 public static class QbListQuery
@@ -19,16 +19,22 @@ public static class QbListQuery
     public static string Build(string qbXmlVersion = QbXmlBuilder.DefaultVersion) =>
         QbMessageSet.Build(qbXmlVersion, "stopOnError", w =>
         {
-            foreach (var (element, id) in new[]
+            foreach (var (element, id, fields) in new[]
                      {
-                         ("AccountQueryRq", AccountsRequestId),
-                         ("VendorQueryRq", VendorsRequestId),
-                         ("CustomerQueryRq", CustomersRequestId),
+                         ("AccountQueryRq", AccountsRequestId, new[] { "FullName", "Name", "AccountType" }),
+                         ("VendorQueryRq", VendorsRequestId, new[] { "Name" }),
+                         ("CustomerQueryRq", CustomersRequestId, new[] { "FullName", "Name" }),
                      })
             {
                 w.WriteStartElement(element);
                 w.WriteAttributeString("requestID", id);
                 w.WriteElementString("ActiveStatus", "ActiveOnly");
+                // qbXML order: IncludeRetElement follows ActiveStatus. Ask only for the fields Parse reads.
+                foreach (var field in fields)
+                {
+                    w.WriteElementString("IncludeRetElement", field);
+                }
+
                 w.WriteEndElement();
             }
         });

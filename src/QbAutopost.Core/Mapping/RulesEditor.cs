@@ -1,6 +1,7 @@
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Models;
 using QbAutopost.Core.Store;
 using QbAutopost.Core.Text;
@@ -28,7 +29,7 @@ public sealed class RuleValidationException(string message) : Exception(message)
 /// checked against <c>qb-lists.json</c> when it exists (spec asks this only for the account); fragments need at least
 /// <see cref="MinFragmentLength"/> characters so an alias cannot match almost every description.
 /// </summary>
-public sealed class RulesEditor(string rulesFile, string qbListsFile)
+public sealed class RulesEditor(string rulesFile, IQbListsSource listsSource)
 {
     public const int MinFragmentLength = 3;
 
@@ -132,7 +133,7 @@ public sealed class RulesEditor(string rulesFile, string qbListsFile)
     }
 
     private QbLists? LoadListsIfSynced() =>
-        File.Exists(qbListsFile) ? new QbListsStore(qbListsFile).Load() : null;
+        listsSource.Current is { SyncedUtc: not null } lists ? lists : null;
 
     private static string Required(string? value, string field) =>
         string.IsNullOrWhiteSpace(value)

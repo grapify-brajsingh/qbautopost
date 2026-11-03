@@ -4,12 +4,18 @@
   <QBXMLMsgsRq onError="stopOnError">
     <AccountQueryRq requestID="accounts">
       <ActiveStatus>ActiveOnly</ActiveStatus>
+      <IncludeRetElement>FullName</IncludeRetElement>
+      <IncludeRetElement>Name</IncludeRetElement>
+      <IncludeRetElement>AccountType</IncludeRetElement>
     </AccountQueryRq>
     <VendorQueryRq requestID="vendors">
       <ActiveStatus>ActiveOnly</ActiveStatus>
+      <IncludeRetElement>Name</IncludeRetElement>
     </VendorQueryRq>
     <CustomerQueryRq requestID="customers">
       <ActiveStatus>ActiveOnly</ActiveStatus>
+      <IncludeRetElement>FullName</IncludeRetElement>
+      <IncludeRetElement>Name</IncludeRetElement>
     </CustomerQueryRq>
   </QBXMLMsgsRq>
 </QBXML>

@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using QbAutopost.Api.Jobs;
 using QbAutopost.Api.Tests.TestSupport;
@@ -202,6 +203,34 @@ public sealed class SyncPostApiTests : IDisposable
         release.SetResult();
         await busy;
         Assert.Empty(_factory.Gateway.Requests);
+    }
+
+    // M14 §5.9 (ADR-0012 with ADR-0008): a scheduled list sync holds the session, so the post is refused, not queued.
+    [Fact]
+    public async Task Should_Answer409WithoutEnqueuing_When_AScheduledListSyncIsRunning()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _factory.Gateway.QueryGate = gate.Task;
+        using var host = _factory.WithWebHostBuilder(b => b.ConfigureAppConfiguration((_, c) => c.AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["QuickBooks:ListSync:IntervalMinutes"] = "5",
+                ["QuickBooks:ListSync:FirstDelayMinutes"] = "0",
+            })));
+        var queue = host.Services.GetRequiredService<JobQueue>(); // starts the host, and with it the worker
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (_factory.Gateway.Requests.Count == 0)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the scheduled sync did not start");
+            await Task.Delay(10);
+        }
+
+        var (status, _) = await PostAsync(SyncPostFixtures.PostedOneRow, host);
+
+        Assert.Equal(HttpStatusCode.Conflict, status);
+        Assert.Equal(0, queue.Depth);
+        gate.SetResult();
+        Assert.Single(_factory.Gateway.Requests); // only the list query: the post never reached QuickBooks
     }
 
     // VP-6

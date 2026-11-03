@@ -431,6 +431,75 @@ namespace QbAutopost.Data.Migrations
                     b.ToTable("post_attempts", (string)null);
                 });
 
+            modelBuilder.Entity("QbAutopost.Data.Entities.QbListSyncEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<long>("Id"));
+
+                    b.Property<int?>("Accounts")
+                        .HasColumnType("integer")
+                        .HasColumnName("accounts");
+
+                    b.Property<int?>("Customers")
+                        .HasColumnType("integer")
+                        .HasColumnName("customers");
+
+                    b.Property<string>("Error")
+                        .HasColumnType("text")
+                        .HasColumnName("error");
+
+                    b.Property<DateTime>("FinishedUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("finished_utc");
+
+                    b.Property<string>("Lists")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("lists");
+
+                    b.Property<string>("MissingInRules")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("missing_in_rules");
+
+                    b.Property<string>("Outcome")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("outcome");
+
+                    b.Property<string>("Reason")
+                        .HasColumnType("text")
+                        .HasColumnName("reason");
+
+                    b.Property<string>("RequestedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("requested_by");
+
+                    b.Property<DateTime>("StartedUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_utc");
+
+                    b.Property<string>("Trigger")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("trigger");
+
+                    b.Property<int?>("Vendors")
+                        .HasColumnType("integer")
+                        .HasColumnName("vendors");
+
+                    b.HasKey("Id")
+                        .HasName("pk_qb_list_syncs");
+
+                    b.HasIndex("Outcome", "Id")
+                        .IsDescending(false, true)
+                        .HasDatabaseName("ix_qb_list_syncs_outcome_id");
+
+                    b.ToTable("qb_list_syncs", (string)null);
+                });
+
             modelBuilder.Entity("QbAutopost.Data.Entities.RefreshTokenEntity", b =>
                 {
                     b.Property<long>("Id")

@@ -1,5 +1,7 @@
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Database;
+using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Pipeline;
 
 namespace QbAutopost.Api.Health;
 
@@ -21,13 +23,13 @@ public static class Readiness
     /// <summary>A failure worth reporting that still leaves the host ready.</summary>
     public const string Warning = "warning";
 
-    public static ReadinessView Evaluate(AppSettings settings, bool workerStarted, DatabaseGate? database = null)
+    public static ReadinessView Evaluate(AppSettings settings, bool workerStarted, IQbListsSource lists, DatabaseGate? database = null)
     {
         var checks = new List<ReadinessCheck>
         {
             Settings(settings),
             Rules(settings),
-            QbLists(settings),
+            QbLists(settings, lists),
             LogFolder(settings),
             Worker(workerStarted),
         };
@@ -50,11 +52,39 @@ public static class Readiness
             ? new ReadinessCheck("rules", true, Error, s.Company.RulesFile)
             : new ReadinessCheck("rules", false, Error, $"{s.Company.RulesFile} not found; every job would fail");
 
-    private static ReadinessCheck QbLists(AppSettings s) =>
+    private static ReadinessCheck QbLists(AppSettings s, IQbListsSource lists)
+    {
         // Only a warning: FR-15 lists are how names are validated, but a job every rule resolves still posts.
-        File.Exists(s.Paths.QbLists)
-            ? new ReadinessCheck("qb-lists", true, Warning, s.Paths.QbLists)
-            : new ReadinessCheck("qb-lists", false, Warning, $"{s.Paths.QbLists} not found; run POST /api/v1/quickbooks/lists/sync");
+        try
+        {
+            var current = lists.Current;
+            var last = lists.LastAttempt;
+            if (current.SyncedUtc is not { } synced)
+            {
+                var failed = last is { Outcome: not ListSyncOutcome.Ok } bad ? $" ({AttemptText(bad)})" : "";
+                var guidance = s.Database.Configured
+                    ? "no lists synced yet; run POST /api/v1/quickbooks/lists/sync or Sync now"
+                    : $"{s.Paths.QbLists} not found; run POST /api/v1/quickbooks/lists/sync";
+                return new ReadinessCheck("qb-lists", false, Warning, guidance + failed);
+            }
+
+            // Spec §9: ok, with the age and any failed or skipped newest attempt named in the text.
+            var message = last is { Outcome: not ListSyncOutcome.Ok } attempt
+                ? $"{AttemptText(attempt)}; lists from {Hm(synced)}"
+                : $"{(s.Database.Configured ? "database" : s.Paths.QbLists)}; lists from {Hm(synced)}";
+            return new ReadinessCheck("qb-lists", true, Warning, message);
+        }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            // A corrupt, truncated or access-denied file must not turn a health poll into a 500.
+            return new ReadinessCheck("qb-lists", false, Warning, $"{s.Paths.QbLists} is unreadable; run POST /api/v1/quickbooks/lists/sync");
+        }
+    }
+
+    private static string AttemptText(ListSyncRun run) =>
+        $"last sync {run.Outcome.ToString().ToLowerInvariant()} {Hm(run.FinishedUtc)}{(string.IsNullOrEmpty(run.Reason) ? "" : $" ({run.Reason})")}";
+
+    private static string Hm(DateTime utc) => utc.ToUniversalTime().ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture);
 
     private static ReadinessCheck LogFolder(AppSettings s)
     {

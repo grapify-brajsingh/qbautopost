@@ -21,13 +21,14 @@ public sealed class RulesEditorTests : IDisposable
 
     private string ListsFile => Path.Combine(_dir.Root, "qb-lists.json");
 
-    private RulesEditor Editor() => new(RulesFile, ListsFile);
+    private RulesEditor Editor() => new(RulesFile, new QbAutopost.Core.Store.FileQbLists(ListsFile));
 
     private Rules Reload() => Rules.Load(RulesFile);
 
     private void SaveLists(string[] accounts, string[] vendors, string[] customers) =>
         new QbListsStore(ListsFile).Save(new QbLists
         {
+            SyncedUtc = new DateTime(2026, 9, 17, 8, 0, 0, DateTimeKind.Utc),
             Accounts = accounts.Select(a => new QbAccount { Name = a, Type = "Expense" }).ToList(),
             Vendors = vendors,
             Customers = customers,

@@ -180,7 +180,7 @@ public sealed class JobQueueTryExclusiveTests : IDisposable
 
     private async Task<JobWorker> StartWorkerAsync()
     {
-        var worker = new JobWorker(_queue, new IdleProcessor(), _store, NullLogger<JobWorker>.Instance);
+        var worker = Workers.ScheduleOff(_queue, new IdleProcessor(), _store, _dir.Path);
         await worker.StartAsync(CancellationToken.None);
         return worker;
     }

@@ -26,7 +26,7 @@ public sealed class JobWorkerTests : IDisposable
 
     private async Task RunUntil(RecordingProcessor processor, Func<bool> done)
     {
-        using var worker = new JobWorker(_queue, processor, _store, NullLogger<JobWorker>.Instance);
+        using var worker = Workers.ScheduleOff(_queue, processor, _store, _dir.Path);
         await worker.StartAsync(CancellationToken.None);
         var deadline = DateTime.UtcNow.AddSeconds(10);
         while (!done() && DateTime.UtcNow < deadline)

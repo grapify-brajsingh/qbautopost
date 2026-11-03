@@ -23,7 +23,8 @@ public sealed class JobPipeline(
     InvoiceExtractor invoiceExtractor,
     AccountChooser accountChooser,
     IQbGateway gateway,
-    IClock clock)
+    IClock clock,
+    IQbListsSource listsSource)
 {
     /// <summary>Folder → spec → statements → G1/G2 → invoices → mapping → job gates → tiers 3–4 + G3 → qbXML and sheets.</summary>
     public async Task<AnalysisResult> RunAnalysisAsync(JobRecord job, CancellationToken ct)
@@ -31,7 +32,7 @@ public sealed class JobPipeline(
         var input = FolderReader.Read(job.Folder);
         var rules = Rules.Load(options.RulesFile);
         var ledger = new LedgerStore(options.LedgerFile).Load();
-        var lists = new QbListsStore(options.QbListsFile).Load();
+        var lists = listsSource.Current;
 
         var spec = await specReader.ReadAsync(input, ct);
         var statements = new List<StatementSummary>();

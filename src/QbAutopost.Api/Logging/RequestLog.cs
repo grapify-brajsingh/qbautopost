@@ -42,6 +42,8 @@ public static class RequestLog
 
     public static LogEventLevel Level(HttpContext http, double elapsedMs, Exception? ex) =>
         ex is not null || http.Response.StatusCode >= 500 ? LogEventLevel.Error
+        // T-1304: the client left (ClientAbortMiddleware); nothing went wrong here.
+        : http.Response.StatusCode == ClientAbortMiddleware.ClientClosedRequest ? LogEventLevel.Information
         : http.Response.StatusCode >= 400 ? LogEventLevel.Warning
         : ApiRoutes.IsHealth(http.Request.Path) ? LogEventLevel.Debug
         : LogEventLevel.Information;

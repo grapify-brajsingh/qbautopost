@@ -105,6 +105,7 @@ public sealed class QuickBooksFlowApiTests : IDisposable
                 ["Paths:JobIndex"] = Dir.Combine("data", "jobs.json"),
                 ["OpenRouter:BaseUrl"] = "https://hermes.invalid:8642",
                 ["QuickBooks:Fake"] = "true",
+                ["QuickBooks:ListSync:IntervalMinutes"] = "0", // M14 §5: no scheduled sync inside a test host
             }));
             builder.ConfigureTestServices(services =>
             {

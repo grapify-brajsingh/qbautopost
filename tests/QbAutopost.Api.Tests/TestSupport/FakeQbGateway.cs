@@ -42,6 +42,12 @@ public sealed class FakeQbGateway : IQbGateway
 
     public Exception? QueryThrow { get; set; }
 
+    /// <summary>
+    /// M14 T-1407: when set, a read-only message set is recorded and then waits for this task before it is answered
+    /// (or fails with <see cref="QueryThrow"/>), so a test can hold a list sync mid-call.
+    /// </summary>
+    public Task? QueryGate { get; set; }
+
     public bool QueryHang { get; set; }
 
     /// <summary>Throws this many times (then answers) for write message sets.</summary>
@@ -74,6 +80,11 @@ public sealed class FakeQbGateway : IQbGateway
         }
 
         var readOnly = QbXmlRequests.IsReadOnly(qbxml);
+        if (readOnly && QueryGate is { } queryGate)
+        {
+            await queryGate.WaitAsync(ct);
+        }
+
         if ((readOnly ? QueryThrow : Throw) is { } error)
         {
             throw error;
