@@ -170,6 +170,51 @@ public sealed class CompanyEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task Should_StillAnswer200_When_RulesTemplateIsMissingDuringScan()
+    {
+        var template = _factory.Dir.Combine("vanishing-template.json");
+        File.Copy(Fixtures.SampleRules, template);
+        using var host = _factory.WithSettings(new Dictionary<string, string?>
+        {
+            ["Companies:RootFolder"] = _root,
+            ["Companies:RulesTemplate"] = template,
+        });
+        Folder(Alpha);
+        using var client = host.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _factory.Users.TokenFor(DashboardRoles.Admin));
+        await client.GetAsync("/api/v2/companies");
+        File.Delete(template);
+
+        using var response = await client.PostAsync("/api/v2/companies/scan", null);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Should_PrepareFolderOnLaterScan_When_RulesFileWasMissing()
+    {
+        var template = _factory.Dir.Combine("late-template.json");
+        File.Copy(Fixtures.SampleRules, template);
+        using var host = _factory.WithSettings(new Dictionary<string, string?>
+        {
+            ["Companies:RootFolder"] = _root,
+            ["Companies:RulesTemplate"] = template,
+        });
+        Folder(Alpha);
+        using var client = host.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _factory.Users.TokenFor(DashboardRoles.Admin));
+        await client.GetAsync("/api/v2/companies");
+        File.Delete(template);
+        using var first = await client.PostAsync("/api/v2/companies/scan", null);
+        var id = Item(await BodyAsync(first), Alpha).GetProperty("id").GetInt32();
+        File.Copy(Fixtures.SampleRules, template);
+
+        using var second = await client.PostAsync("/api/v2/companies/scan", null);
+
+        Assert.True(File.Exists(_factory.Dir.Combine("data", "companies", id.ToString(), "rules.json")));
+    }
+
+    [Fact]
     public async Task Should_MarkMissing_When_SubfolderIsRemoved()
     {
         await ScannedAsync(Alpha);

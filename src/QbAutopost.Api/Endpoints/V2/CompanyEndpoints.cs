@@ -82,7 +82,7 @@ public static class CompanyEndpoints
     /// <summary>Reads the whole root first and applies only when it could be read, so a bad root changes nothing.</summary>
     private static async Task<IResult> ScanAsync(
         HttpContext http, IOptions<AppSettings> settings, CompanyFolderScanner scanner, CompanyDataFolder folders,
-        IClock clock, IQbListsSource lists, IServiceProvider services, CancellationToken ct)
+        IClock clock, IQbListsSource lists, IServiceProvider services, ILoggerFactory loggers, CancellationToken ct)
     {
         var root = settings.Value.Companies.RootFolder;
         if (string.IsNullOrWhiteSpace(root))
@@ -109,14 +109,31 @@ public static class CompanyEndpoints
             .Select(c => new KnownCompanyFolder(c.Id, c.FolderName!, c.FilePath, c.State, c.IsDefault)).ToList();
         var plan = CompanyFolderScanner.Reconcile(scan, known);
         var applied = await store.ApplyScanAsync(plan, CallerMiddleware.CallerOf(http)!.Actor, clock.UtcNow, ct);
-        foreach (var id in applied.AddedIds)
-        {
-            folders.Prepare(id);
-        }
-
+        var companies = await store.ListAsync(ct);
+        PrepareFolders(companies, folders, loggers.CreateLogger(typeof(CompanyEndpoints)));
         var views = new CompanyViews(lists, await PendingAsync(services, ct));
-        var items = (await store.ListAsync(ct)).Select(views.Of).ToList();
+        var items = companies.Select(views.Of).ToList();
         return Results.Ok(new CompanyScanView(applied.Added, applied.Updated, applied.Missing, applied.Ambiguous, plan.NoCompanyFile, items));
+    }
+
+    /// <summary>
+    /// Gives every scan-created company its rules file and ledger (idempotent: only what is absent is created), so a
+    /// failure on one scan (template missing, disk full) is retried by the next. A failure is logged, never fatal: the
+    /// companies are already stored and the scan has to answer.
+    /// </summary>
+    private static void PrepareFolders(IReadOnlyList<Company> companies, CompanyDataFolder folders, ILogger log)
+    {
+        foreach (var company in companies.Where(c => !c.IsDefault))
+        {
+            try
+            {
+                folders.Prepare(company.Id);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                log.LogWarning(ex, "Could not prepare the data folder of company {CompanyId}; the next scan retries", company.Id);
+            }
+        }
     }
 
     private static async Task<IResult> PatchAsync(

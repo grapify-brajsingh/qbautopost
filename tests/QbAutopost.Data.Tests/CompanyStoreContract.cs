@@ -277,6 +277,17 @@ public abstract class CompanyStoreContract
     }
 
     [ContractFact]
+    public async Task Should_CountNoUpdate_When_RescanOfAPathWithAnAmpersandChangesNothing()
+    {
+        var store = CreateStore();
+        var folder = Folder("440_S & A Convenience Market LLC", @"C:\Root\440_S & A\a.qbw", @"C:\Root\440_S & A\b.qbw");
+        await ScanAsync(store, folder);
+        var applied = await store.ApplyScanAsync(PlanFor(await store.ListAsync(default), folder), "user-1", Now.AddMinutes(1), default);
+
+        Assert.Equal(0, applied.Updated);
+    }
+
+    [ContractFact]
     public async Task Should_RefuseDisable_When_CompanyIsTheDefault()
     {
         var store = CreateStore();

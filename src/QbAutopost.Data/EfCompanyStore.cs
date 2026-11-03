@@ -334,9 +334,10 @@ public sealed class EfCompanyStore(IDbContextFactory<QbAutopostDbContext> factor
         var fileChanged = !SamePath(row.FilePath, change.FilePath);
         var displayName = row.IsDefault ? row.DisplayName : change.Folder.DisplayName;
         var candidates = Serialize(change.Folder.Files);
+        var sameCandidates = SameList(row.CandidateFiles, change.Folder.Files);
         var state = row.State == CompanyState.Disabled ? CompanyState.Disabled : change.State;
         var same = row.FolderName == change.Folder.FolderName && row.Code == change.Folder.Code && row.DisplayName == displayName
-            && !fileChanged && row.CandidateFiles == candidates && row.State == state;
+            && !fileChanged && sameCandidates && row.State == state;
         if (same)
         {
             return false;
@@ -376,6 +377,11 @@ public sealed class EfCompanyStore(IDbContextFactory<QbAutopostDbContext> factor
 
     private static bool SamePath(string? a, string? b) =>
         a is null || b is null ? a is null && b is null : string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Structural compare of a stored jsonb list with a list: jsonb re-spaces text and the serialiser escapes
+    /// characters such as <c>&amp;</c>, so two equal lists need not be equal strings.</summary>
+    public static bool SameList(string storedJson, IReadOnlyList<string> values) =>
+        Deserialize(storedJson).SequenceEqual(values, StringComparer.Ordinal);
 
     private static string Serialize(IEnumerable<string> values) => JsonSerializer.Serialize(values, JsonOptions.Default);
 
