@@ -59,7 +59,9 @@ public sealed class QbConnection(IQbGateway gateway, QbConnectionMode mode, Simu
                 // M15 §4: the company starts with the names of Paths:QbLists, so a sync in Development returns them.
                 var company = new SimulatedQuickBooks();
                 var seed = SimulatedListsSeed.Apply(company, settings.Paths.QbLists, log ?? NullLogger.Instance);
-                return new QbConnection(new SimulatedQbGateway(company), mode, seed);
+                // M17 §4.7: the configured default file is the seeded company; any other file gets its own.
+                var defaultFile = string.IsNullOrWhiteSpace(settings.Company.FilePath) ? SimulatedQbGateway.CompanyFile : settings.Company.FilePath;
+                return new QbConnection(new SimulatedQbGateway(company, defaultFile), mode, seed);
             case QbConnectionMode.Sdk when OperatingSystem.IsWindows():
                 return new QbConnection(CreateSdkGateway(settings, sdkTrace), mode);
             default:

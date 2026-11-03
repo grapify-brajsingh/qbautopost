@@ -13,7 +13,8 @@ public sealed record QbGatewayPolicy
 /// <summary>
 /// Wraps the SDK gateway (FR-11):
 /// <list type="bullet">
-/// <item>one call at a time for the whole process (the worker, undo, sync-lists and health share it);</item>
+/// <item>one call at a time for the whole process (the worker, undo, sync-lists and health share it), whichever
+/// company file a call targets (M17 §4.7);</item>
 /// <item>a call that runs longer than <see cref="QbGatewayPolicy.BusyTimeout"/> is abandoned with
 /// <see cref="QuickBooksBusyException"/>. A COM call cannot be cancelled, so an abandoned call keeps the lock until it
 /// really ends; a caller that cannot get the lock within the busy timeout gets <see cref="QuickBooksUnavailableException"/>
@@ -50,6 +51,17 @@ public sealed class ResilientQbGateway(
     public Task<string> CurrentCompanyFileAsync(CancellationToken ct) =>
         RunWithRetryAsync(inner.CurrentCompanyFileAsync, readOnly: true, ct, timeout: null);
 
+    /// <summary>M17 §4.7: the same lock, timeout and retry rules as the untargeted call; only the company file differs.</summary>
+    public Task<string> ProcessAsync(QbTarget target, string qbxml, CancellationToken ct)
+    {
+        var readOnly = QbXmlRequests.IsReadOnly(qbxml);
+        return RunWithRetryAsync(token => inner.ProcessAsync(target, qbxml, token), readOnly, ct, timeout: null);
+    }
+
+    /// <inheritdoc cref="ProcessAsync(QbTarget, string, CancellationToken)"/>
+    public Task<string> CurrentCompanyFileAsync(QbTarget target, CancellationToken ct) =>
+        RunWithRetryAsync(token => inner.CurrentCompanyFileAsync(target, token), readOnly: true, ct, timeout: null);
+
     /// <summary>
     /// One read-only call with its own timeout instead of <see cref="QbGatewayPolicy.BusyTimeout"/> (FR-A-4). The
     /// first call of the day can then outlast the certificate dialog — 101 s on the owner's server — which the 60 s
@@ -75,6 +87,9 @@ public sealed class ResilientQbGateway(
         ex switch
         {
             QuickBooksUnavailableException when ex.Data.Contains(LockTimeoutKey) => false,
+            // M17 §4.7, ruling B1: never retry a refused session on another company's file.
+            QuickBooksWrongCompanyException => false,
+            QuickBooksCompanyFileUnavailableException => false,
             QuickBooksUnavailableException => true,
             QuickBooksCallException => readOnly,
             _ => false,

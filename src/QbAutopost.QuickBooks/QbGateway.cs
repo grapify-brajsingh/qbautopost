@@ -26,15 +26,26 @@ public sealed class QbGateway(QbGatewayOptions options) : IQbGateway
     public Task<string> CurrentCompanyFileAsync(CancellationToken ct) =>
         RunOnStaThread(session => session.CurrentCompanyFile(), ct);
 
-    private Task<string> RunOnStaThread(Func<QbSession, string> work, CancellationToken ct)
+    /// <summary>M17 §4.7: one session on <paramref name="target"/>'s company file.</summary>
+    public Task<string> ProcessAsync(QbTarget target, string qbxml, CancellationToken ct) =>
+        RunOnStaThread(session => session.ProcessRequest(qbxml), ct, target.CompanyFile);
+
+    /// <inheritdoc cref="ProcessAsync(QbTarget, string, CancellationToken)"/>
+    public Task<string> CurrentCompanyFileAsync(QbTarget target, CancellationToken ct) =>
+        RunOnStaThread(session => session.CurrentCompanyFile(), ct, target.CompanyFile);
+
+    private Task<string> RunOnStaThread(Func<QbSession, string> work, CancellationToken ct, string? companyFile = null)
     {
+        var file = companyFile ?? options.CompanyFile;
+        // A target that names the configured file is the default company: its session failures keep today's handling.
+        var defaultCompany = string.Equals(file, options.CompanyFile, StringComparison.OrdinalIgnoreCase);
         ct.ThrowIfCancellationRequested();
         var result = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
             try
             {
-                using var session = QbSession.Open(options.AppName, options.CompanyFile, options.Trace);
+                using var session = QbSession.Open(options.AppName, file, options.Trace, defaultCompany);
                 result.SetResult(work(session));
             }
             catch (Exception ex)
