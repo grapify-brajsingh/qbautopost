@@ -306,7 +306,7 @@ public sealed class V2SummaryTests : IDisposable
 
         Assert.Equal(ApiScopes.RequestsRead, get.GetProperty("x-required-scope").GetString());
         Assert.Equal(
-            new[] { "from", "to", "compareFrom", "compareTo", "bucket", "tz" },
+            new[] { "from", "to", "compareFrom", "compareTo", "bucket", "tz", "company" },
             get.GetProperty("parameters").EnumerateArray().Select(p => p.GetProperty("name").GetString()));
         Assert.True(get.GetProperty("responses").TryGetProperty("400", out _));
     }

@@ -30,6 +30,18 @@ public sealed class AttemptOutcomesTests
         Assert.Equal(new AttemptVerdict(outcome, next, http), AttemptOutcomes.From(new PostEnding(kind, null, NoRows)));
 
     [Fact]
+    public void Should_RecordUnavailableWith409_When_CompanyFileIsOpenElsewhere() =>
+        Assert.Equal(
+            new AttemptVerdict(AttemptOutcome.Unavailable, SavedRequestStatus.Pending, 409),
+            AttemptOutcomes.From(new PostEnding(PostEndingKind.CompanyFileOpenElsewhere, null, NoRows)));
+
+    [Fact]
+    public void Should_RecordUnavailableWith503_When_CompanyFileIsUnavailable() =>
+        Assert.Equal(
+            new AttemptVerdict(AttemptOutcome.Unavailable, SavedRequestStatus.Pending, 503),
+            AttemptOutcomes.From(new PostEnding(PostEndingKind.CompanyFileUnavailable, null, NoRows)));
+
+    [Fact]
     public void Should_LockAsUnknownWithNoHttpStatus_When_ErrorAfterSend() =>
         Assert.Equal(
             new AttemptVerdict(AttemptOutcome.Unknown, SavedRequestStatus.Unknown, null),

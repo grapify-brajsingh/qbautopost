@@ -22,4 +22,7 @@ public sealed class QbListSyncEntity
 
     /// <summary>The <c>QbLists</c> JSON (names and types only) as text, typed <c>jsonb</c>; Ok rows only.</summary>
     public string? Lists { get; set; }
+
+    /// <summary>M17: the company the lists belong to; null only on rows made before it (backfilled with the default).</summary>
+    public int? CompanyId { get; set; }
 }

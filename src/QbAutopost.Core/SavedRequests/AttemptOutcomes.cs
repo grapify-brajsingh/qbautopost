@@ -12,6 +12,10 @@ public static class AttemptOutcomes
         PostEndingKind.Held => new(AttemptOutcome.Held, SavedRequestStatus.Pending, 422),
         PostEndingKind.Busy => new(AttemptOutcome.Busy, SavedRequestStatus.Pending, 409),
         PostEndingKind.Unavailable => new(AttemptOutcome.Unavailable, SavedRequestStatus.Pending, 503),
+        // M17 §4.7: nothing was sent and nothing is retried; the person opens the right file (or approves it) and posts again.
+        PostEndingKind.CompanyFileOpenElsewhere => new(AttemptOutcome.Unavailable, SavedRequestStatus.Pending, 409),
+        PostEndingKind.CompanyFileUnavailable => new(AttemptOutcome.Unavailable, SavedRequestStatus.Pending, 503),
+        PostEndingKind.CompanyNotReady => new(AttemptOutcome.Unavailable, SavedRequestStatus.Pending, 409),
         PostEndingKind.ErrorBeforeSend => new(AttemptOutcome.Error, SavedRequestStatus.Pending, 500),
         PostEndingKind.ErrorAfterSend => new(AttemptOutcome.Unknown, SavedRequestStatus.Unknown, null),
         PostEndingKind.Completed => FromCompleted(ending),

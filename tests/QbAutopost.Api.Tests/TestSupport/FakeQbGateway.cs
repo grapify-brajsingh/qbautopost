@@ -18,8 +18,63 @@ public sealed class FakeQbGateway : IQbGateway
 
     private readonly object _gate = new();
     private readonly List<string> _requests = [];
+    private readonly List<string?> _targets = [];
+    private readonly Dictionary<string, SimulatedQuickBooks> _companies = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The configured company file: untargeted calls go to it and <see cref="Company"/> answers for it.</summary>
+    public const string DefaultCompanyFile = @"C:\fake\Tropicana.QBW";
 
     public SimulatedQuickBooks Company { get; } = new("FAKE-");
+
+    /// <summary>
+    /// M17 §4.7: the file QuickBooks has open. When set, a call needing another file is refused with
+    /// <see cref="QuickBooksWrongCompanyException"/> before anything is recorded (counted in <see cref="Refusals"/>).
+    /// </summary>
+    public string? OpenCompanyFile { get; set; }
+
+    /// <summary>
+    /// M17 ruling B1: a company file whose session cannot open. A call needing it is refused with
+    /// <see cref="QuickBooksCompanyFileUnavailableException"/> before anything is recorded (counted in <see cref="UnavailableCalls"/>).
+    /// </summary>
+    public string? UnavailableCompanyFile { get; set; }
+
+    /// <summary>Calls refused because another file is open.</summary>
+    public int Refusals { get; private set; }
+
+    /// <summary>Calls refused because <see cref="UnavailableCompanyFile"/> could not be opened.</summary>
+    public int UnavailableCalls { get; private set; }
+
+    /// <summary>The target file of each recorded request, in order; null for an untargeted one.</summary>
+    public IReadOnlyList<string?> Targets
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _targets.ToList();
+            }
+        }
+    }
+
+    /// <summary>The simulated company behind <paramref name="file"/>; the default file is <see cref="Company"/>.</summary>
+    public SimulatedQuickBooks CompanyFor(string file)
+    {
+        if (string.Equals(file, DefaultCompanyFile, StringComparison.OrdinalIgnoreCase))
+        {
+            return Company;
+        }
+
+        lock (_gate)
+        {
+            if (!_companies.TryGetValue(file, out var company))
+            {
+                company = new SimulatedQuickBooks("FAKE-");
+                _companies[file] = company;
+            }
+
+            return company;
+        }
+    }
 
     /// <summary>1-based position of a request in a write message set that QuickBooks refuses.</summary>
     public int? RejectLine { get; set; }
@@ -72,11 +127,34 @@ public sealed class FakeQbGateway : IQbGateway
     /// <summary>Read-only message sets (queries).</summary>
     public IReadOnlyList<string> Queries => Requests.Where(QbXmlRequests.IsReadOnly).ToList();
 
-    public async Task<string> ProcessAsync(string qbxml, CancellationToken ct)
+    public Task<string> ProcessAsync(string qbxml, CancellationToken ct) => ProcessForAsync(null, qbxml, ct);
+
+    public Task<string> ProcessAsync(QbTarget target, string qbxml, CancellationToken ct) => ProcessForAsync(target, qbxml, ct);
+
+    private void RefuseIfNotOpenable(string needed)
     {
+        if (OpenCompanyFile is { } open && !string.Equals(open, needed, StringComparison.OrdinalIgnoreCase))
+        {
+            Refusals++;
+            throw new QuickBooksWrongCompanyException(
+                needed, open, $"simulated: QuickBooks has {open} open, so {needed} could not be opened");
+        }
+
+        if (UnavailableCompanyFile is { } unavailable && string.Equals(unavailable, needed, StringComparison.OrdinalIgnoreCase))
+        {
+            UnavailableCalls++;
+            throw new QuickBooksCompanyFileUnavailableException(needed, "0x80040408: simulated: could not open the company file");
+        }
+    }
+
+    private async Task<string> ProcessForAsync(QbTarget? target, string qbxml, CancellationToken ct)
+    {
+        var needed = target?.CompanyFile ?? DefaultCompanyFile;
+        RefuseIfNotOpenable(needed);
         lock (_gate)
         {
             _requests.Add(qbxml);
+            _targets.Add(target?.CompanyFile);
         }
 
         var readOnly = QbXmlRequests.IsReadOnly(qbxml);
@@ -106,7 +184,7 @@ public sealed class FakeQbGateway : IQbGateway
             await Task.Delay(Timeout.Infinite, ct);
         }
 
-        var answer = Company.Process(qbxml, readOnly ? null : Reject);
+        var answer = CompanyFor(needed).Process(qbxml, readOnly ? null : Reject);
         return readOnly || MisstateAmountLine is not { } misstated ? answer : Misstate(answer, misstated);
     }
 
@@ -128,10 +206,24 @@ public sealed class FakeQbGateway : IQbGateway
     /// <summary>How often the company file was asked for — FR-A-3 requires the SDK probe never to ask.</summary>
     public int CompanyFileCalls { get; private set; }
 
-    public Task<string> CurrentCompanyFileAsync(CancellationToken ct)
+    public Task<string> CurrentCompanyFileAsync(CancellationToken ct) => CompanyFileForAsync(null);
+
+    public Task<string> CurrentCompanyFileAsync(QbTarget target, CancellationToken ct) => CompanyFileForAsync(target);
+
+    private Task<string> CompanyFileForAsync(QbTarget? target)
     {
+        var needed = target?.CompanyFile ?? DefaultCompanyFile;
+        try
+        {
+            RefuseIfNotOpenable(needed);
+        }
+        catch (QuickBooksUnavailableException ex)
+        {
+            return Task.FromException<string>(ex);
+        }
+
         CompanyFileCalls++;
-        return CompanyFileThrow is { } error ? Task.FromException<string>(error) : Task.FromResult(@"C:\fake\Tropicana.QBW");
+        return CompanyFileThrow is { } error ? Task.FromException<string>(error) : Task.FromResult(needed);
     }
 
     private XElement? Reject(int position, XElement request) =>

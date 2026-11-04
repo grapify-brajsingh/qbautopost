@@ -43,6 +43,10 @@ public sealed class DisabledSavedRequestStore : ISavedRequestStore, ISavedReques
         long id, ValidationSnapshot snapshot, ValidationSnapshot snapshotV2, DuplicateMatch duplicate, string actor,
         DateTime nowUtc, CancellationToken ct) => throw Off();
 
+    public Task<MutationResult> SetCompanyAsync(
+        long id, int expectedRowVersion, int companyId, DuplicateMatch duplicate, string actor, DateTime nowUtc,
+        CancellationToken ct) => throw Off();
+
     public Task<MutationResult> ChangeStatusAsync(
         long id, int? expectedRowVersion, SavedRequestStatus from, SavedRequestStatus to, string actor,
         DateTime nowUtc, string eventKind, JsonNode? detail, CancellationToken ct) => throw Off();
@@ -65,7 +69,9 @@ public sealed class DisabledSavedRequestStore : ISavedRequestStore, ISavedReques
 
     public Task<PagedResult<SavedRequestSummary>> ListV2Async(SavedRequestQueryV2 query, CancellationToken ct) => throw Off();
 
-    public Task<SavedRequestStatsV2> StatsV2Async(CancellationToken ct) => throw Off();
+    public Task<SavedRequestStatsV2> StatsV2Async(CompanyFilter? company, CancellationToken ct) => throw Off();
+
+    public Task<IReadOnlyDictionary<int, int>> PendingByCompanyAsync(CancellationToken ct) => throw Off();
 
     public Task<IReadOnlyList<OtherPush>> OtherUnpostedPushesAsync(long id, CancellationToken ct) => throw Off();
 
@@ -80,9 +86,9 @@ public sealed class DisabledSavedRequestStore : ISavedRequestStore, ISavedReques
     public Task<IReadOnlyList<UploadDuplicateCandidate>> UploadDuplicateCandidatesAsync(
         string sha256, DateTime sinceUtc, CancellationToken ct) => throw Off();
 
-    public Task<IReadOnlyList<EventFact>> EventFactsAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct) => throw Off();
+    public Task<IReadOnlyList<EventFact>> EventFactsAsync(DateTime fromUtc, DateTime toUtc, int? companyId, CancellationToken ct) => throw Off();
 
-    public Task<IReadOnlyList<PostedFact>> PostedFactsAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct) => throw Off();
+    public Task<IReadOnlyList<PostedFact>> PostedFactsAsync(DateTime fromUtc, DateTime toUtc, int? companyId, CancellationToken ct) => throw Off();
 
-    public Task<IReadOnlyList<PostTimeFact>> PostTimeFactsAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct) => throw Off();
+    public Task<IReadOnlyList<PostTimeFact>> PostTimeFactsAsync(DateTime fromUtc, DateTime toUtc, int? companyId, CancellationToken ct) => throw Off();
 }

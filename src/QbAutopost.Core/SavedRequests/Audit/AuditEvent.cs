@@ -23,4 +23,8 @@ public sealed record AuditEvent(
     JsonNode? Old,
     JsonNode? New,
     int? VersionNumber,
-    JsonNode? Detail);
+    JsonNode? Detail)
+{
+    /// <summary>M17: the company of the event's request, or the company a company event is about; null otherwise.</summary>
+    public int? CompanyId { get; init; }
+}

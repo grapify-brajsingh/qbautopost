@@ -15,19 +15,41 @@ public sealed class LoggingQbGateway(IQbGateway inner, ILogger<LoggingQbGateway>
 
     public IQbGateway Inner => inner;
 
-    public async Task<string> ProcessAsync(string qbxml, CancellationToken ct)
+    public Task<string> ProcessAsync(string qbxml, CancellationToken ct) =>
+        LogProcessAsync(qbxml, target: null, token => inner.ProcessAsync(qbxml, token), ct);
+
+    public Task<string> CurrentCompanyFileAsync(CancellationToken ct) =>
+        LogCompanyFileAsync(target: null, inner.CurrentCompanyFileAsync, ct);
+
+    /// <summary>M17 §4.7: as the untargeted call, with the company file named on the "sending" line.</summary>
+    public Task<string> ProcessAsync(QbTarget target, string qbxml, CancellationToken ct) =>
+        LogProcessAsync(qbxml, target, token => inner.ProcessAsync(target, qbxml, token), ct);
+
+    /// <inheritdoc cref="ProcessAsync(QbTarget, string, CancellationToken)"/>
+    public Task<string> CurrentCompanyFileAsync(QbTarget target, CancellationToken ct) =>
+        LogCompanyFileAsync(target, token => inner.CurrentCompanyFileAsync(target, token), ct);
+
+    private async Task<string> LogProcessAsync(string qbxml, QbTarget? target, Func<CancellationToken, Task<string>> send, CancellationToken ct)
     {
         var call = Interlocked.Increment(ref _calls);
         var request = QbXmlLogSummary.Read(qbxml);
-        log.LogInformation(
-            "QuickBooks call {CallNo}: sending {Requests} ({Length} characters)",
-            call, request is null ? "an unreadable message set" : QbXmlLogSummary.Describe(request), qbxml.Length);
+        var requests = request is null ? "an unreadable message set" : QbXmlLogSummary.Describe(request);
+        if (target is null)
+        {
+            log.LogInformation("QuickBooks call {CallNo}: sending {Requests} ({Length} characters)", call, requests, qbxml.Length);
+        }
+        else
+        {
+            log.LogInformation(
+                "QuickBooks call {CallNo}: sending {Requests} to {CompanyFile} ({Length} characters)",
+                call, requests, target.CompanyFile, qbxml.Length);
+        }
 
         var watch = Stopwatch.StartNew();
         string response;
         try
         {
-            response = await inner.ProcessAsync(qbxml, ct);
+            response = await send(ct);
         }
         catch (Exception ex)
         {
@@ -40,14 +62,22 @@ public sealed class LoggingQbGateway(IQbGateway inner, ILogger<LoggingQbGateway>
         return response;
     }
 
-    public async Task<string> CurrentCompanyFileAsync(CancellationToken ct)
+    private async Task<string> LogCompanyFileAsync(QbTarget? target, Func<CancellationToken, Task<string>> ask, CancellationToken ct)
     {
         var call = Interlocked.Increment(ref _calls);
-        log.LogInformation("QuickBooks call {CallNo}: asking which company file is open", call);
+        if (target is null)
+        {
+            log.LogInformation("QuickBooks call {CallNo}: asking which company file is open", call);
+        }
+        else
+        {
+            log.LogInformation("QuickBooks call {CallNo}: asking which company file is open, session on {CompanyFile}", call, target.CompanyFile);
+        }
+
         var watch = Stopwatch.StartNew();
         try
         {
-            var file = await inner.CurrentCompanyFileAsync(ct);
+            var file = await ask(ct);
             log.LogInformation("QuickBooks call {CallNo}: company file is {CompanyFile} ({ElapsedMs} ms)", call, file, watch.ElapsedMilliseconds);
             WarnIfPastBusyTimeout(call, watch.Elapsed);
             return file;

@@ -5,8 +5,10 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Options;
 using QbAutopost.Api.Configuration;
+using QbAutopost.Api.Endpoints.V2;
 using QbAutopost.Api.SavedRequests;
 using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.Extraction;
 using QbAutopost.Core.Hermes;
 
@@ -43,7 +45,9 @@ public sealed class StatementExtractionService(
     ExtractionPrompt prompt,
     IOptions<AppSettings> settings,
     IClock clock,
-    ILogger<StatementExtractionService> log)
+    ICompanyResolver companyResolver,
+    ILogger<StatementExtractionService> log,
+    ICompanyStore? companyStore = null)
 {
     public const string SchemaName = "bank_statement";
 
@@ -154,6 +158,7 @@ public sealed class StatementExtractionService(
             return ExtractionOutcome.Failed();
         }
 
+        var (match, refs) = await MatchCompanyAsync(answer, read.Text, ct);
         var now = Microseconds(clock.UtcNow);
         rows(payload["transactions"]?.AsArray().Count ?? 0);
 
@@ -179,9 +184,55 @@ public sealed class StatementExtractionService(
             payload,
             now,
             now.AddHours(Math.Max(0, x.RecordHours)),
-            null);
+            null)
+        {
+            Company = match,
+        };
         await store.CreateExtractionAsync(record, ct);
-        return ExtractionOutcome.Ok(StatementExtractionView.Of(record, read.UnreadPages ?? [], hits));
+        return ExtractionOutcome.Ok(StatementExtractionView.Of(record, read.UnreadPages ?? [], hits, refs));
+    }
+
+    /// <summary>
+    /// M17 4.5: the model only read the printed names; this decides. Candidates are the matchable companies (the default
+    /// company alone when there is no company table). A failure here never fails the extraction: it answers "none".
+    /// T-1711 ruling (hold, don't guess): a name the model returned counts only when the PDF's own text prints it (after
+    /// the matcher's normalisation), so a name the model made up never matches; the answer still shows both names.
+    /// </summary>
+    private async Task<(CompanyMatch Match, IReadOnlyDictionary<int, CompanyRefView> Refs)> MatchCompanyAsync(
+        ExtractionAnswer answer, string pdfText, CancellationToken ct)
+    {
+        var text = CompanyNameMatcher.Normalize(pdfText);
+        string? Printed(string? name) =>
+            CompanyNameMatcher.Normalize(name) is { Length: > 0 } key && text.Contains(key, StringComparison.Ordinal) ? name : null;
+        var (holder, dba) = (Printed(answer.AccountHolderName), Printed(answer.DbaName));
+        CompanyMatch Match(IEnumerable<CompanyNames> companies) =>
+            CompanyNameMatcher.Match(holder, dba, companies) with { PrintedName = answer.AccountHolderName, DbaName = answer.DbaName };
+
+        try
+        {
+            if (companyStore is not null)
+            {
+                var companies = await companyStore.ListAsync(ct);
+                return (
+                    Match(companies.Select(c => c.ForMatching())),
+                    companies.ToDictionary(c => c.Id, c => new CompanyRefView(c.Id, c.Code, c.DisplayName)));
+            }
+
+            var fallback = companyResolver.Default;
+            if (fallback.Id == 0)
+            {
+                return (CompanyMatch.NoneFor(answer.AccountHolderName, answer.DbaName), new Dictionary<int, CompanyRefView>());
+            }
+
+            return (
+                Match([new CompanyNames(fallback.Id, true, [fallback.DisplayName])]),
+                new Dictionary<int, CompanyRefView> { [fallback.Id] = new CompanyRefView(fallback.Id, null, fallback.DisplayName) });
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogWarning(ex, "Company matching failed; the extraction continues without a company");
+            return (CompanyMatch.NoneFor(answer.AccountHolderName, answer.DbaName), new Dictionary<int, CompanyRefView>());
+        }
     }
 
     private void Log(string userId, long size, int pages, string modelName, Stopwatch watch, int rows, string outcome) =>
@@ -266,9 +317,12 @@ public sealed record StatementExtractionView(
     DateTime ExpiresUtc,
     bool IsBankStatement,
     JsonObject Payload,
-    IReadOnlyList<ExtractionDuplicateView> PossibleDuplicates)
+    IReadOnlyList<ExtractionDuplicateView> PossibleDuplicates,
+    ExtractionCompanyView Company)
 {
-    public static StatementExtractionView Of(StatementExtraction e, IReadOnlyList<int> unreadPages, IReadOnlyList<UploadDuplicateHit> hits) => new(
+    public static StatementExtractionView Of(
+        StatementExtraction e, IReadOnlyList<int> unreadPages, IReadOnlyList<UploadDuplicateHit> hits,
+        IReadOnlyDictionary<int, CompanyRefView> companies) => new(
         e.Id,
         new ExtractionFileView(e.FileName, e.SizeBytes, e.Sha256, e.PageCount, unreadPages),
         e.Model,
@@ -284,5 +338,21 @@ public sealed record StatementExtractionView(
             SavedRequestJson.Name(h.Status),
             h.ReceivedUtc,
             h.Source,
-            h.Reasons)).ToList());
+            h.Reasons)).ToList(),
+        ExtractionCompanyView.Of(e.Company ?? CompanyMatch.NoneFor(null, null), companies));
+}
+
+/// <summary>
+/// Dashboard R-20.1: the stored <see cref="CompanyMatch"/> mapped once for the wire. <c>Match</c> is the lower-case name
+/// (<c>matched</c>, <c>none</c>, <c>ambiguous</c>); candidates carry the code and display name the picker shows.
+/// </summary>
+public sealed record ExtractionCompanyView(
+    string Match, string? PrintedName, string? DbaName, int? CompanyId, IReadOnlyList<CompanyRefView> Candidates)
+{
+    public static ExtractionCompanyView Of(CompanyMatch m, IReadOnlyDictionary<int, CompanyRefView> companies) => new(
+        JsonNamingPolicy.KebabCaseLower.ConvertName(m.Match.ToString()),
+        m.PrintedName,
+        m.DbaName,
+        m.CompanyId,
+        m.Candidates.Select(id => companies.TryGetValue(id, out var c) ? c : new CompanyRefView(id, null, "")).ToList());
 }

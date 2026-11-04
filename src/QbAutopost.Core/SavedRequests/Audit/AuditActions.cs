@@ -34,12 +34,19 @@ public static class AuditActions
     public const string UserSessionRevoked = "user-session-revoked";
     public const string UserOther = "user-other";
 
+    // M17: company events live in user_audit (no request id) and reach the feed through audit_events.
+    public const string CompaniesScanned = "companies-scanned";
+    public const string CompanyUpdated = "company-updated";
+    public const string CompanyChecked = "company-checked";
+    public const string CompanyAssigned = "company-assigned";
+
     public static IReadOnlyList<string> All { get; } =
     [
         Received, FlaggedDuplicate, Validated, PostStarted, Posted, PostFailed, Discarded, Restored, Resolved,
         RowAdded, RowDeleted, RowPostOff, RowPostOn, RowEdited, ControlTotalChanged, RequestEdited,
         UserCreated, UserRoleChanged, UserDisabled, UserEnabled, UserPasswordReset, UserUnlocked, UserPasswordChanged,
         UserSignedIn, UserSignInFailed, UserLockedOut, UserSessionRevoked, UserOther,
+        CompaniesScanned, CompanyUpdated, CompanyChecked, CompanyAssigned,
     ];
 }
 

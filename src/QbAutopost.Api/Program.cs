@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.AspNetCore.Identity;
 using QbAutopost.Api.Auth;
+using QbAutopost.Api.Companies;
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Database;
 using QbAutopost.Api.Endpoints;
@@ -21,6 +22,7 @@ using QbAutopost.Api.SavedRequests;
 using QbAutopost.Api.Security;
 using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Api;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.Extract;
 using QbAutopost.Core.Gateway;
 using QbAutopost.Core.Hermes;
@@ -82,6 +84,8 @@ builder.Services.AddOptions<AppSettings>()
 builder.Services.AddSingleton<IValidateOptions<AppSettings>, OpenRouterOptionsValidator>();
 // M14 §11: QuickBooks:ListSync values the schedule cannot honour stop startup.
 builder.Services.AddSingleton<IValidateOptions<AppSettings>, ListSyncOptionsValidator>();
+// M17 §4.1: Companies:RootFolder must be absolute and ScheduledSync one of three values.
+builder.Services.AddSingleton<IValidateOptions<AppSettings>, CompaniesOptionsValidator>();
 
 const string CorsPolicyName = "QbAutopostCallers";
 
@@ -110,6 +114,16 @@ builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
 
 builder.Services.AddSingleton<IClock, SystemClock>();
+// M17 §4.4: one resolver for every caller. The store exists only with a database (ruling B9); without one the resolver
+// serves the default company only.
+builder.Services.AddSingleton<CompanyDataFolder>();
+builder.Services.AddSingleton<ICompanyFolderSource, FileSystemCompanyFolderSource>();
+builder.Services.AddSingleton<CompanyFolderScanner>();
+builder.Services.AddSingleton(sp => new CompanyResolver(
+    sp.GetRequiredService<IOptions<AppSettings>>(),
+    sp.GetRequiredService<CompanyDataFolder>(),
+    sp.GetService<ICompanyStore>()));
+builder.Services.AddSingleton<ICompanyResolver>(sp => sp.GetRequiredService<CompanyResolver>());
 // T-910 (FR-A-13): the caller list is re-read per request, so revoking a key takes effect without a restart.
 builder.Services.AddSingleton(sp => new ApiClientStore(sp.GetRequiredService<IOptions<AppSettings>>().Value.Paths.Clients));
 builder.Services.AddScoped(sp => new ApiClientResolver(sp.GetRequiredService<ApiClientStore>().Load()));
@@ -231,6 +245,7 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton<IQbGateway>(sp => sp.GetRequiredService<ResilientQbGateway>());
 builder.Services.AddSingleton<QbConnectionCheck>();
 builder.Services.AddSingleton<CompanyFileValidator>();
+builder.Services.AddSingleton<CompanyAccessChecker>();
 builder.Services.AddSingleton(sp =>
 {
     var s = sp.GetRequiredService<IOptions<AppSettings>>().Value;
@@ -287,7 +302,8 @@ builder.Services.AddSingleton<QbListSync>();
 builder.Services.AddSingleton(sp => new ListSyncSchedule(
     sp.GetRequiredService<IOptions<AppSettings>>().Value.QuickBooks.ListSync,
     sp.GetRequiredService<IQbListsSource>(),
-    sp.GetRequiredService<IClock>()));
+    sp.GetRequiredService<IClock>(),
+    () => sp.GetRequiredService<CompanySweepSource>().Off)); // M17 §4.1: ScheduledSync=off stops the sweep
 builder.Services.AddSingleton<BatchUndo>();
 builder.Services.AddSingleton<QbHealth>();
 builder.Services.AddSingleton(sp =>
@@ -298,6 +314,8 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton<IJobProcessor, JobRunner>();
 builder.Services.AddSingleton<JobAdmission>();
 builder.Services.AddSingleton<StartupRecovery>();
+// M17 §4.7: what the worker's scheduled attempt sweeps when there are several companies. Not a hosted service.
+builder.Services.AddSingleton<CompanySweepSource>();
 builder.Services.AddHostedService<JobWorker>();
 
 // Saved-requests spec 4.2, 5.5, 10.6, 10.7. Without a connection string the feature is off (DisabledSavedRequestStore,
@@ -309,11 +327,14 @@ var listSync = builder.Configuration.GetSection("QuickBooks:ListSync").Get<ListS
 if (database.Configured)
 {
     builder.Services.AddQbAutopostData(database.ConnectionString, database.CommandTimeoutSeconds, listSync.HistoryRows);
+    builder.Services.AddSingleton<CompanyBootstrap>();
 
     // M14 §3, §9: database mode. One source is both the store and the reader; qb-lists.json is only imported (§3.3).
     builder.Services.AddSingleton<DbQbListsSource>();
     builder.Services.AddSingleton<IQbListsStore>(sp => sp.GetRequiredService<DbQbListsSource>());
     builder.Services.AddSingleton<IQbListsSource>(sp => sp.GetRequiredService<DbQbListsSource>());
+    // M17 §4.7: the same source holds every company's lists; the two above are the default company's view.
+    builder.Services.AddSingleton<IQbListsCatalog>(sp => sp.GetRequiredService<DbQbListsSource>());
 
     // T-1009 (spec 11.2, 11.3): Identity's stores need a scoped context; the pool still hands it out and takes it back.
     builder.Services.AddScoped(sp => sp.GetRequiredService<IDbContextFactory<QbAutopostDbContext>>().CreateDbContext());
@@ -350,6 +371,9 @@ else
     builder.Services.AddSingleton(sp => new FileQbLists(sp.GetRequiredService<PipelineOptions>().QbListsFile, listSync.HistoryRows));
     builder.Services.AddSingleton<IQbListsStore>(sp => sp.GetRequiredService<FileQbLists>());
     builder.Services.AddSingleton<IQbListsSource>(sp => sp.GetRequiredService<FileQbLists>());
+    // M17 ruling B9: without a database there is only the default company, whose lists are qb-lists.json.
+    builder.Services.AddSingleton<IQbListsCatalog>(sp => new FileQbListsCatalog(
+        sp.GetRequiredService<FileQbLists>(), sp.GetRequiredService<ICompanyResolver>()));
 }
 
 // T-1111: the dashboard v2 reads and the audit feed are served by the same store instance, whichever one is
@@ -386,6 +410,12 @@ builder.Services.AddSingleton(sp =>
                 .RecoverInFlightAsync(sp.GetRequiredService<IClock>().UtcNow, ct);
             sp.GetRequiredService<ILogger<DatabaseGate>>()
                 .LogInformation("Saved-request recovery: {Count} interrupted post(s) marked unknown", moved);
+
+            // A database that was down at startup has no default company yet; create it and assign old rows first.
+            if (sp.GetService<CompanyBootstrap>() is { } bootstrap)
+            {
+                await bootstrap.RunAsync(ct);
+            }
 
             // A database that was down at startup left the lists empty; load them before a route can post against them.
             if (sp.GetService<DbQbListsSource>() is { } lists)
@@ -479,7 +509,36 @@ try
     // error is logged inside and leaves empty lists; it does not stop startup.
     if (database.Configured)
     {
+        // M17 §4.4: the default company (and the backfill of old rows) comes first; a database error is logged and does
+        // not stop startup, as with the lists below.
+        try
+        {
+            await app.Services.GetRequiredService<CompanyBootstrap>().RunAsync(app.Lifetime.ApplicationStopping);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            app.Logger.LogError(ex, "Company bootstrap failed; the default company is created when the database next answers");
+        }
+
         await app.Services.GetRequiredService<DbQbListsSource>().InitializeAsync(app.Lifetime.ApplicationStopping);
+    }
+
+    // M17 §3: the company root, count and unapproved count (or "ignored without a database"). A store error is logged
+    // and the line skipped; it never stops startup.
+    try
+    {
+        QbAutopost.Api.Health.CompanySummary? companySummary = null;
+        if (database.Configured && settings.Companies.Configured)
+        {
+            var all = await app.Services.GetRequiredService<QbAutopost.Core.Companies.ICompanyStore>().ListAsync(app.Lifetime.ApplicationStopping);
+            companySummary = QbAutopost.Api.Health.CompanySummary.Of(settings.Companies.RootFolder, all);
+        }
+
+        QbAutopost.Api.Logging.StartupLog.WriteCompanies(app.Logger, settings.Companies, companySummary);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        app.Logger.LogWarning(ex, "Companies could not be counted for the start-up line");
     }
 
     app.Lifetime.ApplicationStarted.Register(() =>
@@ -557,6 +616,7 @@ try
     v2.MapAuthEndpoints(ApiFlavor.V2);
     v2.MapUserEndpoints(ApiFlavor.V2);
     v2.MapSavedRequestEndpoints(ApiFlavor.V2);
+    v2.MapCompanyEndpoints();
     v2.MapAuditEventEndpoints();
     v2.MapDashboardSummaryEndpoints();
     v2.MapStatementExtractionEndpoints();

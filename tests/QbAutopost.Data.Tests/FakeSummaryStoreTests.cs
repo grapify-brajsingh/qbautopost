@@ -6,4 +6,6 @@ namespace QbAutopost.Data.Tests;
 public sealed class FakeSummaryStoreTests : SummaryStoreContract
 {
     protected override ISavedRequestStore CreateStore() => new FakeSavedRequestStore();
+
+    protected override Task<int> NewCompanyIdAsync() => Task.FromResult(7);
 }

@@ -59,6 +59,23 @@ public sealed class V2ScopeMatrixTests(Host host) : IClassFixture<Host>
             return;
         }
 
+        // M17 §5.1: the company routes exist under /api/v2 only (v1's spelling is closed to admin); the list is lists:read,
+        // the scan and the edit are requests:admin.
+        if (relative.StartsWith("/companies", StringComparison.Ordinal))
+        {
+            Assert.Equal(ApiScopes.Admin, ApiRoutes.ScopeFor(method, V1 + relative));
+            Assert.Equal(method == "GET" ? ApiScopes.ListsRead : ApiScopes.RequestsAdmin, ApiRoutes.ScopeFor(method, V2 + relative));
+            return;
+        }
+
+        // M17 §5.2: set-company exists under /api/v2 only (requests:edit); v1 has no such route, so its spelling stays admin.
+        if (method == "POST" && relative.EndsWith("/company", StringComparison.Ordinal) && relative.StartsWith("/saved-requests/", StringComparison.Ordinal))
+        {
+            Assert.Equal(ApiScopes.Admin, ApiRoutes.ScopeFor(method, V1 + relative));
+            Assert.Equal(ApiScopes.RequestsEdit, ApiRoutes.ScopeFor(method, V2 + relative));
+            return;
+        }
+
         // M14 §7.2 (Q-120): v2's Sync now is for editors and admins (requests:edit) or a key with qb:read; v1's stays qb:read.
         if (method == "POST" && relative == ApiRoutes.ListSyncRoute)
         {
@@ -83,6 +100,23 @@ public sealed class V2ScopeMatrixTests(Host host) : IClassFixture<Host>
         Assert.NotEqual(ApiScopes.Admin, ApiRoutes.ScopeFor(method, V2 + relative));
     }
 
+    [Fact]
+    public void Should_NeedRequestsEdit_When_SettingAStatementsCompany() =>
+        Assert.Equal(ApiScopes.RequestsEdit, ApiRoutes.ScopeFor("POST", V2 + "/saved-requests/12/company"));
+
+    [Fact]
+    public void Should_NeedRequestsAdmin_When_CheckingACompanysAccess() =>
+        Assert.Equal(ApiScopes.RequestsAdmin, ApiRoutes.ScopeFor("POST", V2 + "/companies/7/check"));
+
+    [Theory]
+    [InlineData("GET", V2 + "/companies/7/check")]
+    [InlineData("POST", V2 + "/companies/check")]
+    [InlineData("POST", V2 + "/companies/7/8/check")]
+    [InlineData("POST", V2 + "/companies/7/checkx")]
+    [InlineData("POST", V1 + "/companies/7/check")]
+    public void Should_CloseTheRoute_When_ItIsNotTheCheckRoute(string method, string path) =>
+        Assert.Equal(ApiScopes.Admin, ApiRoutes.ScopeFor(method, path));
+
     /// <summary>The fall-through stays <c>admin</c> for anything under <c>/api/v2</c> that spec 3 does not name.</summary>
     [Theory]
     [InlineData("GET", V2 + "/jobs")]
@@ -101,6 +135,9 @@ public sealed class V2ScopeMatrixTests(Host host) : IClassFixture<Host>
     [InlineData("GET", V2 + "/saved-requests/12/unknown")]
     [InlineData("GET", V2 + "/saved-requestsx")]
     [InlineData("GET", V2 + "/usersx")]
+    [InlineData("DELETE", V2 + "/companies/1")]
+    [InlineData("GET", V2 + "/companies/scan")]
+    [InlineData("POST", V2 + "/companiesx")]
     [InlineData("POST", V2 + "/auth/anything")]
     [InlineData("GET", V2)]
     public void Should_CloseTheRoute_When_V2PathIsNotInTheTable(string method, string path) =>

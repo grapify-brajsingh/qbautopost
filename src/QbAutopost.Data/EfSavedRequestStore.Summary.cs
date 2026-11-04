@@ -18,19 +18,19 @@ public sealed partial class EfSavedRequestStore : IDashboardSummaryStore
     private static readonly string[] SummaryActions =
         [AuditActions.Received, AuditActions.Posted, AuditActions.PostFailed, AuditActions.Discarded];
 
-    public async Task<IReadOnlyList<EventFact>> EventFactsAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct)
+    public async Task<IReadOnlyList<EventFact>> EventFactsAsync(DateTime fromUtc, DateTime toUtc, int? companyId, CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        var rows = await Filter(db, FeedQuery(fromUtc, toUtc, SummaryActions))
+        var rows = await Filter(db, FeedQuery(fromUtc, toUtc, SummaryActions, companyId))
             .Select(e => new { e.Action, e.AtUtc })
             .ToListAsync(ct);
         return rows.Select(e => new EventFact(e.Action, e.AtUtc)).ToList();
     }
 
-    public async Task<IReadOnlyList<PostedFact>> PostedFactsAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct)
+    public async Task<IReadOnlyList<PostedFact>> PostedFactsAsync(DateTime fromUtc, DateTime toUtc, int? companyId, CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        var events = await Filter(db, FeedQuery(fromUtc, toUtc, [AuditActions.Posted, AuditActions.PostFailed]))
+        var events = await Filter(db, FeedQuery(fromUtc, toUtc, [AuditActions.Posted, AuditActions.PostFailed], companyId))
             .Select(e => new { e.Action, e.AtUtc, e.Detail })
             .ToListAsync(ct);
 
@@ -53,10 +53,12 @@ public sealed partial class EfSavedRequestStore : IDashboardSummaryStore
             .ToList();
     }
 
-    public async Task<IReadOnlyList<PostTimeFact>> PostTimeFactsAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct)
+    public async Task<IReadOnlyList<PostTimeFact>> PostTimeFactsAsync(DateTime fromUtc, DateTime toUtc, int? companyId, CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        var rows = await WithPostedUtc(db, db.SavedRequests.AsNoTracking())
+        var requests = db.SavedRequests.AsNoTracking();
+        if (companyId is { } company) requests = requests.Where(r => r.CompanyId == company);
+        var rows = await WithPostedUtc(db, requests)
             .Where(x => x.PostedUtc >= fromUtc && x.PostedUtc < toUtc)
             .Select(x => new { x.Row.Id, ReceivedUtc = x.Row.EmailReceivedUtc ?? x.Row.CreatedUtc, x.PostedUtc })
             .ToListAsync(ct);
@@ -99,8 +101,8 @@ public sealed partial class EfSavedRequestStore : IDashboardSummaryStore
                     : null,
         });
 
-    private static AuditQuery FeedQuery(DateTime fromUtc, DateTime toUtc, IReadOnlyList<string> actions) =>
-        new(fromUtc, toUtc, null, null, null, null, actions, null, IncludeUserEvents: false, 1, 1);
+    private static AuditQuery FeedQuery(DateTime fromUtc, DateTime toUtc, IReadOnlyList<string> actions, int? companyId) =>
+        new(fromUtc, toUtc, null, null, null, null, actions, null, IncludeUserEvents: false, 1, 1) { CompanyId = companyId };
 
     private static string? DetailText(JsonNode? detail, string name) =>
         detail is JsonObject o && o[name] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;

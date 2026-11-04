@@ -72,6 +72,14 @@ public sealed class SavedRequestEntity
     public string? UploadPromptVersion { get; set; }
     public DateTime? UploadExtractedUtc { get; set; }
 
+    // ---- M17 (T-1703): the company the statement belongs to; null until assigned ----
+
+    public int? CompanyId { get; set; }
+    public QbAutopost.Core.Companies.CompanySource? CompanySource { get; set; }
+
+    /// <summary>The <c>CompanyMatch</c> as JSON text, typed <c>jsonb</c>.</summary>
+    public string? CompanyMatch { get; set; }
+
     /// <summary>Application-managed concurrency token, incremented on every update (§5.1).</summary>
     public int RowVersion { get; set; }
 

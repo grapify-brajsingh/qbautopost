@@ -37,6 +37,12 @@ public sealed class SavedRequestConfiguration : IEntityTypeConfiguration<SavedRe
         builder.Property(e => e.NeedsAttentionV2).HasDefaultValue(false);
         builder.Property(e => e.ProblemCount).HasDefaultValue(0);
 
+        // M17 (T-1703). Nullable: statements saved before M17 are backfilled, new ones may wait for a company.
+        builder.Property(e => e.CompanySource).HasColumnType("text").HasConversion<KebabCaseEnumConverter<QbAutopost.Core.Companies.CompanySource>>();
+        builder.Property(e => e.CompanyMatch).HasColumnType("jsonb");
+        builder.HasOne<CompanyEntity>().WithMany().HasForeignKey(e => e.CompanyId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasIndex(e => new { e.CompanyId, e.Status }).HasDatabaseName("ix_saved_requests_company_id_status");
+
         builder.HasIndex(e => e.PublicRef).IsUnique();
         builder.HasIndex(e => new { e.Status, e.CreatedUtc }).IsDescending(false, true);
         builder.HasIndex(e => e.Reference);

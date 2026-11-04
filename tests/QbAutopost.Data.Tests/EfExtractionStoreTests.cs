@@ -1,4 +1,6 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.Extraction;
 using QbAutopost.Core.SavedRequests;
 
@@ -41,5 +43,20 @@ public sealed class EfExtractionStoreTests(PostgresFixture postgres)
     {
         var store = _services?.GetRequiredService<ISavedRequestStore>() ?? throw new InvalidOperationException(postgres.SkipReason);
         return (store, (IUploadStore)store);
+    }
+
+    protected override async Task<int> SeedCompanyAsync()
+    {
+        var companies = _services!.GetRequiredService<ICompanyStore>();
+        var made = await companies.EnsureDefaultAsync(
+            new NewDefaultCompany("Default company", @"C:\QB\Default.qbw", null, null), DateTime.UtcNow, default);
+        return made.Company.Id;
+    }
+
+    protected override async Task<int?> StoredCompanyIdAsync(Guid extractionId)
+    {
+        var factory = _services!.GetRequiredService<IDbContextFactory<QbAutopostDbContext>>();
+        await using var db = await factory.CreateDbContextAsync();
+        return await db.StatementExtractions.Where(e => e.Id == extractionId).Select(e => e.CompanyId).SingleAsync();
     }
 }

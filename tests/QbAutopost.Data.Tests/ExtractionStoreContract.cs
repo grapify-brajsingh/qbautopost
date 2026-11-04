@@ -13,6 +13,12 @@ public abstract class ExtractionStoreContract
     /// <summary>One object that is both stores, as in the application.</summary>
     protected abstract (ISavedRequestStore Requests, IUploadStore Uploads) CreateStores();
 
+    /// <summary>A company a matched extraction may name (the real store has a foreign key); returns its id.</summary>
+    protected abstract Task<int> SeedCompanyAsync();
+
+    /// <summary>The extraction's stored <c>company_id</c> (the column itself on the real store).</summary>
+    protected abstract Task<int?> StoredCompanyIdAsync(Guid extractionId);
+
     private static StatementExtraction Extraction(Guid id, DateTime expires, long? savedRequestId = null) =>
         new(id, "user-7", "march.pdf", 12345, new string('a', 64), 3, "vendor/model-x", "extract-v1",
             JsonNode.Parse("""{"isBankStatement":true,"reference":"MAR","controlTotal":null,"transactions":[{"kind":"deposit","date":"2026-03-01","amount":12.50,"memo":"x"}]}""")!.AsObject(),
@@ -43,6 +49,40 @@ public abstract class ExtractionStoreContract
         Assert.True(JsonNode.DeepEquals(created.Payload, read.Payload));
         Assert.Equal(DateTimeKind.Utc, read.ExtractedUtc.Kind);
         Assert.Equal(DateTimeKind.Utc, read.ExpiresUtc.Kind);
+    }
+
+    [ContractFact]
+    public async Task Should_RoundTripCompanyMatch_When_Created()
+    {
+        var (_, uploads) = CreateStores();
+        var match = new QbAutopost.Core.Companies.CompanyMatch(
+            QbAutopost.Core.Companies.CompanyMatchKind.Ambiguous, "TWIN MARKET", "DBA TWIN", null, [11, 12]);
+        var created = Extraction(Guid.NewGuid(), Now.AddHours(23)) with { Company = match };
+
+        await uploads.CreateExtractionAsync(created, default);
+        var read = await uploads.GetExtractionAsync(created.Id, default);
+
+        Assert.NotNull(read?.Company);
+        Assert.Equal(match.Match, read.Company.Match);
+        Assert.Equal(match.PrintedName, read.Company.PrintedName);
+        Assert.Equal(match.DbaName, read.Company.DbaName);
+        Assert.Equal(match.CompanyId, read.Company.CompanyId);
+        Assert.Equal(match.Candidates, read.Company.Candidates);
+    }
+
+    /// <summary>Final review (8): a matched extraction writes its company to the <c>company_id</c> column.</summary>
+    [ContractFact]
+    public async Task Should_WriteCompanyIdColumn_When_ExtractionIsMatched()
+    {
+        var (_, uploads) = CreateStores();
+        var companyId = await SeedCompanyAsync();
+        var match = new QbAutopost.Core.Companies.CompanyMatch(
+            QbAutopost.Core.Companies.CompanyMatchKind.Matched, "TAKOMA PARK", null, companyId, [companyId]);
+        var created = Extraction(Guid.NewGuid(), Now.AddHours(23)) with { Company = match };
+
+        await uploads.CreateExtractionAsync(created, default);
+
+        Assert.Equal(companyId, await StoredCompanyIdAsync(created.Id));
     }
 
     [ContractFact]

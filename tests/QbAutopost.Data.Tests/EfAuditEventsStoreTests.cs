@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.SavedRequests;
 using QbAutopost.Core.SavedRequests.Audit;
 using QbAutopost.Data.Entities;
@@ -44,6 +45,14 @@ public sealed class EfAuditEventsStoreTests(PostgresFixture postgres)
 
     protected override ISavedRequestStore CreateStore() =>
         _services?.GetRequiredService<ISavedRequestStore>() ?? throw new InvalidOperationException(postgres.SkipReason);
+
+    protected override async Task<int> NewCompanyIdAsync()
+    {
+        var companies = _services?.GetRequiredService<ICompanyStore>() ?? throw new InvalidOperationException(postgres.SkipReason);
+        var made = await companies.EnsureDefaultAsync(
+            new NewDefaultCompany("Tropicana Market", @"C:\QB\Tropicana.qbw", null, null), DateTime.UtcNow, default);
+        return made.Company.Id;
+    }
 
     // As UserAuditWriter does: straight through the DbContext. The subject must be a user (foreign key), so it is
     // created on first use.

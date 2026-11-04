@@ -8,6 +8,16 @@ namespace QbAutopost.Api.Health;
 /// <summary>One readiness check (FR-A-2). <paramref name="Severity"/> decides whether a failure blocks readiness.</summary>
 public sealed record ReadinessCheck(string Name, bool Ok, string Severity, string Message, string? Reason = null);
 
+/// <summary>M17 §3: what the readiness check and the start-up line say about the company root folder.</summary>
+public sealed record CompanySummary(bool RootConfigured, bool RootReachable, int Count, int NotApproved)
+{
+    /// <summary>Ruling B19: "not approved" counts only active companies whose access is not approved.</summary>
+    public static CompanySummary Of(string rootFolder, IReadOnlyList<QbAutopost.Core.Companies.Company> all) =>
+        new(
+            true, Directory.Exists(rootFolder), all.Count,
+            all.Count(c => c.State == QbAutopost.Core.Companies.CompanyState.Active && c.Access != QbAutopost.Core.Companies.CompanyAccess.Approved));
+}
+
 /// <summary><c>GET /api/v1/health/ready</c> body: <paramref name="Ok"/> is false iff an <c>error</c> check failed.</summary>
 public sealed record ReadinessView(bool Ok, IReadOnlyList<ReadinessCheck> Checks);
 
@@ -23,7 +33,7 @@ public static class Readiness
     /// <summary>A failure worth reporting that still leaves the host ready.</summary>
     public const string Warning = "warning";
 
-    public static ReadinessView Evaluate(AppSettings settings, bool workerStarted, IQbListsSource lists, DatabaseGate? database = null)
+    public static ReadinessView Evaluate(AppSettings settings, bool workerStarted, IQbListsSource lists, DatabaseGate? database = null, CompanySummary? companies = null)
     {
         var checks = new List<ReadinessCheck>
         {
@@ -36,6 +46,11 @@ public static class Readiness
         if (database is not null)
         {
             checks.Add(Database(database));
+        }
+
+        if (companies is { RootConfigured: true })
+        {
+            checks.Add(Companies(settings, companies));
         }
 
         return new ReadinessView(checks.All(c => c.Ok || c.Severity != Error), checks);
@@ -106,6 +121,15 @@ public static class Readiness
         gate.IsReady
             ? new ReadinessCheck("database", true, Warning, "ready")
             : new ReadinessCheck("database", false, Warning, gate.Reason ?? "unreachable", gate.Reason);
+
+    /// <summary>
+    /// M17 §3, ruling B19: only a warning, never unready. "Not approved" counts active companies whose access is not
+    /// approved (the caller's count), so a missing or disabled company is not nagged about.
+    /// </summary>
+    private static ReadinessCheck Companies(AppSettings s, CompanySummary c) =>
+        c.RootReachable
+            ? new ReadinessCheck("companies", true, Warning, $"root {s.Companies.RootFolder}: {c.Count} companies, {c.NotApproved} not approved")
+            : new ReadinessCheck("companies", false, Warning, $"company root folder {s.Companies.RootFolder} is not reachable");
 
     private static ReadinessCheck Worker(bool started) =>
         started

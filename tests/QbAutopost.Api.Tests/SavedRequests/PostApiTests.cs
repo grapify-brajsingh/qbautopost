@@ -806,9 +806,12 @@ public sealed class PostApiTests : IDisposable
 
     private sealed class ThrowingRunner(
         Exception failure, PipelineOptions options, DirectPlanner planner, ApiBatchStore batches, IQbGateway gateway,
-        IClock clock, ILogger<DirectPostRunner> log, QbAutopost.Core.Abstractions.IQbListsSource lists)
-        : DirectPostRunner(options, planner, batches, gateway, clock, log, lists)
+        IClock clock, ILogger<DirectPostRunner> log, QbAutopost.Core.Abstractions.IQbListsCatalog lists,
+        QbAutopost.Core.Companies.ICompanyResolver resolver)
+        : DirectPostRunner(options, planner, batches, gateway, clock, log, lists, resolver)
     {
         public override DirectPlan Plan(DirectRequest request) => throw failure;
+
+        public override DirectPlan Plan(DirectRequest request, QbAutopost.Core.Companies.CompanyContext company) => throw failure;
     }
 }

@@ -14,23 +14,23 @@ public sealed partial class FakeSavedRequestStore : IDashboardSummaryStore
     private static readonly string[] SummaryActions =
         [AuditActions.Received, AuditActions.Posted, AuditActions.PostFailed, AuditActions.Discarded];
 
-    public Task<IReadOnlyList<EventFact>> EventFactsAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct)
+    public Task<IReadOnlyList<EventFact>> EventFactsAsync(DateTime fromUtc, DateTime toUtc, int? companyId, CancellationToken ct)
     {
         lock (_gate)
         {
-            IReadOnlyList<EventFact> facts = AuditRows(FeedQuery(fromUtc, toUtc, SummaryActions))
+            IReadOnlyList<EventFact> facts = AuditRows(FeedQuery(fromUtc, toUtc, SummaryActions, companyId))
                 .Select(e => new EventFact(e.Action, e.AtUtc))
                 .ToList();
             return Task.FromResult(facts);
         }
     }
 
-    public Task<IReadOnlyList<PostedFact>> PostedFactsAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct)
+    public Task<IReadOnlyList<PostedFact>> PostedFactsAsync(DateTime fromUtc, DateTime toUtc, int? companyId, CancellationToken ct)
     {
         lock (_gate)
         {
             var attempts = _attempts.Values.SelectMany(a => a).ToDictionary(a => a.Id);
-            IReadOnlyList<PostedFact> facts = AuditRows(FeedQuery(fromUtc, toUtc, [AuditActions.Posted, AuditActions.PostFailed]))
+            IReadOnlyList<PostedFact> facts = AuditRows(FeedQuery(fromUtc, toUtc, [AuditActions.Posted, AuditActions.PostFailed], companyId))
                 .Where(e => e.Action == AuditActions.Posted || Text(e.Detail, "outcome") == "partial")
                 .Select(e => AttemptIdOf(e.Detail) is { } id && attempts.TryGetValue(id, out var a)
                     ? new PostedFact(a.Id, e.AtUtc, a.Result?.ToJsonString())
@@ -41,11 +41,12 @@ public sealed partial class FakeSavedRequestStore : IDashboardSummaryStore
         }
     }
 
-    public Task<IReadOnlyList<PostTimeFact>> PostTimeFactsAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct)
+    public Task<IReadOnlyList<PostTimeFact>> PostTimeFactsAsync(DateTime fromUtc, DateTime toUtc, int? companyId, CancellationToken ct)
     {
         lock (_gate)
         {
             IReadOnlyList<PostTimeFact> facts = _requests.Values
+                .Where(r => companyId is null || r.CompanyId == companyId)
                 .Select(r => (r, At: PostedUtcOf(r)))
                 .Where(x => x.At is { } at && at >= fromUtc && at < toUtc)
                 .Select(x => new PostTimeFact(x.r.Id, ReceivedUtc(x.r), x.At!.Value))
@@ -59,8 +60,8 @@ public sealed partial class FakeSavedRequestStore : IDashboardSummaryStore
     /// <summary><c>postSummary.postedUtc</c>: the one post time of the summary, the list filter and the list sort.</summary>
     private DateTime? PostedUtcOf(SavedRequest r) => PostSummaries.Of(r.Status, r.PostId, _attempts[r.Id])?.PostedUtc;
 
-    private static AuditQuery FeedQuery(DateTime fromUtc, DateTime toUtc, IReadOnlyList<string> actions) =>
-        new(fromUtc, toUtc, null, null, null, null, actions, null, IncludeUserEvents: false, 1, 1);
+    private static AuditQuery FeedQuery(DateTime fromUtc, DateTime toUtc, IReadOnlyList<string> actions, int? companyId) =>
+        new(fromUtc, toUtc, null, null, null, null, actions, null, IncludeUserEvents: false, 1, 1) { CompanyId = companyId };
 
     private static string? Text(JsonNode? detail, string name) =>
         detail is JsonObject o && o[name] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;

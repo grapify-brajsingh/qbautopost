@@ -1,4 +1,5 @@
 using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.Pipeline;
 
 namespace QbAutopost.Api.Jobs;
@@ -22,12 +23,19 @@ public static class ListSyncGuard
     }
 
     /// <summary>Records the skipped attempt. A failure to record it changes nothing for the caller: the store has logged it.</summary>
+    public static Task RecordSkippedAsync(
+        QbListSync sync, ListSyncTrigger trigger, string? requestedBy, ILogger log, CancellationToken ct) =>
+        RecordSkippedAsync(sync, null, trigger, requestedBy, log, ct);
+
+    /// <summary>M17 §4.7: as above, in <paramref name="company"/>'s history; null is the default company as before M17.</summary>
     public static async Task RecordSkippedAsync(
-        QbListSync sync, ListSyncTrigger trigger, string? requestedBy, ILogger log, CancellationToken ct)
+        QbListSync sync, CompanyContext? company, ListSyncTrigger trigger, string? requestedBy, ILogger log, CancellationToken ct)
     {
         try
         {
-            await sync.RecordSkippedAsync(trigger, requestedBy, ListSyncReasons.QuickBooksNotOpen, ct);
+            await (company is null
+                ? sync.RecordSkippedAsync(trigger, requestedBy, ListSyncReasons.QuickBooksNotOpen, ct)
+                : sync.RecordSkippedAsync(company, trigger, requestedBy, ListSyncReasons.QuickBooksNotOpen, ct));
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {

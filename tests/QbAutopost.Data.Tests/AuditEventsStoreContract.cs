@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.SavedRequests;
 using QbAutopost.Core.SavedRequests.Audit;
 
@@ -21,6 +22,9 @@ public abstract class AuditEventsStoreContract
     private static readonly Guid PushB = Guid.Parse("6f1c2a4e-9b7d-4c3e-8a21-0d5e6f7a8b9c");
 
     protected abstract ISavedRequestStore CreateStore();
+
+    /// <summary>The id of a company row that saved requests can name (EF: the foreign key needs it).</summary>
+    protected abstract Task<int> NewCompanyIdAsync();
 
     /// <summary>Writes a <c>user_audit</c> row as the app would and returns it with its id.</summary>
     protected abstract Task<UserAuditEntry> AddUserAuditAsync(ISavedRequestStore store, UserAuditEntry entry);
@@ -71,8 +75,11 @@ public abstract class AuditEventsStoreContract
     private static AuditQuery Query(
         bool includeUserEvents = true, int page = 1, int pageSize = 200, string? actor = null, IReadOnlyList<string>? actions = null,
         string? q = null, DateTime? from = null, DateTime? to = null, long? requestId = null, string? reference = null,
-        Guid? pushId = null) =>
-        new(from, to, actor, requestId, reference, pushId, actions ?? [], q, includeUserEvents, page, pageSize);
+        Guid? pushId = null, int? companyId = null) =>
+        new(from, to, actor, requestId, reference, pushId, actions ?? [], q, includeUserEvents, page, pageSize)
+        {
+            CompanyId = companyId,
+        };
 
     private sealed record Seeded(long A, long B, IReadOnlyList<UserAuditEntry> Users);
 
@@ -129,6 +136,14 @@ public abstract class AuditEventsStoreContract
         users.Add(await AddUserAuditAsync(store, new UserAuditEntry(
             0, null, "anonymous", "login-failed", JsonNode.Parse("""{"email":"nobody@example.com"}"""), at)));
         users.Add(await AddUserAuditAsync(store, new UserAuditEntry(0, Admin, "anonymous", "locked-out", null, at)));
+
+        // M17: the company kinds written to user_audit (no subject user, detail names the company).
+        foreach (var kind in new[] { "companies-scanned", "company-updated", "company-checked" })
+        {
+            users.Add(await AddUserAuditAsync(store, new UserAuditEntry(
+                0, null, Admin, kind, JsonNode.Parse("""{"companyId":3,"added":1}"""), at)));
+        }
+
         return new Seeded(a.Id, b.Id, users);
     }
 
@@ -211,7 +226,9 @@ public abstract class AuditEventsStoreContract
         var feed = await Feed(store).AuditEventsAsync(Query(), default);
         var expected = await MapperOutputAsync(store, seeded);
 
-        Assert.Equal(AuditActions.All.Order(StringComparer.Ordinal), feed.Items.Select(e => e.Action).Distinct().Order(StringComparer.Ordinal));
+        // company-assigned is a request event written by the set-company action (T-1712); no seed here produces it.
+        var producible = AuditActions.All.Where(a => a != AuditActions.CompanyAssigned);
+        Assert.Equal(producible.Order(StringComparer.Ordinal), feed.Items.Select(e => e.Action).Distinct().Order(StringComparer.Ordinal));
         Assert.Equal(expected.Count, feed.Total);
         Assert.Equal(expected.Select(Describe), feed.Items.Select(Describe));
     }
@@ -244,7 +261,8 @@ public abstract class AuditEventsStoreContract
         var feed = await Feed(store).AuditEventsAsync(Query(includeUserEvents: false), default);
 
         Assert.DoesNotContain(feed.Items, e => e.Id.StartsWith('u'));
-        Assert.Equal(all.Count - seeded.Users.Count, feed.Total);
+        // Company events (id prefix 'c', M17) are not user events: they stay.
+        Assert.Equal(all.Count(e => !e.Id.StartsWith('u')), feed.Total);
         Assert.Equal(feed.Total, await Feed(store).AuditEventCountAsync(Query(includeUserEvents: false), default));
     }
 
@@ -355,5 +373,63 @@ public abstract class AuditEventsStoreContract
         Assert.Equal(all.Skip(5).Take(5).Select(e => e.Id), page2.Items.Select(e => e.Id));
         Assert.Equal(all.Count, page2.Total);
         Assert.Equal(all.Count, await Feed(store).AuditEventCountAsync(Query(page: 2, pageSize: 5), default));
+    }
+
+    // ---- M17 (T-1713): companyId on events and the company filter --------------------------------------------
+
+    [ContractFact]
+    public async Task Should_CarryCompanyId_When_EventBelongsToACompanysStatement()
+    {
+        var store = CreateStore();
+        var companyId = await NewCompanyIdAsync();
+        var withCompany = (await store.CreateAsync(
+            NewRequest(BodyA1, new DuplicateMatch(null, []), SaveMetadata.None) with { CompanyId = companyId, CompanySource = CompanySource.Default },
+            default)).Record;
+        var without = (await store.CreateAsync(
+            NewRequest(BodyB, new DuplicateMatch(null, []), SaveMetadata.None), default)).Record;
+
+        var items = (await Feed(store).AuditEventsAsync(Query(), default)).Items;
+
+        Assert.Equal(companyId, Assert.Single(items, e => e.RequestId == withCompany.Id).CompanyId);
+        Assert.Null(Assert.Single(items, e => e.RequestId == without.Id).CompanyId);
+    }
+
+    [ContractFact]
+    public async Task Should_ReturnOnlyThatCompanysEvents_When_FilteredByCompany()
+    {
+        var store = CreateStore();
+        var companyId = await NewCompanyIdAsync();
+        var withCompany = (await store.CreateAsync(
+            NewRequest(BodyA1, new DuplicateMatch(null, []), SaveMetadata.None) with { CompanyId = companyId, CompanySource = CompanySource.Default },
+            default)).Record;
+        await store.CreateAsync(NewRequest(BodyB, new DuplicateMatch(null, []), SaveMetadata.None), default);
+        var scanned = await AddUserAuditAsync(store, new UserAuditEntry(
+            0, null, "system", "companies-scanned", JsonNode.Parse($$"""{"companyId":{{companyId}}}"""), T0));
+        await AddUserAuditAsync(store, new UserAuditEntry(
+            0, null, "system", "companies-scanned", JsonNode.Parse($$"""{"companyId":{{companyId + 1000}}}"""), T0));
+        await AddUserAuditAsync(store, new UserAuditEntry(0, Admin, Admin, "login", null, T0));
+
+        var feed = await Feed(store).AuditEventsAsync(Query(companyId: companyId), default);
+
+        Assert.All(feed.Items, e => Assert.Equal(companyId, e.CompanyId));
+        Assert.Contains(feed.Items, e => e.RequestId == withCompany.Id);
+        Assert.Contains(feed.Items, e => e.Id == $"c{scanned.Id}");
+        Assert.Equal(feed.Items.Count, feed.Total);
+        Assert.Equal(feed.Total, await Feed(store).AuditEventCountAsync(Query(companyId: companyId), default));
+        Assert.Empty((await Feed(store).AuditEventsAsync(Query(companyId: companyId + 5000), default)).Items);
+    }
+
+    [ContractFact]
+    public async Task Should_IncludeCompanyEvents_When_CallerLacksUsersManage()
+    {
+        var store = CreateStore();
+        var scanned = await AddUserAuditAsync(store, new UserAuditEntry(
+            0, null, "system", "companies-scanned", JsonNode.Parse("""{"added":1}"""), T0));
+        await AddUserAuditAsync(store, new UserAuditEntry(0, Admin, Admin, "login", null, T0));
+
+        var feed = await Feed(store).AuditEventsAsync(Query(includeUserEvents: false), default);
+
+        Assert.Equal([$"c{scanned.Id}"], feed.Items.Select(e => e.Id));
+        Assert.Null(feed.Items[0].CompanyId);
     }
 }

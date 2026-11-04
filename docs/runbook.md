@@ -80,10 +80,34 @@ Copy `rules.json` (start from `samples/rules.json`) to `C:\qb-autopost\rules.jso
 3. `deploy/install-task.ps1` (run once from an administrator's elevated PowerShell, with `-UserId '<MACHINE>\<account>'` when the auto-logon account is not an administrator) registers the task `QbAutopost`: at logon of that account, 60 s delay, **interactive** session, limited rights, no password stored, no time limit, a second start ignored. Pass start-all options with `-StartAllArguments '-SkipPostgres'`; remove it with `-Unregister`.
 4. Both scripts accept `-WhatIf` (prints what would happen, changes nothing). Test the task with `Start-ScheduledTask -TaskName QbAutopost`, then sign out and in once.
 
-### 2.5 Going live and more than one company
+### 2.5 Going live and adding a company file
 
 - A new install posts nothing by itself: `DryRunDefault` is `true`, but the dashboard's Post button always posts (section 14). Go live by setting it to `false` only after the shadow week (tracker T-803/T-804 checklists). A request's own `dryRun` always wins.
-- One installation serves **one** company (`Company:*` holds one name and one file) and `start-all.ps1` starts one API. Running several companies on one server is not supported yet (tracker Q-44); until the owner decides, switch companies one at a time.
+- One installation serves **many** company files. The *default company* keeps working exactly as before: it uses `Company:FilePath`, `Company:RulesFile` and `Paths:Ledger`. Every other company is added from a folder, as below. Company files need the PostgreSQL database (section 10); without it `Companies:RootFolder` is ignored and the start-up log says so.
+
+#### Adding a company file
+
+1. **Put the file in its own folder.** Under one root folder, make one subfolder per company and put that company's `.qbw` directly inside it. Name the subfolder `<code>_<name>`, for example `18_Takoma Park LLC`; the part before the first underscore (`18`) is the company's code. Only one `.qbw` per subfolder: with two, the company is `ambiguous` until an admin chooses the file on the Companies page.
+2. **Set the root.** In `appsettings.json` set `Companies:RootFolder` to that root folder as an absolute path (for example `D:\QB\Companies`), then restart the service. The start-up log shows `Companies: root ... (found), N companies, M not approved`, and `GET /api/v1/health/ready` carries a `companies` check with the same counts. An unapproved company or an unreachable root is a warning only; the service stays ready.
+3. **Sync.** An admin opens the Companies page and presses **Sync** (it scans the root; the API is `POST /api/v2/companies/scan`). Each new subfolder becomes a company. Its rules live in `<Companies:DataFolder>/<id>/rules.json`, copied once from `Companies:RulesTemplate`; edit that copy for the company, not the template. Add the names the company is also known by (DBA names) under match names so statements find it.
+4. **Approve each file once in QuickBooks.** This cannot be done by the app. On the server, in the signed-in desktop session, a QuickBooks **administrator** opens that company file in QuickBooks, signed in as that administrator, then, back in the dashboard, presses **Check access** on the Companies page (step 5). QuickBooks shows its authorization dialog for *QbAutopost*: accept the certificate, choose **"Yes, always; allow access even if QuickBooks is not running"**, and pick the QuickBooks user the app should log in as. Do this for every company file: N files are N approvals.
+5. **Check access.** On the Companies page press **Check access** for the company (`POST /api/v2/companies/{id}/check`) until it shows `approved`.
+
+What the access states mean:
+
+| State | Meaning | What to do |
+|---|---|---|
+| `unchecked` | Never checked | Press Check access |
+| `approved` | The app can open this file | Nothing; statements for it can be validated and posted |
+| `needs-approval` | QuickBooks has not been told to trust the app for this file, or an approval dialog is still waiting | Do step 4; see the dialog note below |
+| `file-not-found` | The `.qbw` is not where the company says | Fix the folder or the file path on the Companies page, then Check access |
+| `error` | QuickBooks refused or failed; the message says why | Read the message, fix, Check access again |
+
+Company states: `active` (usable), `ambiguous` (several `.qbw` in the folder; choose one), `missing` (the folder or file is gone after a Sync; restore it or disable the company), `disabled` (an admin switched it off).
+
+**Only one company file is open in QuickBooks at a time, and the app never switches files.** A post for a company other than the open one is refused (`company-file-open-elsewhere`) and the message names both files: the one open and the one needed. Close the open company in QuickBooks, open the right file (File > Open or Restore Company), and post again. The scheduled list sync (`Companies:ScheduledSync`) skips any company whose file is not the open one and tries it on the next run. Its modes: `waiting-only` (default; only companies with statements waiting or never synced), `all` (every approved company), `off` (no scheduled sync; the Sync now button on the Lists page still works).
+
+**If Check access ends `needs-approval` and you did not expect it**, QuickBooks may be showing an approval dialog on the server that nobody has answered. Answer or close that dialog on the server (section 8.3): QuickBooks stays blocked, and every QuickBooks call waits, until you do. Then press Check access again.
 
 ## 3. Configure
 
@@ -515,6 +539,11 @@ QuickBooks blocks SDK calls while a dialog is open (update prompts, "single-user
 certificate dialog). Close it in the server's desktop session, then re-run. Keep QuickBooks updates on a schedule
 outside working hours.
 
+With several company files, a Check access that answers `needs-approval` after the busy timeout often means the
+authorization dialog for that company file is still open on the server. The app cannot answer or cancel it, and
+QuickBooks stays blocked until someone does: answer it (section 2.5, step 4) or close it in the server's desktop session,
+then press Check access again.
+
 ### 8.4 Busy / no response
 
 `quickbooks-busy` means a call took longer than `BusyTimeoutSeconds`; `quickbooks-no-response` means QuickBooks failed
@@ -657,6 +686,11 @@ works: the database feature answers `503` `schema-out-of-date` and `GET /api/v1/
 Developers regenerate the script with
 `dotnet tool run dotnet-ef migrations script --idempotent -p src/QbAutopost.Data -s src/QbAutopost.Data -o deploy/migrations.sql`
 (a test fails if the checked-in file is stale); strip the byte order mark and use LF line ends, as `deploy\migrations.sql` does.
+
+**After applying `deploy\migrations.sql`, always re-run `deploy\grants.sql`.** `apply-migrations.ps1` does both; if you
+ever apply `migrations.sql` by hand (psql, pgAdmin, a restore), run `grants.sql` straight after it as the owner. The M17
+migration drops and recreates the `audit_events` view, and dropping a view drops its `SELECT` grant: until `grants.sql`
+runs again the app role cannot read the audit feed (`permission denied for view audit_events`).
 
 ### 10.4 Start order and the bootstrap admin
 
@@ -970,6 +1004,10 @@ previous version back.
 - **Dumps.** Every deploy keeps `pre-deploy-<timestamp>-<commit>.dump` in `<BackupFolder>\postgres`. The script never
   deletes them: clear old ones by hand.
 - **A rollback does not undo a migration.** The pre-deploy dump is the way back (restore per 10.5).
+- **Upgrade with a migration (M17 and later): re-run `deploy\grants.sql` after `deploy\migrations.sql`.** Apply migrations
+  with `.\deploy\apply-migrations.ps1` (10.3), which runs `grants.sql` after `migrations.sql`. If `migrations.sql` was
+  applied any other way, run `grants.sql` yourself before starting the API: the M17 migration drops and recreates the
+  `audit_events` view, which drops its `SELECT` grant, and the audit feed then fails with `permission denied`.
 - If `deploy.ps1` itself changed in the pull, it stops: run it again.
 - **`app.old.prev` left behind** means an interrupted run. The preflight says so; the next release clears it. Only when
   `app.old` is missing and you need `-Rollback` now, rename `app.old.prev` to `app.old` by hand first.

@@ -36,6 +36,7 @@ public static class ApiRoutes
         ("POST", "/saved-requests/{id}/restore"),
         ("POST", "/saved-requests/{id}/post"),
         ("POST", "/saved-requests/{id}/resolve"),
+        ("POST", "/saved-requests/{id}/company"),
         ("GET", "/saved-requests/{id}/original"),
         ("GET", "/saved-requests/{id}/versions"),
         ("GET", "/saved-requests/{id}/versions/{n}"),
@@ -46,6 +47,10 @@ public static class ApiRoutes
         ("GET", "/audit-events.csv"),
         ("GET", "/dashboard/summary"),
         ("POST", "/statement-extractions"),
+        ("GET", "/companies"),
+        ("POST", "/companies/scan"),
+        ("PATCH", "/companies/{id}"),
+        ("POST", "/companies/{id}/check"),
         ("GET", "/users"),
         ("POST", "/users"),
         ("GET", "/users/{id}"),
@@ -310,7 +315,7 @@ public static class ApiRoutes
         // below can open anything, and each falls back to admin rather than to a neighbour's scope.
         if (IsUnder(p, "/saved-requests"))
         {
-            return SavedRequestScope(method, p);
+            return SavedRequestScope(method, p, path.Value!.StartsWith(V2Prefix + "/", Ordinal));
         }
 
         // T-1114 (dashboard v2 spec 8.1, 13.1): the audit feed and its CSV are reads of saved-request history. They exist
@@ -335,6 +340,22 @@ public static class ApiRoutes
         if (p.Equals("/statement-extractions", Ordinal) && path.Value!.StartsWith(V2Prefix + "/", Ordinal))
         {
             return HttpMethods.IsPost(method) ? ApiScopes.RequestsSubmit : ApiScopes.Admin;
+        }
+
+        // M17 §5.1: the company list reads (lists:read, as the dropdowns do); the scan and edits are admin work
+        // (requests:admin). Under /api/v2 only; anything else under /companies stays admin.
+        if (IsUnder(p, "/companies") && path.Value!.StartsWith(V2Prefix + "/", Ordinal))
+        {
+            if (get && p.Equals("/companies", Ordinal))
+            {
+                return ApiScopes.ListsRead;
+            }
+
+            var changes = (HttpMethods.IsPost(method) && p.Equals("/companies/scan", Ordinal))
+                || (HttpMethods.IsPost(method) && IsCompanyCheck(p))
+                || (HttpMethods.IsPatch(method) && p.StartsWith("/companies/", Ordinal)
+                    && p.IndexOf('/', "/companies/".Length) < 0 && !p.Equals("/companies/scan", Ordinal));
+            return changes ? ApiScopes.RequestsAdmin : ApiScopes.Admin;
         }
 
         if (IsUnder(p, "/users"))
@@ -422,8 +443,12 @@ public static class ApiRoutes
     private const string AuthChangePassword = "/auth/change-password";
     private const string AuthLogout = "/auth/logout";
 
-    /// <summary>Spec 6 and 11.3: every GET reads; each change is named; anything else is admin, as everywhere.</summary>
-    private static string SavedRequestScope(string method, string p)
+    /// <summary>
+    /// Spec 6 and 11.3: every GET reads; each change is named; anything else is admin, as everywhere. M17 spec 5.2:
+    /// set-company (<c>POST …/{id}/company</c>) is <c>requests:edit</c> under <c>/api/v2</c> only; v1 has no such route
+    /// and its spelling stays closed to admin.
+    /// </summary>
+    private static string SavedRequestScope(string method, string p, bool v2)
     {
         var segments = p.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (HttpMethods.IsGet(method))
@@ -438,6 +463,7 @@ public static class ApiRoutes
             (3, "POST") => segments[2].ToLowerInvariant() switch
             {
                 "validate" or "discard" => ApiScopes.RequestsEdit,
+                "company" when v2 => ApiScopes.RequestsEdit,
                 "post" => ApiScopes.RequestsPost,
                 "restore" or "resolve" => ApiScopes.RequestsAdmin,
                 _ => ApiScopes.Admin,
@@ -459,6 +485,19 @@ public static class ApiRoutes
                || (post && (p.Equals(AuthLogout, Ordinal) || p.Equals(AuthChangePassword, Ordinal)))
             ? ApiScopes.SignedIn
             : ApiScopes.Admin;
+    }
+
+    /// <summary>T-1710: <c>/companies/{id}/check</c>, one segment between (the admin's Check access).</summary>
+    private static bool IsCompanyCheck(string path)
+    {
+        const string prefix = "/companies/";
+        const string suffix = "/check";
+        if (!path.StartsWith(prefix, Ordinal) || !path.EndsWith(suffix, Ordinal) || path.Length <= prefix.Length + suffix.Length)
+        {
+            return false;
+        }
+
+        return path.IndexOf('/', prefix.Length) == path.Length - suffix.Length;
     }
 
     /// <summary>The route itself or anything below it, and not a longer sibling such as <c>/usersx</c>.</summary>

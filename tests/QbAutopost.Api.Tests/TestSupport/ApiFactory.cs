@@ -52,6 +52,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     /// </summary>
     public FakeSavedRequestStore Store { get; }
 
+    /// <summary>M17: the in-memory company store of a host without PostgreSQL (production registers none without a database, ruling B9).</summary>
+    public FakeCompanyStore Companies { get; } = new();
+
     /// <summary>
     /// The fake gate; with <see cref="WithPostgres"/>, the host's real gate (resolving it starts the host).
     /// </summary>
@@ -85,6 +88,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     {
         _postgres = postgres;
         Store = store ?? new FakeSavedRequestStore();
+        // M17 (T-1712): the company-assigned event names companies as the EF store does, from the company rows.
+        Store.CompanyNames ??= id => Companies.GetAsync(id, default).GetAwaiter().GetResult() is { } c ? (c.Code, c.DisplayName) : null;
 
         // Not forced: the host's first start-up check makes it Ready, and runs recovery on Store first, as production does.
         _fakeGate = new DatabaseGate(
@@ -176,6 +181,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             // M14 §5: a long-lived test host must not sync on its own two minutes in (it would query the fake
             // gateway and rewrite qb-lists.json under a running test). ScheduledListSyncTests drive the schedule directly.
             ["QuickBooks:ListSync:IntervalMinutes"] = "0",
+            // M17: scan-created companies keep their files in the test folder, starting from the sample rules.
+            ["Companies:DataFolder"] = Dir.Combine("data", "companies"),
+            ["Companies:RulesTemplate"] = Fixtures.SampleRules,
         }));
         builder.ConfigureTestServices(services =>
         {
@@ -195,6 +203,14 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
             services.RemoveAll<ISavedRequestStore>();
             services.AddSingleton<ISavedRequestStore>(Store);
+            services.RemoveAll<QbAutopost.Core.Companies.ICompanyStore>();
+            services.AddSingleton<QbAutopost.Core.Companies.ICompanyStore>(Companies);
+            services.AddSingleton<QbAutopost.Api.Companies.CompanyBootstrap>();
+            services.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter, FakeCompanyBootstrapFilter>();
+            // Ruling B3: file mode serves the default company only; this host has more, so each gets its own lists.
+            services.RemoveAll<IQbListsCatalog>();
+            services.AddSingleton<IQbListsCatalog>(sp => new FakeQbListsCatalog(
+                sp.GetRequiredService<IQbListsStore>(), sp.GetRequiredService<QbAutopost.Core.Companies.ICompanyResolver>()));
             services.RemoveAll<DatabaseGate>();
             services.AddSingleton(_fakeGate);
             services.RemoveAll<IUserGate>();
@@ -256,4 +272,18 @@ public static class ApiClientExtensions
     }
 
     private static string FolderReaderJobId(string folder) => FolderReader.JobIdOf(folder);
+}
+
+/// <summary>
+/// A host without PostgreSQL never runs <c>CompanyBootstrap</c> (it is registered only with a database, ruling B9), so
+/// this runs it against the <see cref="FakeCompanyStore"/> when the pipeline is built: the default company gets a real
+/// id, as in production. A startup filter, not a hosted service, so <c>JobWorker</c> stays the only background service.
+/// </summary>
+internal sealed class FakeCompanyBootstrapFilter(QbAutopost.Api.Companies.CompanyBootstrap bootstrap) : Microsoft.AspNetCore.Hosting.IStartupFilter
+{
+    public Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> Configure(Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> next)
+    {
+        bootstrap.RunAsync(CancellationToken.None).GetAwaiter().GetResult();
+        return next;
+    }
 }

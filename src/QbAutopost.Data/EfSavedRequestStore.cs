@@ -123,6 +123,9 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
             PushId = request.Metadata.PushId,
             MetadataErrors = request.Metadata.MetadataErrors.ToList(),
             SkipCount = SavedRequestColumns.SkipCountOf(request.Payload),
+            CompanyId = request.CompanyId,
+            CompanySource = request.CompanyId is null ? null : request.CompanySource,
+            CompanyMatch = request.CompanyMatch is { } match ? JsonSerializer.Serialize(match, Json) : null,
         };
         SetSnapshotV2(entity, request.Read.Readable, request.SnapshotV2 ?? request.Snapshot);
         return entity;
@@ -204,14 +207,18 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
             {
                 r.Id, r.Status, r.Source, r.Reference, r.ControlTotal, r.TransactionCount, r.CurrentVersion, r.NeedsAttention,
                 r.DuplicateOfId, r.DuplicateReasons, r.Validation, r.ValidatedUtc, r.PostId, r.CreatedUtc, r.CreatedBy,
-                r.UpdatedUtc, r.UpdatedBy, r.RowVersion,
+                r.UpdatedUtc, r.UpdatedBy, r.RowVersion, r.CompanyId, r.CompanySource,
             })
             .ToListAsync(ct);
 
         var summaries = items.Select(r => new SavedRequestSummary(
             r.Id, r.Status, r.Source, r.Reference, r.ControlTotal, r.TransactionCount, r.CurrentVersion, r.NeedsAttention,
             r.DuplicateOfId, r.DuplicateReasons.ToList(), ReadSnapshot(r.Validation)?.State, r.ValidatedUtc, r.PostId,
-            r.CreatedUtc, r.CreatedBy, r.UpdatedUtc, r.UpdatedBy, r.RowVersion)).ToList();
+            r.CreatedUtc, r.CreatedBy, r.UpdatedUtc, r.UpdatedBy, r.RowVersion)
+        {
+            CompanyId = r.CompanyId,
+            CompanySource = r.CompanySource,
+        }).ToList();
         return new PagedResult<SavedRequestSummary>(summaries, page, size, total);
     }
 
@@ -235,11 +242,12 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
 
         var digests = await rows
             .OrderBy(r => r.CreatedUtc).ThenBy(r => r.Id)
-            .Select(r => new { r.Id, r.CanonicalSha256, r.Reference, r.RowFingerprints, r.CreatedUtc })
+            .Select(r => new { r.Id, r.CanonicalSha256, r.Reference, r.RowFingerprints, r.CreatedUtc, r.CompanyId })
             .ToListAsync(ct);
         return digests
             .Select(d => new DuplicateDigest(
-                d.Id, d.CanonicalSha256, d.Reference, new HashSet<string>(d.RowFingerprints, StringComparer.Ordinal), d.CreatedUtc))
+                d.Id, d.CanonicalSha256, d.Reference, new HashSet<string>(d.RowFingerprints, StringComparer.Ordinal), d.CreatedUtc,
+                d.CompanyId))
             .ToList();
     }
 
@@ -361,6 +369,54 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
                 db, id, SavedRequestEvents.Validated,
                 new JsonObject { ["version"] = snapshot.VersionNumber, ["state"] = snapshot.State.ToString() },
                 nowUtc, actor);
+            await db.SaveChangesAsync(ct);
+            return MutationKind.Ok;
+        });
+
+    public Task<MutationResult> SetCompanyAsync(
+        long id, int expectedRowVersion, int companyId, DuplicateMatch duplicate, string actor, DateTime nowUtc,
+        CancellationToken ct) =>
+        MutateAsync(id, ct, async (db, r) =>
+        {
+            if (r.RowVersion != expectedRowVersion) return MutationKind.Stale;
+            if (r.Status != SavedRequestStatus.Pending) return MutationKind.WrongStatus;
+            // Review Focus 3: never while a post runs. A claim makes the request posting, so this is a second guard.
+            if (await db.PostAttempts.AnyAsync(a => a.SavedRequestId == id && a.Outcome == AttemptOutcome.InProgress, ct))
+                return MutationKind.WrongStatus;
+
+            var readable = await db.SavedRequestVersions
+                .Where(v => v.SavedRequestId == id && v.Number == r.CurrentVersion)
+                .Select(v => v.Readable)
+                .SingleAsync(ct);
+            var ids = new[] { companyId, r.CompanyId ?? companyId };
+            var refs = await db.Companies.AsNoTracking()
+                .Where(c => ids.Contains(c.Id))
+                .Select(c => new { c.Id, c.Code, c.DisplayName })
+                .ToDictionaryAsync(c => c.Id, ct);
+            JsonObject? RefOf(int? companyIdOrNull) =>
+                companyIdOrNull is { } key && refs.TryGetValue(key, out var c)
+                    ? new JsonObject { ["id"] = c.Id, ["code"] = c.Code, ["displayName"] = c.DisplayName }
+                    : companyIdOrNull is { } unknown ? new JsonObject { ["id"] = unknown, ["code"] = null, ["displayName"] = null } : null;
+
+            var detail = new JsonObject
+            {
+                ["companyId"] = companyId,
+                ["from"] = RefOf(r.CompanyId),
+                ["to"] = RefOf(companyId),
+                ["source"] = "chosen",
+            };
+            r.CompanyId = companyId;
+            r.CompanySource = QbAutopost.Core.Companies.CompanySource.Chosen;
+            r.Validation = null;
+            r.ValidatedUtc = null;
+            r.ValidationV2 = null;
+            r.NeedsAttention = !readable;
+            r.NeedsAttentionV2 = !readable || r.MetadataErrors.Count > 0;
+            r.ProblemCount = 0;
+            r.DuplicateOfId = duplicate.Of;
+            r.DuplicateReasons = duplicate.Reasons.ToList();
+            Touch(r, actor, nowUtc);
+            AddEvent(db, id, SavedRequestEvents.CompanyAssigned, detail, nowUtc, actor);
             await db.SaveChangesAsync(ct);
             return MutationKind.Ok;
         });
@@ -634,6 +690,9 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
             ValidationV2 = ReadSnapshot(r.ValidationV2),
             NeedsAttentionV2 = r.NeedsAttentionV2,
             ProblemCount = r.ProblemCount,
+            CompanyId = r.CompanyId,
+            CompanySource = r.CompanySource,
+            CompanyMatch = ReadCompanyMatch(r.CompanyMatch),
             Upload = UploadOf(r.UploadExtractionId, r.UploadFileName, r.UploadSizeBytes, r.UploadSha256, r.UploadModel,
                 r.UploadPromptVersion, r.UploadExtractedUtc),
         };
@@ -661,6 +720,7 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
         }
 
         if (query.Duplicate is { } duplicate) rows = rows.Where(r => (r.DuplicateReasons.Count > 0) == duplicate);
+        if (query.Company is { } company) rows = OfCompany(rows, company);
         if (query.Source is { Length: > 0 } source) rows = rows.Where(r => r.Source == source);
         if (query.CreatedFrom is { } from)
         {
@@ -713,6 +773,10 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
     }
 
     /// <summary>Ids of requests whose current payload has a <c>payee</c> or <c>memo</c> string containing <paramref name="q"/>, ignoring case.</summary>
+    /// <summary>M17 spec 5.2: the statements of one company, or (<see cref="CompanyFilter.None"/>) those with none.</summary>
+    private static IQueryable<SavedRequestEntity> OfCompany(IQueryable<SavedRequestEntity> rows, CompanyFilter company) =>
+        company.CompanyId is { } companyId ? rows.Where(r => r.CompanyId == companyId) : rows.Where(r => r.CompanyId == null);
+
     private static IQueryable<long> PayloadMatches(QbAutopostDbContext db, string q)
     {
         // like_regex takes only a literal pattern, so the whole jsonpath is the parameter. Flag "q" makes the pattern
@@ -796,6 +860,10 @@ public sealed partial class EfSavedRequestStore(IDbContextFactory<QbAutopostDbCo
 
     private static ValidationSnapshot? ReadSnapshot(string? json) =>
         json is null ? null : JsonSerializer.Deserialize<ValidationSnapshot>(json, Json);
+    /// <summary>The stored <c>company_match</c> JSON (M17), or null.</summary>
+    private static QbAutopost.Core.Companies.CompanyMatch? ReadCompanyMatch(string? json) =>
+        json is null ? null : JsonSerializer.Deserialize<QbAutopost.Core.Companies.CompanyMatch>(json, Json);
+
 
     private static JsonElement ParseElement(string json)
     {

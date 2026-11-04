@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+using QbAutopost.Core.Abstractions;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.Models;
 
@@ -15,6 +17,25 @@ public sealed record DirectPostedRow(
     string? LineAccount,
     string? Payee,
     decimal Amount);
+
+/// <summary>
+/// M17 §4.7: QuickBooks would not open the company file the post needed, so nothing was sent and it is not retried.
+/// <paramref name="Type"/> is the problem type: <see cref="OpenElsewhere"/> (another file is open; <paramref name="OpenFile"/>
+/// when the SDK names it) or <see cref="Unavailable"/> (the session could not open; <paramref name="SdkMessage"/> says why).
+/// </summary>
+public sealed record CompanyFileRefusal(string Type, string NeededFile, string? OpenFile, string? SdkMessage)
+{
+    public const string OpenElsewhere = "company-file-open-elsewhere";
+    public const string Unavailable = "company-file-unavailable";
+
+    /// <summary>Ruling B16: the one mapping from a gateway refusal to this record; null for any other exception.</summary>
+    public static CompanyFileRefusal? Of(Exception ex) => ex switch
+    {
+        QuickBooksWrongCompanyException w => new(OpenElsewhere, w.NeededFile, w.OpenFile, null),
+        QuickBooksCompanyFileUnavailableException u => new(Unavailable, u.NeededFile, null, u.SdkMessage),
+        _ => null,
+    };
+}
 
 /// <summary>How the batch divided up. <c>Submitted</c> is what the caller sent, whatever became of it.</summary>
 public sealed record DirectPostCounts(int Submitted, int Posted, int Held, int Skipped);
@@ -60,6 +81,11 @@ public sealed record DirectPostResult
     /// matching on a message — and so a caller can retry knowing the batch never reached QuickBooks.
     /// </summary>
     public bool Unavailable { get; init; }
+
+    /// <summary>M17 §4.7: set when <see cref="Unavailable"/> is because QuickBooks would not open the company's file.
+    /// Left out of the JSON when null, so a v1 batch body (FR-A-11) is byte-identical to before M17.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CompanyFileRefusal? CompanyRefusal { get; init; }
 
     public DateTime StartedUtc { get; init; }
 

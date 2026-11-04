@@ -58,7 +58,11 @@ public sealed record SavedRequestStatsV2(
     IReadOnlyDictionary<SavedRequestStatus, int> ByStatus,
     FlagCounts NeedsAttention,
     FlagCounts Duplicate,
-    FlagCounts HasErrors);
+    FlagCounts HasErrors)
+{
+    /// <summary>M17 spec 5.2: pending statements with no company.</summary>
+    public int NeedsCompany { get; init; }
+}
 
 /// <summary>Another not-yet-posted request with the same reference (spec 9.1, <c>otherUnpostedPushes</c>).</summary>
 /// <param name="ReceivedUtc"><c>coalesce(email_received_utc, created_utc)</c>.</param>

@@ -213,6 +213,42 @@ public sealed class QbListsSourceDbWiringTests(PostgresFixture postgres) : IClas
         }
     }
 
+    // T-1709 review fix: the first load ran before bootstrap gave the default company its id (bootstrap failed then).
+    [PostgresFact]
+    public async Task Should_LoadTheDefaultCompanysLists_When_ItGetsItsIdAfterTheFirstLoad()
+    {
+        var connectionString = await postgres.CreateDatabaseAsync();
+        await TestDatabase.MigrateAsync(connectionString);
+        try
+        {
+            var services = new ServiceCollection().AddQbAutopostData(connectionString, 30).BuildServiceProvider();
+            var settings = Microsoft.Extensions.Options.Options.Create(new QbAutopost.Api.Configuration.AppSettings());
+            var companies = services.GetRequiredService<QbAutopost.Core.Companies.ICompanyStore>();
+            var resolver = new QbAutopost.Api.Companies.CompanyResolver(settings, new QbAutopost.Api.Companies.CompanyDataFolder(settings), companies);
+            var source = new DbQbListsSource(
+                services.GetRequiredService<EfQbListsStore>(),
+                new PipelineOptions { CompanyName = "c", RulesFile = "r", LedgerFile = "l", QbListsFile = "missing.json" },
+                new FixedClock(),
+                new ListLogger<DbQbListsSource>(),
+                resolver,
+                companies);
+            await source.InitializeAsync(default); // no default id yet: the rows with no company
+            await source.RecordAsync(Run(ListSyncOutcome.Ok, 0), Synced("A", 0), default);
+            var created = await companies.EnsureDefaultAsync(
+                new QbAutopost.Core.Companies.NewDefaultCompany("Default", @"C:\fake\Default.QBW", null, null), DateTime.UtcNow, default);
+            resolver.UseDefaultId(created.Company.Id); // bootstrap succeeds later and backfills the row
+
+            await source.EnsureLoadedAsync(default);
+
+            Assert.Equal(["A"], source.Current.Accounts.Select(a => a.Name));
+            Assert.Equal(ListSyncOutcome.Ok, source.LastAttempt!.Outcome);
+        }
+        finally
+        {
+            TestDatabase.Release(connectionString);
+        }
+    }
+
     [PostgresFact]
     public async Task Should_NotReload_When_TheListsAreAlreadyLoaded()
     {

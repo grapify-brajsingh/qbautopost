@@ -11,9 +11,9 @@ namespace QbAutopost.Api.Tests.SavedRequests;
 public sealed class ExtractionPromptTests
 {
     /// <summary>The committed (LF) bytes of <c>extraction-prompt.json</c> at <see cref="PinnedVersion"/>.</summary>
-    private const string PinnedSha256 = "ca64cc196a6197631fd81b211d9095ebd9324dfe94132557689ff5e867a0b19c";
+    private const string PinnedSha256 = "254320bbbc85f698bdbc188119fb93091da792da4598c68d46165dd024ae14f9";
 
-    private const string PinnedVersion = "2026-10-28.api-1";
+    private const string PinnedVersion = "2026-11-03.api-2";
 
     private static readonly char Star = (char)0x2605;
 
@@ -40,7 +40,7 @@ public sealed class ExtractionPromptTests
         Assert.Contains("If the header does not show them, omit 'account'.", prompt, StringComparison.Ordinal);
         Assert.Contains("If the category is not clear from the description, omit 'lineAccount'.", prompt, StringComparison.Ordinal);
         Assert.Contains("If no counterparty can be identified, omit 'payee'.", prompt, StringComparison.Ordinal);
-        Assert.EndsWith("9. 'last4': Extract card or account last 4 digits if present in text, otherwise null.", prompt, StringComparison.Ordinal);
+        Assert.Contains("9. 'last4': Extract card or account last 4 digits if present in text, otherwise null.", prompt, StringComparison.Ordinal);
         Assert.DoesNotContain("Ask My Accountant", prompt, StringComparison.Ordinal);
     }
 
@@ -63,6 +63,30 @@ public sealed class ExtractionPromptTests
         Assert.DoesNotContain("Ask My Accountant", schema.ToJsonString(), StringComparison.Ordinal);
         Assert.DoesNotContain("3188", schema.ToJsonString(), StringComparison.Ordinal);
         Assert.DoesNotContain("zemen", schema.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Should_OfferOptionalPrintedNameFields_When_SchemaLoaded()
+    {
+        var schema = ExtractionPrompt.Load().Schema;
+
+        foreach (var name in new[] { "accountHolderName", "dbaName" })
+        {
+            Assert.Equal("string", schema["properties"]![name]!["type"]!.GetValue<string>());
+        }
+
+        Assert.Equal("""["is_bank_statement","transactions"]""", schema["required"]!.ToJsonString());
+        Assert.False(schema["additionalProperties"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void Should_ForbidFileNameForCompanyFields_When_PromptLoaded()
+    {
+        var prompt = ExtractionPrompt.Load().SystemPrompt;
+
+        Assert.Contains("copied exactly as printed", prompt, StringComparison.Ordinal);
+        Assert.Contains("Omit either if it is not printed.", prompt, StringComparison.Ordinal);
+        Assert.EndsWith("Never take them from the file name.", prompt, StringComparison.Ordinal);
     }
 
     [Fact]

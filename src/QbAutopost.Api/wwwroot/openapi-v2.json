@@ -38,6 +38,10 @@
       "description": "User management for admins (saved-requests §11.4): temporary passwords, roles, disabling, unlocking, audit."
     },
     {
+      "name": "Companies",
+      "description": "The company folders under Companies:RootFolder (M17): list, scan, choose a file, disable, match names."
+    },
+    {
       "name": "Saved requests",
       "description": "Saved requests (saved-requests §6): n8n saves a validate-and-post body here, people review and post it from the dashboard."
     }
@@ -126,7 +130,7 @@
         ],
         "operationId": "getLists",
         "summary": "The stored QuickBooks account, vendor and customer names, with the last sync attempt and the next automatic sync.",
-        "description": "Read from the stored lists (the newest successful sync), so it answers while QuickBooks is shut down and never queues behind a post. A `syncedUtc` of `null` with empty lists means no sync has succeeded yet; it is not an error. `syncedUtc` stays the time of the lists in use, while `lastSync` is the newest attempt of any outcome (null before any attempt), so \"synced 12 min ago\" and \"the last attempt failed\" can both be shown. `nextSyncUtc` is when the next automatic sync is due, null when `QuickBooks:ListSync:IntervalMinutes` is 0. Needs `lists:read`, which every dashboard role holds; an API key holding `qb:read` satisfies it too. The v1 route answers without `lastSync` and `nextSyncUtc`.",
+        "description": "Read from the stored lists (the newest successful sync), so it answers while QuickBooks is shut down and never queues behind a post. A `syncedUtc` of `null` with empty lists means no sync has succeeded yet; it is not an error. `syncedUtc` stays the time of the lists in use, while `lastSync` is the newest attempt of any outcome (null before any attempt), so \"synced 12 min ago\" and \"the last attempt failed\" can both be shown. `nextSyncUtc` is when the next automatic sync is due, null when `QuickBooks:ListSync:IntervalMinutes` is 0. Needs `lists:read`, which every dashboard role holds; an API key holding `qb:read` satisfies it too. The v1 route answers without `lastSync` and `nextSyncUtc`. M17 §5.3: `company=<id>` reads that company's own lists and last attempt; without it, the default company's.",
         "x-required-scope": "lists:read",
         "responses": {
           "200": {
@@ -135,6 +139,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/QbListsV2"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid-request`: `company` is not a company id, is given more than once, or names no company.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -148,7 +162,19 @@
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "description": "M17 §5.3: the company whose lists these are (a company id). Missing: the default company, as before M17. Not a positive integer, or given more than once: `400 invalid-request`. An id no company has: `400 invalid-request`.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ]
       }
     },
     "/api/v2/quickbooks/lists/sync": {
@@ -158,7 +184,7 @@
         ],
         "operationId": "syncListsV2",
         "summary": "Sync now: fetch the active accounts, vendors and customers from QuickBooks and store them.",
-        "description": "M14 §7.2 (R-16). No body. In order: if QuickBooks is not running on the server the answer is `409 quickbooks-not-open` and a `skipped` attempt is recorded (the API never starts QuickBooks); if a sync is already queued or running (the automatic one, or another Sync now) this request **joins it** and answers with its result, so two presses make one QuickBooks call; otherwise the sync runs on the job worker after any job ahead of it. The caller waits at most `Api:SyncPostTimeoutSeconds` (120): past that the answer is `504 sync-timeout`, the sync carries on and `GET /api/v2/quickbooks/lists` shows its result. A failed sync never replaces the stored lists. The `200` is built from the run and lists this sync produced (or the sync it joined), not read back afterwards. Needs `requests:edit` (editors and admins; viewers get `403`) or, for an API key, `qb:read` as on v1. A dashboard user's sync is recorded with trigger `dashboard` and their id; an API key's with trigger `api` and the client's name. Counts against the posting rate limit (`Api:RateLimits:PostPerMinute`), because it opens a QuickBooks session. Not an audit-feed event.",
+        "description": "M14 §7.2 (R-16). No body, or `{\"company\": <id>}`. In order: if QuickBooks is not running on the server the answer is `409 quickbooks-not-open` and a `skipped` attempt is recorded (the API never starts QuickBooks); if a sync is already queued or running (the automatic one, or another Sync now) this request **joins it** and answers with its result, so two presses make one QuickBooks call; otherwise the sync runs on the job worker after any job ahead of it. The caller waits at most `Api:SyncPostTimeoutSeconds` (120): past that the answer is `504 sync-timeout`, the sync carries on and `GET /api/v2/quickbooks/lists` shows its result. A failed sync never replaces the stored lists. The `200` is built from the run and lists this sync produced (or the sync it joined), not read back afterwards. Needs `requests:edit` (editors and admins; viewers get `403`) or, for an API key, `qb:read` as on v1. A dashboard user's sync is recorded with trigger `dashboard` and their id; an API key's with trigger `api` and the client's name. Counts against the posting rate limit (`Api:RateLimits:PostPerMinute`), because it opens a QuickBooks session. Not an audit-feed event. M17 §4.7: with `company`, that company's file is queried and its own lists and history are recorded; a sync joins only a sync of the same company. A company that is not `active` + `approved` (or whose file is outside `Companies:RootFolder`) answers `409 company-not-ready` with nothing sent or recorded. Another company file open in QuickBooks answers `409 company-file-open-elsewhere` (`openFile`, `neededFile`); a file that would not open answers `503 company-file-unavailable`; both record a `skipped` attempt with that reason and are never retried.",
         "x-required-scope": "requests:edit|qb:read",
         "security": [
           {
@@ -179,6 +205,16 @@
               }
             }
           },
+          "400": {
+            "description": "`invalid-request`: `company` (query or body) is not a company id, is given twice, or names no company; or the body is not JSON. Nothing was sent.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
@@ -186,7 +222,7 @@
             "$ref": "#/components/responses/Forbidden"
           },
           "409": {
-            "description": "`quickbooks-not-open` (problem `type`): QuickBooks is not running on the server, so nothing was sent; title \"QuickBooks isn't open\", detail \"Open QuickBooks on the company file, then sync again.\" A `skipped` attempt is recorded. Also the answer when the automatic sync this request joined was skipped for the same reason.",
+            "description": "`quickbooks-not-open` (problem `type`): QuickBooks is not running on the server, so nothing was sent; title \"QuickBooks isn't open\", detail \"Open QuickBooks on the company file, then sync again.\" A `skipped` attempt is recorded. Also the answer when the automatic sync this request joined was skipped for the same reason. M17: also `company-not-ready` (with `state`, `access`) and `company-file-open-elsewhere` (with `openFile`, `neededFile`).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -209,7 +245,7 @@
             }
           },
           "503": {
-            "description": "`quickbooks-unavailable` or `quickbooks-busy` (problem `type`): QuickBooks could not be reached, or did not answer in time (title \"QuickBooks is not available\"). The `detail` is fixed text, never the exception message (that stays in the log and the recorded attempt). A `failed` attempt with the same code is recorded; the stored lists are unchanged. Or `api-stopping`: the sync this request waited for was cancelled because the API is shutting down (detail \"The API is stopping; try again in a moment.\").",
+            "description": "`quickbooks-unavailable` or `quickbooks-busy` (problem `type`): QuickBooks could not be reached, or did not answer in time (title \"QuickBooks is not available\"). The `detail` is fixed text, never the exception message (that stays in the log and the recorded attempt). A `failed` attempt with the same code is recorded; the stored lists are unchanged. Or `api-stopping`: the sync this request waited for was cancelled because the API is shutting down (detail \"The API is stopping; try again in a moment.\"). M17: also `company-file-unavailable` (with `neededFile`): the company's file could not be opened; a `skipped` attempt is recorded and it is not retried.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -224,6 +260,35 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "description": "M17 §5.3: the company whose lists these are (a company id). Missing: the default company, as before M17. Not a positive integer, or given more than once: `400 invalid-request`. May instead be sent in the body as `{\"company\": <id>}` (not both). An id no company has: `400 invalid-request`.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "description": "Optional. `company`: the company to sync (M17 §5.3); the same as the `company` query parameter.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "company": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
                 }
               }
             }
@@ -288,6 +353,16 @@
               "minimum": 1,
               "maximum": 100,
               "default": 25
+            }
+          },
+          {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "description": "M17 §5.3: the company whose history this is (a company id). Missing: the default company. Not a positive integer, or given more than once: `400 invalid-request`. An id no company has: an empty page.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
             }
           }
         ],
@@ -580,6 +655,288 @@
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v2/companies": {
+      "get": {
+        "tags": [
+          "Companies"
+        ],
+        "operationId": "listCompanies",
+        "summary": "The companies: the default company and every company folder found under `Companies:RootFolder`.",
+        "description": "M17 spec 5.1. `rootConfigured` is false when `Companies:RootFolder` is empty (then only the default company is listed); `rootReachable` is whether that folder exists now. `lastScanUtc` is the newest scan, null if none. Each item carries its `rowVersion` (send it as `If-Match` on a patch), the `candidateFiles` of an ambiguous company, and `waitingCount`, the pending statements of that company. `lists` is null when the company's QuickBooks lists were never synced (only the default company has lists until M17 T-1709). Needs `lists:read`, which every dashboard role holds.",
+        "x-required-scope": "lists:read",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The companies.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/companies/scan": {
+      "post": {
+        "tags": [
+          "Companies"
+        ],
+        "operationId": "scanCompanies",
+        "summary": "Scan `Companies:RootFolder`: one company per subfolder holding a `.qbw` file.",
+        "description": "M17 spec 4.2. One level deep. A new folder becomes a company (`active` with one `.qbw`, `ambiguous` with several, the admin chooses one with a patch); a company whose folder or file vanished becomes `missing` (its statements are kept); a folder with no `.qbw` is listed in `noCompanyFile`. A folder name of the form `<digits>_<name>` gives the `code` and the display name. Each new company gets its own rules file (a copy of `Companies:RulesTemplate`) and an empty ledger. `updated` counts the companies whose stored values changed; a rescan that finds nothing new answers `added` 0 and `updated` 0. `items` are all companies after the scan. Records `companies-scanned`. If the root is not set or cannot be read the answer is `503 company-root-unavailable` and nothing changes. Needs `requests:admin`.",
+        "x-required-scope": "requests:admin",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The scan was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyScan"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "`company-root-unavailable` (the path is in `detail`; nothing was changed) or `database-unavailable`.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/companies/{id}": {
+      "patch": {
+        "tags": [
+          "Companies"
+        ],
+        "operationId": "updateCompany",
+        "summary": "Change a company's match names, chosen file or disabled flag.",
+        "description": "M17 spec 5.1. Needs `If-Match`. `filePath` must be one of the company's `candidateFiles`; choosing it makes an ambiguous company `active` and clears its access check when the file changes. `disabled: true` disables (never the default company); `disabled: false` re-enables a disabled company as `active` when its file exists, `ambiguous` when no file was chosen but candidates exist, else `missing`. `matchNames` replaces the alias list: names are trimmed, blanks dropped, at most 50 names of at most 200 characters (else `400 invalid-request`). Records `company-updated`. Needs `requests:admin`.",
+        "x-required-scope": "requests:admin",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The company's id.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "The company's `rowVersion`, in quotes. Missing answers `428 precondition-required`, a stale one `412 edited-by-someone-else` (with the current `rowVersion`).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Changed (or already so). The new `ETag` is set.",
+            "headers": {
+              "ETag": {
+                "description": "The company's ETag (its row version, in quotes), to send back in `If-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Company"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: the company changed; `rowVersion` is the current one. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`precondition-required`: send `If-Match`.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`database-unavailable`, or `company-root-unavailable` when no database is configured.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/companies/{id}/check": {
+      "post": {
+        "tags": [
+          "Companies"
+        ],
+        "operationId": "checkCompany",
+        "summary": "Check access: open a session on the company's file and store the result.",
+        "description": "M17 spec 3, 5.1. The one call that opens a session for a company that is not approved, because it is how a file becomes approved. Runs on the job worker through the one QuickBooks lock: opens a session on the company's file, asks `CompanyQueryRq` and stores `access` (`approved` with `qbCompanyName` and `qbLegalName`; `needs-approval` when QuickBooks did not answer within `QuickBooks:BusyTimeoutSeconds` - answer the certificate dialog on the server, the lock stays held until it is answered; `file-not-found` when the `.qbw` is gone, with no session; `error` with `accessMessage` when the session could not open). The result is stamped only while the company still points at the file that was checked (else `412 edited-by-someone-else`, nothing stamped). A company with no file to open (`missing`, `disabled`, `ambiguous` without a chosen file, or a file outside `Companies:RootFolder`) answers `409 company-not-ready` (`state`, `access`) with no session. QuickBooks must already be running (`503 quickbooks-not-open`, no session); another open company file answers `409 company-file-open-elsewhere` (`openFile`, `neededFile`) and a file that would not open `503 company-file-unavailable`, access unchanged. Never retried. Records `company-checked`. Needs `requests:admin`.",
+        "x-required-scope": "requests:admin",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The company's id.",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The company with its new access. The new `ETag` is set.",
+            "headers": {
+              "ETag": {
+                "description": "The company's ETag (its row version, in quotes).",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Company"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "`company-not-ready` (with `state`, `access`): the company has no file to open. Or `company-file-open-elsewhere` (with `openFile`, `neededFile`): QuickBooks has another file open. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: the company changed while QuickBooks answered. Nothing was stamped.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`quickbooks-not-open`: QuickBooks is not running. Or `company-file-unavailable` (with `neededFile`): the file would not open. Or `database-unavailable`.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       }
@@ -1537,6 +1894,16 @@
             }
           },
           {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "description": "M17 §5.2: a company id (only that company's statements) or `none` (statements with no company), sent once. Anything else answers `400 invalid-request`; an id of no company matches nothing.",
+            "schema": {
+              "type": "string",
+              "pattern": "^(none|[1-9][0-9]*)$"
+            }
+          },
+          {
             "name": "page",
             "in": "query",
             "required": false,
@@ -1598,7 +1965,7 @@
         ],
         "operationId": "savedRequestStats",
         "summary": "Counts for the dashboard header.",
-        "description": "Dashboard v2 §9.3. `byStatus` names every status, zero included. Each flag is counted among `pending` requests and among `all`, on the v2 judgement (§5.3); `hasErrors` is a problem count above 0 or needing attention.",
+        "description": "Dashboard v2 §9.3. `byStatus` names every status, zero included. Each flag is counted among `pending` requests and among `all`, on the v2 judgement (§5.3); `hasErrors` is a problem count above 0 or needing attention. M17 §5.2: `company` narrows every count; `needsCompany` counts pending statements with no company.",
         "x-required-scope": "requests:read",
         "security": [
           {
@@ -1634,8 +2001,30 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "`invalid-request`: `company` is neither a company id nor `none`. Nothing was read.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "description": "M17 §5.2: a company id (only that company's statements) or `none` (statements with no company), sent once. Anything else answers `400 invalid-request`; an id of no company matches nothing.",
+            "schema": {
+              "type": "string",
+              "pattern": "^(none|[1-9][0-9]*)$"
+            }
+          }
+        ]
       }
     },
     "/api/v2/saved-requests/{id}": {
@@ -1904,7 +2293,7 @@
             }
           },
           "409": {
-            "description": "`not-editable`: the request is not `pending`; the detail names its status. Nothing was changed.",
+            "description": "`not-editable`: the request is not `pending`; the detail names its status. Nothing was changed. M17 §4.6: `company-required` when the statement has no company; `company-not-ready` (with `state` and `access`) when its company is not active and approved. Nothing was validated or sent.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2309,6 +2698,144 @@
         }
       }
     },
+    "/api/v2/saved-requests/{id}/company": {
+      "post": {
+        "tags": [
+          "Saved requests"
+        ],
+        "operationId": "setSavedRequestCompany",
+        "summary": "Set or change the company of a pending statement.",
+        "description": "M17 §4.6, §5.2. Body `{ \"companyId\": n }`; `If-Match` is required. Only a `pending` statement with no attempt in progress. Clears the stored validation (lists differ per company), runs the duplicate rules again with the new company (`same-reference` and `overlapping-rows` compare only statements of the same company), sets `companySource` to `chosen`, and writes the audit event `company-assigned` with detail `{ companyId, from: { id, code, displayName } | null, to: { id, code, displayName }, source: \"chosen\" }`.",
+        "x-required-scope": "requests:edit",
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The numeric id (`123`) or the public reference (`SR-000123`). Anything else answers `404`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "The statement's ETag (its row version, in quotes).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "companyId"
+                ],
+                "properties": {
+                  "companyId": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "An active or ambiguous company."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The statement with its new company and no validation, as the v2 detail (the same shape as `GET /api/v2/saved-requests/{id}`).",
+            "headers": {
+              "ETag": {
+                "description": "The new row version, in quotes.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestDetailV2"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid-request`: no `companyId`, or a company that does not exist or is missing or disabled. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not-editable`: the statement is not `pending`, or a post of it is in progress. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`edited-by-someone-else`: `If-Match` is not the current row version. The body carries the current `rowVersion`, `updatedUtc` and `updatedBy`. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditedBySomeoneElseProblem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`precondition-required`: no `If-Match`. Nothing was changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "description": "`database-unavailable`: the database is not ready (`Retry-After: 30`); nothing was read or changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/saved-requests/{id}/post": {
       "post": {
         "tags": [
@@ -2407,7 +2934,7 @@
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
-            "description": "`already-posting` (with the running `attemptId`, `startedBy` and `startedUtc`), `already-posted` (with the `postId`, and the `attemptId`, `startedBy` and `startedUtc` of the attempt that posted it; all three are null when an admin settled the request by resolve), `not-postable` (partial, unknown or discarded; `savedRequestStatus` names it) or `duplicate-unconfirmed` (`duplicate: { of, status, reasons }`): nothing was claimed or sent. Or validate-and-post's busy `409` with `Retry-After`: recorded as `busy`, the request is `pending` again. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case).",
+            "description": "`already-posting` (with the running `attemptId`, `startedBy` and `startedUtc`), `already-posted` (with the `postId`, and the `attemptId`, `startedBy` and `startedUtc` of the attempt that posted it; all three are null when an admin settled the request by resolve), `not-postable` (partial, unknown or discarded; `savedRequestStatus` names it) or `duplicate-unconfirmed` (`duplicate: { of, status, reasons }`): nothing was claimed or sent. Or validate-and-post's busy `409` with `Retry-After`: recorded as `busy`, the request is `pending` again. The saved route adds `savedRequestId`, `attemptId` and `savedRequestStatus` (the request's status after the attempt, kebab-case). M17 §4.6: `company-required` when the statement has no company; `company-not-ready` (with `state` and `access`) when its company is not active and approved. Nothing was validated or sent.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3015,6 +3542,16 @@
               "maximum": 200,
               "default": 50
             }
+          },
+          {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "description": "M17 §5.3: only the events of this company (a company id): the company's statements' events and the company events about it. Missing: every company, as before M17. Not a positive integer, `none`, or given more than once: `400 invalid-request`. An id no company has: an empty answer.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            }
           }
         ],
         "responses": {
@@ -3149,6 +3686,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "description": "M17 §5.3: only the events of this company (a company id): the company's statements' events and the company events about it. Missing: every company, as before M17. Not a positive integer, `none`, or given more than once: `400 invalid-request`. An id no company has: an empty answer. The export has the same columns as before.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            }
           }
         ],
         "responses": {
@@ -3281,6 +3828,16 @@
             "schema": {
               "type": "string",
               "default": "UTC"
+            }
+          },
+          {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "description": "M17 §5.3: only the events of this company (a company id): the company's statements' events and the company events about it. Missing: every company, as before M17. Not a positive integer, `none`, or given more than once: `400 invalid-request`. An id no company has: an empty answer. The counts, posted figures, time to post and series (and the compare range) cover only that company.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
             }
           }
         ],
@@ -3557,6 +4114,228 @@
       }
     },
     "schemas": {
+      "CompanyState": {
+        "type": "string",
+        "enum": [
+          "active",
+          "ambiguous",
+          "missing",
+          "disabled"
+        ],
+        "description": "`active`: one chosen file; `ambiguous`: several `.qbw` files and none chosen yet; `missing`: its folder or file is gone; `disabled`: switched off by an admin. Missing and disabled companies never match a statement."
+      },
+      "CompanyAccess": {
+        "type": "string",
+        "enum": [
+          "unchecked",
+          "approved",
+          "needs-approval",
+          "file-not-found",
+          "error"
+        ],
+        "description": "The result of the admin's Check access. Only an `active`, `approved` company opens a QuickBooks session."
+      },
+      "CompanyLists": {
+        "type": "object",
+        "description": "Null on the company when its lists were never synced.",
+        "properties": {
+          "syncedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "outcome": {
+            "type": "string",
+            "description": "How the newest sync attempt ended: `ok`, `failed` or `skipped`.",
+            "nullable": true
+          }
+        }
+      },
+      "Company": {
+        "type": "object",
+        "required": [
+          "id",
+          "displayName",
+          "state",
+          "candidateFiles",
+          "access",
+          "matchNames",
+          "isDefault",
+          "rowVersion",
+          "waitingCount"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "code": {
+            "type": "string",
+            "description": "The numeric prefix of the folder name (`18_Name`), else null.",
+            "nullable": true
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "folderName": {
+            "type": "string",
+            "nullable": true
+          },
+          "fileName": {
+            "type": "string",
+            "nullable": true
+          },
+          "filePath": {
+            "type": "string",
+            "nullable": true
+          },
+          "state": {
+            "$ref": "#/components/schemas/CompanyState"
+          },
+          "candidateFiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "access": {
+            "$ref": "#/components/schemas/CompanyAccess"
+          },
+          "accessCheckedUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "accessMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "qbCompanyName": {
+            "type": "string",
+            "nullable": true
+          },
+          "qbLegalName": {
+            "type": "string",
+            "nullable": true
+          },
+          "matchNames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "isDefault": {
+            "type": "boolean"
+          },
+          "rowVersion": {
+            "type": "integer",
+            "description": "Send as `If-Match` on a patch."
+          },
+          "lists": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CompanyLists"
+              }
+            ]
+          },
+          "waitingCount": {
+            "type": "integer",
+            "description": "Pending statements of this company."
+          }
+        }
+      },
+      "CompanyList": {
+        "type": "object",
+        "required": [
+          "rootFolder",
+          "rootConfigured",
+          "rootReachable",
+          "items"
+        ],
+        "properties": {
+          "rootFolder": {
+            "type": "string"
+          },
+          "rootConfigured": {
+            "type": "boolean"
+          },
+          "rootReachable": {
+            "type": "boolean"
+          },
+          "lastScanUtc": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Company"
+            }
+          }
+        }
+      },
+      "CompanyScan": {
+        "type": "object",
+        "required": [
+          "added",
+          "updated",
+          "missing",
+          "ambiguous",
+          "noCompanyFile",
+          "items"
+        ],
+        "properties": {
+          "added": {
+            "type": "integer"
+          },
+          "updated": {
+            "type": "integer",
+            "description": "Companies whose stored values changed."
+          },
+          "missing": {
+            "type": "integer"
+          },
+          "ambiguous": {
+            "type": "integer"
+          },
+          "noCompanyFile": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Subfolders that hold no `.qbw` file."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Company"
+            }
+          }
+        }
+      },
+      "CompanyPatch": {
+        "type": "object",
+        "minProperties": 1,
+        "additionalProperties": false,
+        "properties": {
+          "matchNames": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          "filePath": {
+            "type": "string",
+            "description": "One of the company's `candidateFiles`."
+          },
+          "disabled": {
+            "type": "boolean"
+          }
+        }
+      },
       "AuditAction": {
         "type": "string",
         "description": "What happened (dashboard v2 spec 8.3).",
@@ -3685,7 +4464,8 @@
           "old",
           "new",
           "versionNumber",
-          "detail"
+          "detail",
+          "companyId"
         ],
         "properties": {
           "id": {
@@ -3738,6 +4518,11 @@
           "detail": {
             "nullable": true,
             "description": "Action-specific, or null. For `received` (dashboard-api-m12 §7.5): `{ \"source\": \"upload\", \"fileName\": \"…\" }` for a saved upload, `{ \"source\": \"email\" }` for a v2 save that carried email metadata, `null` for every other save and for older rows. For user events (`user-*` except `user-session-revoked` and `user-other`): the stored detail plus `userId`, `email` and `displayName` of the user concerned, looked up when the feed is read (dashboard-integration-m13 §4, R-7.3)."
+          },
+          "companyId": {
+            "type": "integer",
+            "nullable": true,
+            "description": "M17 §5.3: the company of the event's request (its company now), or the company a company event is about; null when there is none."
           }
         }
       },
@@ -5274,7 +6059,7 @@
       "SavedRequestUploadInput": {
         "type": "object",
         "nullable": true,
-        "description": "Dashboard-api-m12 §7.2: the extraction this save is a reviewed upload of. Only `extractionId` is read; any other field (such as `fileName`) is ignored, since the upload columns come from the extraction record. Not allowed with `email` or `pushId`; only a signed-in user may send it.",
+        "description": "Dashboard-api-m12 §7.2: the extraction this save is a reviewed upload of. Only `extractionId` and (M17) `companyId` are read; any other field (such as `fileName`) is ignored, since the upload columns come from the extraction record. Not allowed with `email` or `pushId`; only a signed-in user may send it.",
         "required": [
           "extractionId"
         ],
@@ -5283,6 +6068,12 @@
             "type": "string",
             "format": "uuid",
             "description": "From `POST /statement-extractions`."
+          },
+          "companyId": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 1,
+            "description": "M17 §4.6: the company the person chose. It must exist and be active or ambiguous, else `400 invalid-request` and nothing is saved. Without it the statement gets the one active company, else the extraction's matched company, else none."
           }
         }
       },
@@ -6221,7 +7012,7 @@
       },
       "SavedRequestSummaryV2": {
         "type": "object",
-        "description": "Dashboard v2 §9.1: the v1 row (§6.5) with `needsAttention` and `validation` from the v2 judgement, plus `pushId`, `email`, `historyCount`, `validationSummary`, `postSummary` and `skipCount`. Dashboard-api-m12 §7.4: plus `upload`.",
+        "description": "Dashboard v2 §9.1: the v1 row (§6.5) with `needsAttention` and `validation` from the v2 judgement, plus `pushId`, `email`, `historyCount`, `validationSummary`, `postSummary` and `skipCount`. Dashboard-api-m12 §7.4: plus `upload`. M17 §5.2: plus `company` and `companySource`.",
         "properties": {
           "id": {
             "type": "integer",
@@ -6312,7 +7103,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Of `edit`, `validate`, `post`, `discard`, `restore`, `resolve`, in that order."
+            "description": "Of `edit`, `validate`, `post`, `discard`, `restore`, `resolve`, in that order. M17 §4.6: `set-company` (after the others) for a `pending` statement and a `requests:edit` user; a statement with no company, or whose company is not active and approved, has no `validate` or `post`."
           },
           "pushId": {
             "type": "string",
@@ -6346,6 +7137,26 @@
           },
           "upload": {
             "$ref": "#/components/schemas/SavedRequestUpload"
+          },
+          "company": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestCompanyRef"
+              }
+            ],
+            "nullable": true,
+            "description": "M17 §4.6: the statement's company; null means it needs one (validate and post answer `409 company-required`)."
+          },
+          "companySource": {
+            "type": "string",
+            "enum": [
+              "matched",
+              "chosen",
+              "migrated",
+              "default"
+            ],
+            "nullable": true,
+            "description": "How the company was decided; null when there is none."
           }
         }
       },
@@ -6374,7 +7185,7 @@
       },
       "SavedRequestDetailV2": {
         "type": "object",
-        "description": "Dashboard v2 §9.1: the v1 detail (§6.2) with `needsAttention`, `validation` (its `versionNumber` is the version judged, §10 4.3) and `readErrors` from the v2 judgement, plus the list row's additions, `otherUnpostedPushes` and `ledgerBatch`. Dashboard-api-m12 §7.4: plus `upload`.",
+        "description": "Dashboard v2 §9.1: the v1 detail (§6.2) with `needsAttention`, `validation` (its `versionNumber` is the version judged, §10 4.3) and `readErrors` from the v2 judgement, plus the list row's additions, `otherUnpostedPushes` and `ledgerBatch`. Dashboard-api-m12 §7.4: plus `upload`. M17 §5.2: plus `company` and `companySource`, and `companyMatch`.",
         "properties": {
           "id": {
             "type": "integer",
@@ -6472,7 +7283,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Of `edit`, `validate`, `post`, `discard`, `restore`, `resolve`, in that order."
+            "description": "Of `edit`, `validate`, `post`, `discard`, `restore`, `resolve`, in that order. M17 §4.6: `set-company` (after the others) for a `pending` statement and a `requests:edit` user; a statement with no company, or whose company is not active and approved, has no `validate` or `post`."
           },
           "pushId": {
             "type": "string",
@@ -6515,12 +7326,41 @@
           },
           "upload": {
             "$ref": "#/components/schemas/SavedRequestUpload"
+          },
+          "company": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestCompanyRef"
+              }
+            ],
+            "nullable": true,
+            "description": "M17 §4.6: the statement's company; null means it needs one (validate and post answer `409 company-required`)."
+          },
+          "companySource": {
+            "type": "string",
+            "enum": [
+              "matched",
+              "chosen",
+              "migrated",
+              "default"
+            ],
+            "nullable": true,
+            "description": "How the company was decided; null when there is none."
+          },
+          "companyMatch": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedRequestCompanyMatch"
+              }
+            ],
+            "nullable": true,
+            "description": "The upload's printed-name match; null for a statement not saved from an upload."
           }
         }
       },
       "SavedRequestStatsV2": {
         "type": "object",
-        "description": "Dashboard v2 §9.3.",
+        "description": "Dashboard v2 §9.3. M17 §5.2: plus `needsCompany`.",
         "properties": {
           "total": {
             "type": "integer",
@@ -6572,6 +7412,11 @@
                 "format": "int32"
               }
             }
+          },
+          "needsCompany": {
+            "type": "integer",
+            "format": "int32",
+            "description": "M17 §5.2: pending statements with no company."
           }
         }
       },
@@ -7045,7 +7890,7 @@
           },
           "promptVersion": {
             "type": "string",
-            "example": "2026-10-28.api-1"
+            "example": "2026-11-03.api-2"
           },
           "extractedUtc": {
             "type": "string",
@@ -7084,6 +7929,57 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/StatementExtractionDuplicate"
+            }
+          },
+          "company": {
+            "type": "object",
+            "description": "M17: which company the statement belongs to, decided by code from the name printed in the PDF header (never from the file name). The same shape is returned in every install; a single-company install matches against its default company.",
+            "properties": {
+              "match": {
+                "type": "string",
+                "enum": [
+                  "matched",
+                  "none",
+                  "ambiguous"
+                ],
+                "description": "`matched`: exactly one company has the printed name; `ambiguous`: several do (see `candidates`); `none`: no name printed or no company has it."
+              },
+              "printedName": {
+                "type": "string",
+                "nullable": true,
+                "description": "The account holder name as printed."
+              },
+              "dbaName": {
+                "type": "string",
+                "nullable": true,
+                "description": "The DBA name as printed."
+              },
+              "companyId": {
+                "type": "integer",
+                "format": "int32",
+                "nullable": true,
+                "description": "Set only when `match` is `matched`."
+              },
+              "candidates": {
+                "type": "array",
+                "description": "`matched`: the one company; `ambiguous`: every company with the name; `none`: empty.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "integer",
+                      "format": "int32"
+                    },
+                    "code": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "displayName": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -7177,6 +8073,60 @@
                 "overlapping-rows"
               ]
             }
+          }
+        }
+      },
+      "SavedRequestCompanyRef": {
+        "type": "object",
+        "description": "M17 §5.2: the company a statement belongs to.",
+        "required": [
+          "id",
+          "displayName"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "code": {
+            "type": "string",
+            "nullable": true,
+            "description": "The numeric prefix of the company's folder name, else null."
+          },
+          "displayName": {
+            "type": "string"
+          }
+        }
+      },
+      "SavedRequestCompanyMatch": {
+        "type": "object",
+        "description": "M17 §4.6, §5.2: how the business name printed on an uploaded statement matched a company, copied from the extraction at save.",
+        "required": [
+          "match",
+          "candidates"
+        ],
+        "properties": {
+          "match": {
+            "type": "string",
+            "enum": [
+              "matched",
+              "none",
+              "ambiguous"
+            ]
+          },
+          "printedName": {
+            "type": "string",
+            "nullable": true
+          },
+          "dbaName": {
+            "type": "string",
+            "nullable": true
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "description": "Company ids: the matched one, or every one an ambiguous name names."
           }
         }
       }

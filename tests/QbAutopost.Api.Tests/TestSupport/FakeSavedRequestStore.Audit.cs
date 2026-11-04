@@ -62,6 +62,7 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestAuditStore
     {
         var all = AllAuditEvents();
         if (!query.IncludeUserEvents) all = all.Where(e => !e.Id.StartsWith('u'));
+        if (query.CompanyId is { } companyId) all = all.Where(e => e.CompanyId == companyId);
         if (query.From is { } from) all = all.Where(e => e.AtUtc >= from);
         if (query.To is { } to) all = all.Where(e => e.AtUtc < to);
         if (query.Actor is { Length: > 0 } actor) all = all.Where(e => e.ActorId == actor);
@@ -84,7 +85,7 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestAuditStore
         {
             foreach (var e in events)
             {
-                if (AuditEventMapper.FromEvent(Copy(e)) is { } mapped) yield return mapped;
+                if (AuditEventMapper.FromEvent(Copy(e)) is { } mapped) yield return WithCompany(mapped);
             }
         }
 
@@ -94,7 +95,7 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestAuditStore
             for (var i = 1; i < ordered.Count; i++)
             {
                 foreach (var mapped in AuditEventMapper.FromVersion(Copy(ordered[i]), Copy(ordered[i - 1]), ordered[i].Note))
-                    yield return mapped;
+                    yield return WithCompany(mapped);
             }
         }
 
@@ -103,6 +104,9 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestAuditStore
             yield return AuditEventMapper.FromUserAudit(u with { Detail = u.Detail?.DeepClone() });
         }
     }
+
+    /// <summary>The view's <c>company_id</c> for a request event: the request's company now (company events carry theirs from the mapper).</summary>
+    private AuditEvent WithCompany(AuditEvent e) => RequestOf(e) is { } r ? e with { CompanyId = r.CompanyId } : e;
 
     private SavedRequest? RequestOf(AuditEvent e) =>
         e.RequestId is { } id && _requests.TryGetValue(id, out var r) ? r : null;

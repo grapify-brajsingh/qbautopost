@@ -652,6 +652,16 @@ public sealed class ScheduledListSyncTests : IDisposable
         }
 
         public Task<string> CurrentCompanyFileAsync(CancellationToken ct) => inner.CurrentCompanyFileAsync(ct);
+
+        // T-1706 carry: a targeted call is held and forwarded like an untargeted one, never answered by the interface default.
+        public async Task<string> ProcessAsync(QbTarget target, string qbxml, CancellationToken ct)
+        {
+            Entered.TrySetResult();
+            await Release.Task.WaitAsync(ct);
+            return await inner.ProcessAsync(target, qbxml, ct);
+        }
+
+        public Task<string> CurrentCompanyFileAsync(QbTarget target, CancellationToken ct) => inner.CurrentCompanyFileAsync(target, ct);
     }
 
     /// <summary>A database that is down: every record throws and the last attempt never moves.</summary>

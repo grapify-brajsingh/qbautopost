@@ -230,14 +230,132 @@ public sealed class ResilientQbGatewayTests
         Assert.Equal(@"C:\a.QBW", await new ResilientQbGateway(inner, FastPolicy, new DelayRecorder().Delay).CurrentCompanyFileAsync(CancellationToken.None));
     }
 
+    private static readonly QbTarget Takoma = new(@"C:\qb\Takoma.QBW");
+    private static readonly QbTarget SunAmerica = new(@"C:\qb\SA.QBW");
+
+    [Fact]
+    public async Task Should_PassTheTargetThrough_When_CallIsTargeted()
+    {
+        var inner = new ScriptedGateway { Respond = (_, _) => Task.FromResult("<ok/>") };
+        IQbGateway gateway = new ResilientQbGateway(inner, FastPolicy);
+
+        await gateway.ProcessAsync(Takoma, AddRequest, CancellationToken.None);
+        await gateway.CurrentCompanyFileAsync(SunAmerica, CancellationToken.None);
+
+        Assert.Equal([Takoma, SunAmerica], inner.Targets);
+    }
+
+    [Fact]
+    public async Task Should_SerialiseOnOneLock_When_TwoCompaniesCallAtOnce()
+    {
+        var firstRunning = new TaskCompletionSource();
+        var releaseFirst = new TaskCompletionSource<string>();
+        var secondStarted = false;
+        var inner = new ScriptedGateway
+        {
+            Respond = (_, _) =>
+            {
+                if (!firstRunning.Task.IsCompleted)
+                {
+                    firstRunning.SetResult();
+                    return releaseFirst.Task;
+                }
+
+                secondStarted = true;
+                return Task.FromResult("<second/>");
+            },
+        };
+        IQbGateway gateway = new ResilientQbGateway(inner, FastPolicy with { BusyTimeout = TimeSpan.FromSeconds(10) });
+        var first = gateway.ProcessAsync(Takoma, AddRequest, CancellationToken.None);
+        await firstRunning.Task;
+
+        var second = gateway.ProcessAsync(SunAmerica, AddRequest, CancellationToken.None);
+        await Task.Delay(50);
+        var startedWhileFirstRan = secondStarted;
+        releaseFirst.SetResult("<first/>");
+        await Task.WhenAll(first, second);
+
+        Assert.False(startedWhileFirstRan);
+    }
+
+    [Fact]
+    public async Task Should_NotRetry_When_WrongCompanyFileIsOpen()
+    {
+        var calls = 0;
+        var inner = new ScriptedGateway
+        {
+            Respond = (_, _) => { calls++; throw new QuickBooksWrongCompanyException(Takoma.CompanyFile, SunAmerica.CompanyFile, "another company file is open"); },
+        };
+        IQbGateway gateway = new ResilientQbGateway(inner, FastPolicy, new DelayRecorder().Delay);
+
+        await Assert.ThrowsAsync<QuickBooksWrongCompanyException>(() => gateway.ProcessAsync(Takoma, QueryRequest, CancellationToken.None));
+
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task Should_NotRetry_When_CompanyFileIsUnavailable()
+    {
+        var calls = 0;
+        var inner = new ScriptedGateway
+        {
+            Respond = (_, _) => { calls++; throw new QuickBooksCompanyFileUnavailableException(Takoma.CompanyFile, "0x80040408: could not start QuickBooks"); },
+        };
+        IQbGateway gateway = new ResilientQbGateway(inner, FastPolicy, new DelayRecorder().Delay);
+
+        await Assert.ThrowsAsync<QuickBooksCompanyFileUnavailableException>(() => gateway.ProcessAsync(Takoma, QueryRequest, CancellationToken.None));
+
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task Should_RetryOnce_When_TargetedCallCouldNotConnect()
+    {
+        var calls = 0;
+        var inner = new ScriptedGateway
+        {
+            Respond = (_, _) => ++calls == 1 ? Task.FromException<string>(new QuickBooksUnavailableException("OpenConnection2 failed")) : Task.FromResult("<second/>"),
+        };
+        IQbGateway gateway = new ResilientQbGateway(inner, FastPolicy, new DelayRecorder().Delay);
+
+        await gateway.ProcessAsync(Takoma, AddRequest, CancellationToken.None);
+
+        Assert.Equal(2, calls);
+    }
+
     internal sealed class ScriptedGateway : IQbGateway
     {
+        private readonly List<QbTarget?> _targets = [];
+
         public Func<string, CancellationToken, Task<string>> Respond { get; init; } = (_, _) => Task.FromResult("");
 
         public Func<CancellationToken, Task<string>> CompanyFile { get; init; } = _ => Task.FromResult(@"C:\x.QBW");
 
-        public Task<string> ProcessAsync(string qbxml, CancellationToken ct) => Respond(qbxml, ct);
+        /// <summary>The target of each call; null for an untargeted one.</summary>
+        public IReadOnlyList<QbTarget?> Targets => _targets;
 
-        public Task<string> CurrentCompanyFileAsync(CancellationToken ct) => CompanyFile(ct);
+        public Task<string> ProcessAsync(string qbxml, CancellationToken ct)
+        {
+            _targets.Add(null);
+            return Respond(qbxml, ct);
+        }
+
+        public Task<string> CurrentCompanyFileAsync(CancellationToken ct)
+        {
+            _targets.Add(null);
+            return CompanyFile(ct);
+        }
+
+        public Task<string> ProcessAsync(QbTarget target, string qbxml, CancellationToken ct)
+        {
+            _targets.Add(target);
+            return Respond(qbxml, ct);
+        }
+
+        public Task<string> CurrentCompanyFileAsync(QbTarget target, CancellationToken ct)
+        {
+            _targets.Add(target);
+            return CompanyFile(ct);
+        }
     }
 }

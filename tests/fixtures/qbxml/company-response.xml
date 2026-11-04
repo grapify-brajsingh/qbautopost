@@ -1,0 +1,12 @@
+<?xml version="1.0" ?>
+<QBXML>
+  <QBXMLMsgsRs>
+    <CompanyQueryRs requestID="1" statusCode="0" statusSeverity="Info" statusMessage="Status OK">
+      <CompanyRet>
+        <IsSampleCompany>false</IsSampleCompany>
+        <CompanyName>Takoma Park Grocery Store Inc</CompanyName>
+        <LegalCompanyName>Takoma Park Grocery Store Incorporated</LegalCompanyName>
+      </CompanyRet>
+    </CompanyQueryRs>
+  </QBXMLMsgsRs>
+</QBXML>

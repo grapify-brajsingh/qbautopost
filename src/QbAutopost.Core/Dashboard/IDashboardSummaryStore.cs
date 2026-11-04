@@ -15,18 +15,21 @@ public sealed record PostedFact(long AttemptId, DateTime FinishedUtc, string? Re
 /// </summary>
 public sealed record PostTimeFact(long SavedRequestId, DateTime ReceivedUtc, DateTime PostedUtc);
 
-/// <summary>The reads behind <c>GET /api/v2/dashboard/summary</c> (spec dashboard-api-m12 4.2). Every range is [from, to).</summary>
+/// <summary>
+/// The reads behind <c>GET /api/v2/dashboard/summary</c> (spec dashboard-api-m12 4.2). Every range is [from, to).
+/// <c>companyId</c> (M17 spec 5.3) keeps one company's facts; null is every company.
+/// </summary>
 public interface IDashboardSummaryStore
 {
     /// <summary>
     /// The <c>received</c>, <c>posted</c>, <c>post-failed</c> and <c>discarded</c> audit events in the range, read from the
     /// same source as <c>audit_events</c>, so their counts equal <c>AuditEventCountAsync</c> for the same filter.
     /// </summary>
-    Task<IReadOnlyList<EventFact>> EventFactsAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct);
+    Task<IReadOnlyList<EventFact>> EventFactsAsync(DateTime fromUtc, DateTime toUtc, int? companyId, CancellationToken ct);
 
     /// <summary>The attempts that finished posted or partial, by their <c>post-finished</c> event time in the range.</summary>
-    Task<IReadOnlyList<PostedFact>> PostedFactsAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct);
+    Task<IReadOnlyList<PostedFact>> PostedFactsAsync(DateTime fromUtc, DateTime toUtc, int? companyId, CancellationToken ct);
 
     /// <summary>The requests whose <c>PostSummaries.Of</c> post time is in the range.</summary>
-    Task<IReadOnlyList<PostTimeFact>> PostTimeFactsAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct);
+    Task<IReadOnlyList<PostTimeFact>> PostTimeFactsAsync(DateTime fromUtc, DateTime toUtc, int? companyId, CancellationToken ct);
 }

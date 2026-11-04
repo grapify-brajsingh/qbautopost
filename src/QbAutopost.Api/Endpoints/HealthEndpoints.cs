@@ -93,7 +93,7 @@ public static class HealthEndpoints
             await gate.RefreshSharedAsync(ct);
         }
 
-        var view = health.Ready();
+        var view = await health.ReadyAsync(ct);
         return view.Ok
             ? Results.Ok(view)
             : Results.Json(view, statusCode: StatusCodes.Status503ServiceUnavailable);

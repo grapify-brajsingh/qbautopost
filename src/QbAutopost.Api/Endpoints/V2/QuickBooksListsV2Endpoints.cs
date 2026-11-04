@@ -1,10 +1,13 @@
 using Microsoft.Extensions.Options;
+using QbAutopost.Api.Companies;
 using QbAutopost.Api.Configuration;
 using QbAutopost.Api.Database;
 using QbAutopost.Api.Jobs;
 using QbAutopost.Api.SavedRequests;
 using QbAutopost.Api.Security;
 using QbAutopost.Core.Abstractions;
+using QbAutopost.Core.Api;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.Models;
 using QbAutopost.Core.Pipeline;
 using QbAutopost.Core.Security;
@@ -67,6 +70,10 @@ public sealed record ListSyncHistoryItemView(
 /// M14 §7 (R-16): the dashboard's QuickBooks lists. <c>GET /quickbooks/lists</c> (<c>lists:read</c>) reads the stored
 /// lists and says how old they are and when the next automatic sync is due; <c>POST /quickbooks/lists/sync</c>
 /// (<c>requests:edit</c>, or a key with <c>qb:read</c>; the posting rate bucket) is Sync now. v1's routes are untouched.
+/// <para>
+/// M17 §5.3: all three take <c>company=&lt;id&gt;</c> (<see cref="CompanyParameter"/>; sync also in the body) and then
+/// read or sync that company's own lists and history. Without it they are the default company's, exactly as before.
+/// </para>
 /// </summary>
 public static class QuickBooksListsV2Endpoints
 {
@@ -79,7 +86,7 @@ public static class QuickBooksListsV2Endpoints
 
     public const int MaxHistoryPageSize = 100;
 
-    private static readonly string[] HistoryParameters = ["trigger", "outcome", "page", "pageSize"];
+    private static readonly string[] HistoryParameters = ["trigger", "outcome", "page", "pageSize", CompanyParameter.Name];
 
     public static IEndpointRouteBuilder MapQuickBooksListsV2Endpoints(this IEndpointRouteBuilder v2)
     {
@@ -91,15 +98,33 @@ public static class QuickBooksListsV2Endpoints
 
     /// <summary>
     /// M15 §3 (R-17): every recorded attempt, newest first, filtered and paged. Each item reads as <c>lastSync</c> does.
-    /// In file mode the store answers from the attempts since the API started (Q-125).
+    /// In file mode the store answers from the attempts since the API started (Q-125). M17 (ruling B18, review focus 4):
+    /// a well-formed <c>company</c> no company has is an empty page, as an unknown filter value is.
     /// </summary>
     private static async Task<IResult> HistoryAsync(
-        HttpContext http, IQbListsStore store, ActorDirectory actors, ILoggerFactory loggers, CancellationToken ct)
+        HttpContext http,
+        IQbListsStore store,
+        IQbListsCatalog catalog,
+        ICompanyResolver resolver,
+        ActorDirectory actors,
+        ILoggerFactory loggers,
+        CancellationToken ct)
     {
-        if (!TryParseHistory(http.Request.Query, out var query, out var error))
+        if (!TryParseHistory(http.Request.Query, out var query, out var error)
+            || !CompanyParameter.TryParse(http, null, out var companyId, out error))
         {
             return Results.Problem(
                 statusCode: StatusCodes.Status400BadRequest, title: "Invalid query", detail: error, type: "invalid-request");
+        }
+
+        if (companyId is { } id)
+        {
+            if (await resolver.GetAsync(id, ct) is not { } company)
+            {
+                return Results.Ok(new PageView<ListSyncHistoryItemView>([], query!.Page, query.PageSize, 0));
+            }
+
+            store = catalog.StoreFor(company.Id);
         }
 
         var page = await store.ListAttemptsAsync(query!, ct);
@@ -188,8 +213,26 @@ public static class QuickBooksListsV2Endpoints
         where T : struct, Enum => string.Join("|", Enum.GetValues<T>().Select(Lower));
 
     private static async Task<IResult> GetListsAsync(
-        IQbListsSource lists, ListSyncSchedule schedule, ActorDirectory actors, ILoggerFactory loggers, CancellationToken ct)
+        HttpContext http,
+        IQbListsSource lists,
+        IQbListsCatalog catalog,
+        ICompanyResolver resolver,
+        ListSyncSchedule schedule,
+        ActorDirectory actors,
+        ILoggerFactory loggers,
+        CancellationToken ct)
     {
+        var (ok, company, error) = await CompanyParameter.ReadAsync(http, resolver, null, ct);
+        if (!ok)
+        {
+            return CompanyProblems.InvalidRequest(error!);
+        }
+
+        if (company is not null)
+        {
+            lists = catalog.SourceFor(company.Id);
+        }
+
         var current = lists.Current;
         var last = await LastSyncAsync(lists.LastAttempt, actors, loggers, ct);
         return Results.Ok(new QbListsViewV2(
@@ -200,6 +243,12 @@ public static class QuickBooksListsV2Endpoints
     /// M14 §7.2. Order: the presence guard (never start QuickBooks), then join the sync in flight or queue one on the
     /// worker, which checks again when its turn comes, then wait at most <c>Api:SyncPostTimeoutSeconds</c>. Not an
     /// audit-feed event (Q-121).
+    /// <para>
+    /// M17 §4.7: before all that, the company (<see cref="CompanyParameter"/>): one that may not open a session is 409
+    /// <c>company-not-ready</c> with nothing sent or recorded. Its sync joins only a flight of the same company and
+    /// records into its own history; another file open is 409 <c>company-file-open-elsewhere</c>, a file that would
+    /// not open 503 <c>company-file-unavailable</c> (both recorded as skipped, never retried).
+    /// </para>
     /// </summary>
     private static async Task<IResult> SyncAsync(
         HttpContext http,
@@ -208,21 +257,36 @@ public static class QuickBooksListsV2Endpoints
         ListSyncSchedule schedule,
         JobQueue queue,
         ActorDirectory actors,
+        ICompanyResolver resolver,
         IOptions<AppSettings> settings,
         ILoggerFactory loggers,
         CancellationToken ct)
     {
         var log = loggers.CreateLogger(typeof(QuickBooksListsV2Endpoints));
+        var (bodyOk, body, bodyError) = await CompanyParameter.ReadBodyAsync(http.Request, ct);
+        var (ok, company, error) = bodyOk ? await CompanyParameter.ReadAsync(http, resolver, body, ct) : (false, null, bodyError);
+        if (!ok)
+        {
+            return CompanyProblems.InvalidRequest(error!);
+        }
+
+        if (company is { CanOpenSession: false })
+        {
+            return CompanyProblems.NotReady(company);
+        }
+
         var (trigger, requestedBy) = WhoAsks(http);
 
         if (!ListSyncGuard.IsOpen(presence, log))
         {
-            await SkipAsync(sync, trigger, requestedBy, log, ct);
+            await SkipAsync(sync, company, trigger, requestedBy, log, ct);
             return NotOpen();
         }
 
+        // The default company's flight is the one the worker's single-company scheduled attempt uses, so that is joined.
         var (flight, joined) = schedule.JoinOrStart(
-            token => RunLoggedAsync(sync, presence, trigger, requestedBy, log, token),
+            company is null || company.IsDefault ? ListSyncSchedule.SingleCompany : company.Id,
+            token => RunLoggedAsync(sync, presence, resolver, company, trigger, requestedBy, log, token),
             work => Observe(queue.RunExclusiveAsync(SyncLabel, work, CancellationToken.None)));
         if (joined)
         {
@@ -288,6 +352,19 @@ public static class QuickBooksListsV2Endpoints
     /// </summary>
     public static IResult? SyncProblem(Exception ex)
     {
+        // M17 §4.7: the company's file refused (another one open, or it would not open), and a company no longer ready.
+        if (CompanyFileRefusal.Of(ex) is { } refusal)
+        {
+            return refusal.Type == CompanyFileRefusal.OpenElsewhere
+                ? CompanyProblems.OpenElsewhere(refusal)
+                : CompanyProblems.FileUnavailable(refusal);
+        }
+
+        if (ex is CompanyNotReadyException notReady)
+        {
+            return CompanyProblems.NotReady(notReady.Company);
+        }
+
         if (QuickBooksEndpoints.QuickBooksProblem(ex) is null)
         {
             return null;
@@ -330,9 +407,10 @@ public static class QuickBooksListsV2Endpoints
         return (ListSyncTrigger.Api, client is null ? caller?.Id : client.Name ?? client.Id);
     }
 
-    private static async Task SkipAsync(QbListSync sync, ListSyncTrigger trigger, string? requestedBy, ILogger log, CancellationToken ct)
+    private static async Task SkipAsync(
+        QbListSync sync, CompanyContext? company, ListSyncTrigger trigger, string? requestedBy, ILogger log, CancellationToken ct)
     {
-        await ListSyncGuard.RecordSkippedAsync(sync, trigger, requestedBy, log, ct);
+        await ListSyncGuard.RecordSkippedAsync(sync, company, trigger, requestedBy, log, ct);
         log.LogInformation(
             "QuickBooks lists sync ({Trigger}, by {RequestedBy}): {Outcome} ({Reason})",
             Lower(trigger), requestedBy ?? "unknown", Lower(ListSyncOutcome.Skipped), ListSyncReasons.QuickBooksNotOpen);
@@ -340,20 +418,45 @@ public static class QuickBooksListsV2Endpoints
 
     /// <summary>
     /// The sync itself, on the worker, with the §12 line for its outcome. §6: it may have waited behind a job, so
-    /// QuickBooks is checked again here; null when it has closed meanwhile.
+    /// QuickBooks is checked again here; null when it has closed meanwhile. M17 (final review 5): the company is read
+    /// again too, as the sweep does, so a company disabled or re-pointed meanwhile is refused (409
+    /// <c>company-not-ready</c>) before anything is opened or recorded, and its old file is never synced.
     /// </summary>
     private static async Task<ListSyncCompletion?> RunLoggedAsync(
-        QbListSync sync, IQbPresence presence, ListSyncTrigger trigger, string? requestedBy, ILogger log, CancellationToken ct)
+        QbListSync sync,
+        IQbPresence presence,
+        ICompanyResolver resolver,
+        CompanyContext? company,
+        ListSyncTrigger trigger,
+        string? requestedBy,
+        ILogger log,
+        CancellationToken ct)
     {
+        if (company is not null)
+        {
+            // A company that no longer exists is refused as a missing one.
+            company = await resolver.GetAsync(company.Id, ct) ?? company with { State = CompanyState.Missing };
+            if (!company.CanOpenSession)
+            {
+                log.LogInformation(
+                    "QuickBooks lists sync ({Trigger}, by {RequestedBy}): company {CompanyId} is no longer ready; nothing was sent",
+                    Lower(trigger), requestedBy ?? "unknown", company.Id);
+                throw new CompanyNotReadyException(company);
+            }
+        }
+
         if (!ListSyncGuard.IsOpen(presence, log))
         {
-            await SkipAsync(sync, trigger, requestedBy, log, ct);
+            await SkipAsync(sync, company, trigger, requestedBy, log, ct);
             return null;
         }
 
         try
         {
-            var completion = await sync.SyncWithRunAsync(trigger, requestedBy, ct);
+            // No company named: the default company exactly as before M17.
+            var completion = company is null
+                ? await sync.SyncWithRunAsync(trigger, requestedBy, ct)
+                : await sync.SyncWithRunAsync(company, trigger, requestedBy, ct);
             var result = completion.Result;
             log.LogInformation(
                 "QuickBooks lists sync ({Trigger}, by {RequestedBy}): {Outcome}, {Accounts} accounts, {Vendors} vendors, {Customers} customers",

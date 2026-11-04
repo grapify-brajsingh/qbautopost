@@ -15,4 +15,10 @@ public sealed class UnconfiguredQbGateway : IQbGateway
 
     public Task<string> CurrentCompanyFileAsync(CancellationToken ct) =>
         throw new QuickBooksUnavailableException(Message);
+
+    public Task<string> ProcessAsync(QbTarget target, string qbxml, CancellationToken ct) =>
+        throw new QuickBooksUnavailableException(Message);
+
+    public Task<string> CurrentCompanyFileAsync(QbTarget target, CancellationToken ct) =>
+        throw new QuickBooksUnavailableException(Message);
 }

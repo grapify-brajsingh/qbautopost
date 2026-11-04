@@ -48,17 +48,41 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestV2Store
         }
     }
 
-    public Task<SavedRequestStatsV2> StatsV2Async(CancellationToken ct)
+    /// <summary>Test helper: gives a stored request a company directly, without an event or a row version change.</summary>
+    public void SetCompany(long id, int? companyId, QbAutopost.Core.Companies.CompanySource? source)
     {
         lock (_gate)
         {
-            var all = _requests.Values.ToList();
+            _requests[id] = _requests[id] with { CompanyId = companyId, CompanySource = source };
+        }
+    }
+
+    public Task<IReadOnlyDictionary<int, int>> PendingByCompanyAsync(CancellationToken ct)
+    {
+        lock (_gate)
+        {
+            IReadOnlyDictionary<int, int> counts = _requests.Values
+                .Where(r => r.Status == SavedRequestStatus.Pending && r.CompanyId is not null)
+                .GroupBy(r => r.CompanyId!.Value)
+                .ToDictionary(g => g.Key, g => g.Count());
+            return Task.FromResult(counts);
+        }
+    }
+
+    public Task<SavedRequestStatsV2> StatsV2Async(CompanyFilter? company, CancellationToken ct)
+    {
+        lock (_gate)
+        {
+            var all = (company is null ? _requests.Values : OfCompany(_requests.Values, company)).ToList();
             var byStatus = Enum.GetValues<SavedRequestStatus>().ToDictionary(s => s, s => all.Count(r => r.Status == s));
             return Task.FromResult(new SavedRequestStatsV2(
                 all.Count, byStatus,
                 Flag(all, r => r.NeedsAttentionV2),
                 Flag(all, r => r.DuplicateReasons.Count > 0),
-                Flag(all, HasErrors)));
+                Flag(all, HasErrors))
+            {
+                NeedsCompany = all.Count(r => r.Status == SavedRequestStatus.Pending && r.CompanyId is null),
+            });
         }
 
         static FlagCounts Flag(List<SavedRequest> all, Func<SavedRequest, bool> flag) =>
@@ -103,7 +127,6 @@ public sealed partial class FakeSavedRequestStore : ISavedRequestV2Store
         ProblemCount = r.ProblemCount,
         PostSummary = PostSummaries.Of(r.Status, r.PostId, _attempts[r.Id]),
         HistoryCount = HistoryCount(r.Id),
-
         Upload = r.Upload,
     };
 

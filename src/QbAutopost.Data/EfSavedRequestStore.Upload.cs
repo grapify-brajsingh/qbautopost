@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -27,6 +28,8 @@ public sealed partial class EfSavedRequestStore : IUploadStore
             ExtractedUtc = extraction.ExtractedUtc,
             ExpiresUtc = extraction.ExpiresUtc,
             SavedRequestId = extraction.SavedRequestId,
+            CompanyId = extraction.Company?.CompanyId,
+            CompanyMatch = extraction.Company is { } match ? JsonSerializer.Serialize(match, Json) : null,
         });
         await db.SaveChangesAsync(ct);
     }
@@ -50,7 +53,10 @@ public sealed partial class EfSavedRequestStore : IUploadStore
                 e.Id, e.UserId, e.FileName, e.SizeBytes, e.Sha256, e.PageCount, e.Model, e.PromptVersion,
                 JsonNode.Parse(e.Payload)!.AsObject(),
                 DateTime.SpecifyKind(e.ExtractedUtc, DateTimeKind.Utc), DateTime.SpecifyKind(e.ExpiresUtc, DateTimeKind.Utc),
-                e.SavedRequestId);
+                e.SavedRequestId)
+            {
+                Company = ReadCompanyMatch(e.CompanyMatch),
+            };
     }
 
 

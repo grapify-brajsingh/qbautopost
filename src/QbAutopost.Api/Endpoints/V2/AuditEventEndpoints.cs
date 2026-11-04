@@ -13,9 +13,10 @@ using QbAutopost.Core.Security;
 namespace QbAutopost.Api.Endpoints.V2;
 
 /// <summary>
-/// Dashboard v2 spec 8: <c>GET /api/v2/audit-events</c> and <c>/audit-events.csv</c>, the feed over the view
+/// Dashboard v2 spec 8 (and M17 spec 5.3, the <c>company</c> filter): <c>GET /api/v2/audit-events</c> and <c>/audit-events.csv</c>, the feed over the view
 /// <c>audit_events</c> (T-1106). The scope is <c>requests:read</c> (<see cref="ApiRoutes.ScopeFor"/>); user events are
-/// kept for callers holding <c>users:manage</c> and silently dropped for everyone else, from the total too. The request
+/// kept for callers holding <c>users:manage</c> and silently dropped for everyone else, from the total too (company events are
+/// not user events: every reader sees them). The request
 /// each row belongs to is joined here from the saved-request store, not in the view.
 /// </summary>
 public static class AuditEventEndpoints
@@ -27,7 +28,7 @@ public static class AuditEventEndpoints
     private const int CsvChunk = 1000;
 
     private static readonly string[] SingleValued =
-        ["from", "to", "actor", "requestId", "reference", "pushId", "q", "page", "pageSize"];
+        ["from", "to", "actor", "requestId", "reference", "pushId", "q", "page", "pageSize", "company"];
 
     private static readonly Regex Instant = new(
         @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,7})?)?(Z|[+-]\d{2}:\d{2})\z",
@@ -77,7 +78,8 @@ public static class AuditEventEndpoints
             e.Old,
             e.New,
             e.VersionNumber,
-            WithSubjectNames(e, names));
+            WithSubjectNames(e, names),
+            e.CompanyId);
 
     /// <summary>The user a user event is about (<c>detail.userId</c>, added by <see cref="AuditEventMapper"/>), else null.</summary>
     private static string? SubjectOf(AuditEvent e) =>
@@ -275,11 +277,19 @@ public static class AuditEventEndpoints
             }
         }
 
+        if (!V2QueryParser.TryCompanyId(q, out var companyId, out error))
+        {
+            return false;
+        }
+
         // An API key never holds users:manage (people-only scope), so a key sees no user events.
         var caller = CallerMiddleware.CallerOf(http)!;
         query = new AuditQuery(
             from, to, Text(q, "actor"), requestId, Text(q, "reference"), pushId, actions, Text(q, "q"),
-            caller.Allows(ApiScopes.UsersManage), page, pageSize);
+            caller.Allows(ApiScopes.UsersManage), page, pageSize)
+        {
+            CompanyId = companyId,
+        };
         return true;
     }
 
@@ -327,4 +337,5 @@ public sealed record AuditEventView(
     JsonNode? Old,
     JsonNode? New,
     int? VersionNumber,
-    JsonNode? Detail);
+    JsonNode? Detail,
+    int? CompanyId);

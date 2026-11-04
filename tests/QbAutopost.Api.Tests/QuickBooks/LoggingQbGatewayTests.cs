@@ -87,6 +87,16 @@ public sealed class LoggingQbGatewayTests
         Assert.Contains(_log.Entries, e => e.Message.Contains(@"C:\qb\Copy.QBW", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task Should_LogTheCompanyFile_When_CallIsTargeted()
+    {
+        IQbGateway gateway = Wrap(new FakeQbGateway());
+
+        await gateway.ProcessAsync(new QbTarget(@"C:\fake\Takoma.QBW"), CheckRequest, CancellationToken.None);
+
+        Assert.Contains(_log.Entries, e => e.Message.Contains(@"sending CheckAddRq x", StringComparison.Ordinal) && e.Message.Contains(@"to C:\fake\Takoma.QBW", StringComparison.Ordinal));
+    }
+
     private sealed class StubGateway : IQbGateway
     {
         private readonly string? _response;

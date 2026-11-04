@@ -14,6 +14,9 @@ public sealed class StatementExtractionConfiguration : IEntityTypeConfiguration<
         builder.Property(e => e.Id).ValueGeneratedNever();
         builder.Property(e => e.Payload).HasColumnType("jsonb");
 
+        builder.Property(e => e.CompanyMatch).HasColumnType("jsonb");
+        builder.HasOne<CompanyEntity>().WithMany().HasForeignKey(e => e.CompanyId).OnDelete(DeleteBehavior.Restrict);
+
         // Expiry sweeps look only at unsaved records.
         builder.HasIndex(e => e.ExpiresUtc).HasFilter("saved_request_id IS NULL").HasDatabaseName("ix_statement_extractions_expires");
 

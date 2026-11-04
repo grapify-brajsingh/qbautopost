@@ -26,7 +26,7 @@ public interface ISavedRequestStore
 
     Task<SavedRequestStats> StatsAsync(CancellationToken ct);
 
-    /// <summary>Digests (with the latest version's stored row fingerprints) of requests created at or after <paramref name="sinceUtc"/>, never discarded ones, never <paramref name="excludeId"/>.</summary>
+    /// <summary>Digests (with the latest version's stored row fingerprints and the company) of requests created at or after <paramref name="sinceUtc"/>, never discarded ones, never <paramref name="excludeId"/>.</summary>
     Task<IReadOnlyList<DuplicateDigest>> DuplicateCandidatesAsync(DateTime sinceUtc, long? excludeId, CancellationToken ct);
 
     Task<IReadOnlyList<SavedRequestVersion>> VersionsAsync(long id, CancellationToken ct);
@@ -56,6 +56,18 @@ public interface ISavedRequestStore
     Task<MutationResult> SetValidationAsync(
         long id, ValidationSnapshot snapshot, ValidationSnapshot snapshotV2, DuplicateMatch duplicate, string actor,
         DateTime nowUtc, CancellationToken ct);
+
+    /// <summary>
+    /// M17 spec 4.6: sets the statement's company to <paramref name="companyId"/> (source <c>chosen</c>), clears both
+    /// stored validations (lists differ per company) and stores <paramref name="duplicate"/>, bumps the row version, and
+    /// writes one <c>company-assigned</c> event with detail <c>{ companyId, from, to, source: "chosen" }</c>
+    /// (<c>from</c> and <c>to</c> are <c>{ id, code, displayName }</c>, <c>from</c> null when there was none). Checked in
+    /// order: not found, <see cref="MutationKind.Stale"/>, <see cref="MutationKind.WrongStatus"/> (not pending, or an
+    /// attempt is in progress). The caller checks that the company exists and may be assigned.
+    /// </summary>
+    Task<MutationResult> SetCompanyAsync(
+        long id, int expectedRowVersion, int companyId, DuplicateMatch duplicate, string actor, DateTime nowUtc,
+        CancellationToken ct);
 
     /// <summary>
     /// Moves <paramref name="from"/> to <paramref name="to"/> (discard, restore), bumps the row version, and writes

@@ -23,11 +23,18 @@ public interface ISavedRequestV2Store
     /// </summary>
     Task<PagedResult<SavedRequestSummary>> ListV2Async(SavedRequestQueryV2 query, CancellationToken ct);
 
-    Task<SavedRequestStatsV2> StatsV2Async(CancellationToken ct);
+    /// <summary>The v2 stats, over the statements <paramref name="company"/> selects (null: all of them).</summary>
+    Task<SavedRequestStatsV2> StatsV2Async(CompanyFilter? company, CancellationToken ct);
 
     /// <summary>
     /// Other requests with the same non-empty reference as <paramref name="id"/> and status pending, posting, partial
     /// or unknown, ordered by received time (then id). Empty when the request is unknown or has no reference.
     /// </summary>
     Task<IReadOnlyList<OtherPush>> OtherUnpostedPushesAsync(long id, CancellationToken ct);
+
+    /// <summary>
+    /// How many pending requests each company has (company id to count; companies with none are absent, requests with
+    /// no company are not counted). The dashboard's "waiting" figure on the company list (M17 spec 5.1).
+    /// </summary>
+    Task<IReadOnlyDictionary<int, int>> PendingByCompanyAsync(CancellationToken ct);
 }

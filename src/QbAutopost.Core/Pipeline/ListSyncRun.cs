@@ -15,6 +15,12 @@ public static class ListSyncReasons
     public const string QuickBooksBusy = "quickbooks-busy";
     public const string QbStatus = "qb-status";
     public const string RulesUnreadable = "rules-unreadable";
+
+    /// <summary>M17 §4.7: QuickBooks has another company file open, so the company's sync was not made.</summary>
+    public const string CompanyFileOpenElsewhere = "company-file-open-elsewhere";
+
+    /// <summary>M17 §4.7, ruling B1: the company's file could not be opened for a reason not certain enough to name; not made.</summary>
+    public const string CompanyFileUnavailable = "company-file-unavailable";
 }
 
 /// <summary>

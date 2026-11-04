@@ -1,4 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.SavedRequests;
 
 namespace QbAutopost.Data.Tests;
@@ -41,4 +43,23 @@ public sealed class EfListV2StoreTests(PostgresFixture postgres)
 
     protected override ISavedRequestStore CreateStore() =>
         _services?.GetRequiredService<ISavedRequestStore>() ?? throw new InvalidOperationException(postgres.SkipReason);
+
+    protected override async Task<int> NewCompanyIdAsync()
+    {
+        var companies = _services?.GetRequiredService<ICompanyStore>() ?? throw new InvalidOperationException(postgres.SkipReason);
+        var made = await companies.EnsureDefaultAsync(
+            new NewDefaultCompany("Tropicana Market", @"C:\QB\Tropicana.qbw", null, null), DateTime.UtcNow, default);
+        return made.Company.Id;
+    }
+
+    protected override async Task SetCompanyAsync(ISavedRequestStore store, long requestId, int companyId)
+    {
+        await using var connection = new NpgsqlConnection(new NpgsqlConnectionStringBuilder(_connectionString) { Pooling = false }.ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            "UPDATE saved_requests SET company_id = @company, company_source = 'chosen' WHERE id = @id", connection);
+        command.Parameters.AddWithValue("company", companyId);
+        command.Parameters.AddWithValue("id", requestId);
+        await command.ExecuteNonQueryAsync();
+    }
 }

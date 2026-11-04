@@ -24,8 +24,10 @@ public sealed record NewUploadSave(
 /// <summary>
 /// <see cref="KeyReused"/>: the idempotency key is held by a request with a different original body and the extraction
 /// is not saved yet (the mirror of <see cref="CreateKind.KeyReused"/>); the result carries that request.
+/// <see cref="CompanyNotAssignable"/> (M17, ruling B18): <c>upload.companyId</c> names no company, or one that is missing or
+/// disabled. Decided before the store is called; nothing was saved.
 /// </summary>
-public enum UploadSaveKind { Created, Replayed, Expired, NotFound, AlreadySaved, KeyReused }
+public enum UploadSaveKind { Created, Replayed, Expired, NotFound, AlreadySaved, KeyReused, CompanyNotAssignable }
 
 /// <summary>
 /// <see cref="Record"/> for <c>Created</c>, <c>Replayed</c> and <c>KeyReused</c>; <see cref="SavedRequestId"/> and

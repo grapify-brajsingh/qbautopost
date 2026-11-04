@@ -1,7 +1,9 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using QbAutopost.Api.Endpoints.V2;
 using QbAutopost.Core.Api;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.Jobs;
 using QbAutopost.Core.SavedRequests;
 using QbAutopost.Core.Security;
@@ -53,7 +55,16 @@ public sealed record DetailLedgerCountsView(int Submitted, int Posted);
 /// </summary>
 public sealed record DetailLedgerBatchView(string PostId, JobStatus Status, DateTime CreatedUtc, DetailLedgerCountsView Counts);
 
-/// <summary>Dashboard v2 spec 9.1: a v2 list row. The v1 row's fields, with the v2 judgement, plus the v2 additions.</summary>
+/// <summary>
+/// M17 spec 5.2: how the printed name on an uploaded statement matched (copied from the extraction at save):
+/// <c>match</c> is <c>matched</c>, <c>none</c> or <c>ambiguous</c>; <c>candidates</c> are company ids.
+/// </summary>
+public sealed record CompanyMatchView(string Match, string? PrintedName, string? DbaName, IReadOnlyList<int> Candidates);
+
+/// <summary>
+/// Dashboard v2 spec 9.1: a v2 list row. The v1 row's fields, with the v2 judgement, plus the v2 additions; M17 adds
+/// the statement's <c>company</c> (null: needs company) and <c>companySource</c>.
+/// </summary>
 public sealed record SavedRequestSummaryV2View(
     long Id,
     string PublicRef,
@@ -77,7 +88,9 @@ public sealed record SavedRequestSummaryV2View(
     ValidationSummaryV2View ValidationSummary,
     PostSummaryView? PostSummary,
     int SkipCount,
-    UploadView? Upload);
+    UploadView? Upload,
+    CompanyRefView? Company,
+    string? CompanySource);
 
 /// <summary>
 /// Dashboard v2 spec 9.1, 6.4, 10 items 4.1, 4.3, 4.9: one request. The v1 detail's fields with <c>needsAttention</c> and
@@ -113,7 +126,10 @@ public sealed record SavedRequestDetailV2View(
     int SkipCount,
     IReadOnlyList<OtherPushView> OtherUnpostedPushes,
     DetailLedgerBatchView? LedgerBatch,
-    UploadView? Upload);
+    UploadView? Upload,
+    CompanyRefView? Company,
+    string? CompanySource,
+    CompanyMatchView? CompanyMatch);
 
 /// <summary>Dashboard v2 spec 9.3: a flag among pending requests and among all.</summary>
 public sealed record FlagCountsView(int Pending, int All);
@@ -124,7 +140,8 @@ public sealed record StatsV2View(
     IReadOnlyDictionary<string, int> ByStatus,
     FlagCountsView NeedsAttention,
     FlagCountsView Duplicate,
-    FlagCountsView HasErrors);
+    FlagCountsView HasErrors,
+    int NeedsCompany);
 
 /// <summary>Dashboard v2 spec 10 item 4.8: a ledger row with the <c>externalId</c> the caller sent for it.</summary>
 public sealed record LedgerPostedRowV2View(
@@ -184,35 +201,50 @@ public static class SavedRequestViewsV2
 
     /// <param name="readErrors">From <see cref="ReadErrors"/>.</param>
     /// <param name="ledger">The batch of the last attempt, only for a partial or unknown request (spec 10 item 4.9).</param>
+    /// <param name="companies">M17: the statement's company and whether it may be validated and posted.</param>
     public static SavedRequestDetailV2View Detail(
         SavedRequest r, IReadOnlyList<string> readErrors, IReadOnlyList<OtherPush> others, DirectPostResult? ledger,
-        Caller c, ActorNames names)
+        Caller c, ActorNames names, StatementCompanies companies)
     {
         var v1 = SavedRequestViews.Detail(r, readErrors, c, names);
         return new SavedRequestDetailV2View(
             v1.Id, v1.PublicRef, v1.Status, v1.RowVersion, v1.Source, v1.Reference, v1.ControlTotal, v1.TransactionCount,
             v1.CurrentVersion, r.NeedsAttentionV2, readErrors, v1.Duplicate, SavedRequestViews.Validation(r.ValidationV2),
-            v1.Payload, v1.LastAttempt, v1.PostId, v1.DiscardReason, v1.Created, v1.Updated, v1.AllowedActions,
+            v1.Payload, v1.LastAttempt, v1.PostId, v1.DiscardReason, v1.Created, v1.Updated,
+            AllowedActions(r.Status, r.CompanyId, c, companies),
             PushId(r.Metadata), Email(r.Metadata), r.HistoryCount,
             ValidationSummary(r.ValidationV2?.State, r.ProblemCount, r.Metadata, r.ValidationV2?.ValidatedUtc, r.ValidationV2?.VersionNumber),
             PostSummary(r.PostSummary, names), r.SkipCount,
             others.Select(o => new OtherPushView(o.Id, o.PublicRef, o.PushId?.ToString("D"), o.ReceivedUtc, o.Status)).ToList(),
             ledger is null ? null : DetailLedgerBatch(ledger),
-            Upload(r.Upload));
+            Upload(r.Upload),
+            companies.RefOf(r.CompanyId),
+            StatementCompanies.SourceName(r.CompanySource),
+            CompanyMatch(r.CompanyMatch));
     }
 
-    public static SavedRequestSummaryV2View Summary(SavedRequestSummary s, Caller c, ActorNames names)
+    /// <param name="companies">M17: the row's company and whether it may be validated and posted.</param>
+    public static SavedRequestSummaryV2View Summary(SavedRequestSummary s, Caller c, ActorNames names, StatementCompanies companies)
     {
         var v1 = SavedRequestViews.Summary(s, c, names);
         return new SavedRequestSummaryV2View(
             v1.Id, v1.PublicRef, v1.Status, v1.RowVersion, v1.Source, v1.Reference, v1.ControlTotal, v1.TransactionCount,
             v1.CurrentVersion, s.NeedsAttentionV2, v1.Duplicate,
             s.ValidationV2State is { } state ? new ValidationSummaryView(state, s.ValidationV2Utc) : null,
-            v1.PostId, v1.Created, v1.Updated, v1.AllowedActions,
+            v1.PostId, v1.Created, v1.Updated, AllowedActions(s.Status, s.CompanyId, c, companies),
             PushId(s.Metadata), Email(s.Metadata), s.HistoryCount,
             ValidationSummary(s.ValidationV2State, s.ProblemCount, s.Metadata, s.ValidationV2Utc, s.ValidationV2Version),
-            PostSummary(s.PostSummary, names), s.SkipCount, Upload(s.Upload));
+            PostSummary(s.PostSummary, names), s.SkipCount, Upload(s.Upload),
+            companies.RefOf(s.CompanyId), StatementCompanies.SourceName(s.CompanySource));
     }
+
+    /// <summary>M17 spec 4.6, 4.7: the v1 actions under the company gate, plus <c>set-company</c> (v2 only).</summary>
+    private static IReadOnlyList<string> AllowedActions(SavedRequestStatus status, int? companyId, Caller c, StatementCompanies companies) =>
+        SavedRequestRules.AllowedActionNames(status, c.Scopes, c.Kind == CallerKind.User, companies.GateOf(companyId));
+
+    /// <summary>M17 spec 5.2: the stored match, or null for a statement not saved from an upload.</summary>
+    public static CompanyMatchView? CompanyMatch(CompanyMatch? m) =>
+        m is null ? null : new CompanyMatchView(CompanyText.Of(m.Match), m.PrintedName, m.DbaName, m.Candidates.ToList());
 
     /// <summary>Dashboard-api-m12 7.4: the upload columns, or null.</summary>
     public static UploadView? Upload(UploadMeta? u) =>
@@ -224,7 +256,8 @@ public static class SavedRequestViewsV2
             Enum.GetValues<SavedRequestStatus>().ToDictionary(SavedRequestJson.Name, status => s.ByStatus.GetValueOrDefault(status)),
             Flag(s.NeedsAttention),
             Flag(s.Duplicate),
-            Flag(s.HasErrors));
+            Flag(s.HasErrors),
+            s.NeedsCompany);
 
     /// <summary>
     /// Spec 10 items 4.8 and 9.3: the attempt, with each ledger row's <c>externalId</c>. The ledger row's own value is

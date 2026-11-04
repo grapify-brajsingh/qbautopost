@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using QbAutopost.Core.Companies;
 using QbAutopost.Core.Dashboard;
 using QbAutopost.Core.SavedRequests;
 using QbAutopost.Core.SavedRequests.Audit;
@@ -21,6 +22,9 @@ public abstract class SummaryStoreContract
         [AuditActions.Received, AuditActions.Posted, AuditActions.PostFailed, AuditActions.Discarded];
 
     protected abstract ISavedRequestStore CreateStore();
+
+    /// <summary>The id of a company row that saved requests can name (EF: the foreign key needs it).</summary>
+    protected abstract Task<int> NewCompanyIdAsync();
 
     private static IDashboardSummaryStore Summary(ISavedRequestStore store) => Assert.IsAssignableFrom<IDashboardSummaryStore>(store);
 
@@ -85,7 +89,7 @@ public abstract class SummaryStoreContract
 
         foreach (var (from, to) in new[] { (T0, T0.AddHours(1)), (T0.AddMinutes(4), T0.AddMinutes(25)), (T0.AddMinutes(1), T0.AddMinutes(31)) })
         {
-            var facts = await Summary(store).EventFactsAsync(from, to, default);
+            var facts = await Summary(store).EventFactsAsync(from, to, null, default);
 
             Assert.All(facts, f => Assert.True(f.AtUtc >= from && f.AtUtc < to));
             Assert.All(facts, f => Assert.Contains(f.Action, SummaryActions));
@@ -97,7 +101,7 @@ public abstract class SummaryStoreContract
             }
         }
 
-        var all = await Summary(store).EventFactsAsync(T0, T0.AddHours(1), default);
+        var all = await Summary(store).EventFactsAsync(T0, T0.AddHours(1), null, default);
         Assert.Equal(4, all.Count(f => f.Action == AuditActions.Received));
         Assert.Equal(2, all.Count(f => f.Action == AuditActions.Posted));
         Assert.Equal(2, all.Count(f => f.Action == AuditActions.PostFailed));
@@ -120,14 +124,14 @@ public abstract class SummaryStoreContract
         await store.ResolveAsync(s4, ResolveOutcome.Posted, "checked QuickBooks", Admin, T0.AddMinutes(15), default);
         await store.ResolveAsync(s2, ResolveOutcome.Posted, "rest posted by hand", Admin, T0.AddMinutes(16), default);
 
-        var facts = (await Summary(store).PostedFactsAsync(T0.AddMinutes(4), T0.AddMinutes(30), default))
+        var facts = (await Summary(store).PostedFactsAsync(T0.AddMinutes(4), T0.AddMinutes(30), null, default))
             .OrderBy(f => f.AttemptId).ToList();
 
         Assert.Equal(new[] { posted, partial }, facts.Select(f => f.AttemptId));
         Assert.Equal(new[] { T0.AddMinutes(4), T0.AddMinutes(12) }, facts.Select(f => f.FinishedUtc));
         Assert.Equal((2, 10.25m), AttemptResultRows.Read(facts[0].ResultJson));
         Assert.Equal((1, 7.10m), AttemptResultRows.Read(facts[1].ResultJson));
-        Assert.Empty(await Summary(store).PostedFactsAsync(T0.AddMinutes(5), T0.AddMinutes(12), default));
+        Assert.Empty(await Summary(store).PostedFactsAsync(T0.AddMinutes(5), T0.AddMinutes(12), null, default));
     }
 
     [ContractFact]
@@ -144,13 +148,37 @@ public abstract class SummaryStoreContract
         await AttemptAsync(store, s3, AttemptOutcome.Unknown, SavedRequestStatus.Unknown, T0.AddMinutes(25));
         await store.ResolveAsync(s3, ResolveOutcome.NotPosted, "nothing in QuickBooks", Admin, T0.AddMinutes(26), default);
 
-        var facts = (await Summary(store).PostTimeFactsAsync(T0, T0.AddHours(1), default)).OrderBy(f => f.SavedRequestId).ToList();
+        var facts = (await Summary(store).PostTimeFactsAsync(T0, T0.AddHours(1), null, default)).OrderBy(f => f.SavedRequestId).ToList();
 
         Assert.Equal(
             new[] { new PostTimeFact(s1, received, T0.AddMinutes(40)), new PostTimeFact(s2, T0, T0.AddMinutes(20)) },
             facts);
         Assert.Equal(
             [new PostTimeFact(s2, T0, T0.AddMinutes(20))],
-            await Summary(store).PostTimeFactsAsync(T0, T0.AddMinutes(40), default));
+            await Summary(store).PostTimeFactsAsync(T0, T0.AddMinutes(40), null, default));
+    }
+
+    [ContractFact]
+    public async Task Should_CountOnlyThatCompany_When_SummaryFilteredByCompany()
+    {
+        var store = CreateStore();
+        var companyId = await NewCompanyIdAsync();
+        var mine = (await store.CreateAsync(
+            NewRequest("M1", T0) with { CompanyId = companyId, CompanySource = CompanySource.Default }, default)).Record.Id;
+        var other = await SaveAsync(store, "O1", T0);
+        await AttemptAsync(store, mine, AttemptOutcome.Posted, SavedRequestStatus.Posted, T0.AddMinutes(4), Result(1m));
+        await AttemptAsync(store, other, AttemptOutcome.Posted, SavedRequestStatus.Posted, T0.AddMinutes(5), Result(2m));
+        var (from, to) = (T0, T0.AddHours(1));
+
+        var events = await Summary(store).EventFactsAsync(from, to, companyId, default);
+        var posted = await Summary(store).PostedFactsAsync(from, to, companyId, default);
+        var times = await Summary(store).PostTimeFactsAsync(from, to, companyId, default);
+
+        Assert.Equal(1, events.Count(f => f.Action == AuditActions.Received));
+        Assert.Equal(1, events.Count(f => f.Action == AuditActions.Posted));
+        Assert.Single(posted);
+        Assert.Equal(mine, Assert.Single(times).SavedRequestId);
+        Assert.Equal(2, (await Summary(store).PostTimeFactsAsync(from, to, null, default)).Count);
+        Assert.Empty(await Summary(store).EventFactsAsync(from, to, companyId + 1000, default));
     }
 }
