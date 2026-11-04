@@ -259,6 +259,7 @@ public sealed class QbListSyncStoreTests(PostgresFixture postgres) : IClassFixtu
             new[]
             {
                 "accounts:integer:YES",
+                "company_id:integer:YES", // M17: the company whose lists these are
                 "customers:integer:YES",
                 "error:text:YES",
                 "finished_utc:timestamp with time zone:NO",
@@ -420,7 +421,7 @@ public sealed class QbListSyncStoreTests(PostgresFixture postgres) : IClassFixtu
         // The app role may now read every column but these three: a query that reads one of them is refused.
         await db.StringsAsync($"REVOKE SELECT ON qb_list_syncs FROM {PostgresFixture.AppRole}");
         await db.StringsAsync(
-            "GRANT SELECT (id, trigger, requested_by, started_utc, finished_utc, outcome, reason, accounts, vendors, customers) "
+            "GRANT SELECT (id, company_id, trigger, requested_by, started_utc, finished_utc, outcome, reason, accounts, vendors, customers) "
             + $"ON qb_list_syncs TO {PostgresFixture.AppRole}");
 
         var page = await store.ListAttemptsAsync(All(), CancellationToken.None);

@@ -23,6 +23,9 @@ public sealed class DashboardM12MigrationTests(PostgresFixture postgres) : IClas
                 "saved_requests.upload_prompt_version:text:YES",
                 "saved_requests.upload_sha256:text:YES",
                 "saved_requests.upload_size_bytes:bigint:YES",
+                // M17 (MultiCompany migration) adds the statement's company and its match.
+                "statement_extractions.company_id:integer:YES",
+                "statement_extractions.company_match:jsonb:YES",
                 "statement_extractions.expires_utc:timestamp with time zone:NO",
                 "statement_extractions.extracted_utc:timestamp with time zone:NO",
                 "statement_extractions.file_name:text:NO",
@@ -49,8 +52,8 @@ public sealed class DashboardM12MigrationTests(PostgresFixture postgres) : IClas
             i => i.StartsWith("ix_statement_extractions_expires ") && i.Contains("(expires_utc)") && i.Contains("saved_request_id IS NULL"));
 
         var foreignKeys = await QueryAsync(admin,
-            "SELECT confrelid::regclass::text FROM pg_constraint WHERE conrelid = 'statement_extractions'::regclass AND contype = 'f'");
-        Assert.Equal(new[] { "saved_requests" }, foreignKeys);
+            "SELECT confrelid::regclass::text FROM pg_constraint WHERE conrelid = 'statement_extractions'::regclass AND contype = 'f' ORDER BY 1");
+        Assert.Equal(new[] { "companies", "saved_requests" }, foreignKeys);
     }
 
     [PostgresTheory]
