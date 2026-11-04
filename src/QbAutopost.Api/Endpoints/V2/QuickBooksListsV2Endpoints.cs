@@ -286,7 +286,7 @@ public static class QuickBooksListsV2Endpoints
         // The default company's flight is the one the worker's single-company scheduled attempt uses, so that is joined.
         var (flight, joined) = schedule.JoinOrStart(
             company is null || company.IsDefault ? ListSyncSchedule.SingleCompany : company.Id,
-            token => RunLoggedAsync(sync, presence, company, trigger, requestedBy, log, token),
+            token => RunLoggedAsync(sync, presence, resolver, company, trigger, requestedBy, log, token),
             work => Observe(queue.RunExclusiveAsync(SyncLabel, work, CancellationToken.None)));
         if (joined)
         {
@@ -418,17 +418,33 @@ public static class QuickBooksListsV2Endpoints
 
     /// <summary>
     /// The sync itself, on the worker, with the §12 line for its outcome. §6: it may have waited behind a job, so
-    /// QuickBooks is checked again here; null when it has closed meanwhile.
+    /// QuickBooks is checked again here; null when it has closed meanwhile. M17 (final review 5): the company is read
+    /// again too, as the sweep does, so a company disabled or re-pointed meanwhile is refused (409
+    /// <c>company-not-ready</c>) before anything is opened or recorded, and its old file is never synced.
     /// </summary>
     private static async Task<ListSyncCompletion?> RunLoggedAsync(
         QbListSync sync,
         IQbPresence presence,
+        ICompanyResolver resolver,
         CompanyContext? company,
         ListSyncTrigger trigger,
         string? requestedBy,
         ILogger log,
         CancellationToken ct)
     {
+        if (company is not null)
+        {
+            // A company that no longer exists is refused as a missing one.
+            company = await resolver.GetAsync(company.Id, ct) ?? company with { State = CompanyState.Missing };
+            if (!company.CanOpenSession)
+            {
+                log.LogInformation(
+                    "QuickBooks lists sync ({Trigger}, by {RequestedBy}): company {CompanyId} is no longer ready; nothing was sent",
+                    Lower(trigger), requestedBy ?? "unknown", company.Id);
+                throw new CompanyNotReadyException(company);
+            }
+        }
+
         if (!ListSyncGuard.IsOpen(presence, log))
         {
             await SkipAsync(sync, company, trigger, requestedBy, log, ct);

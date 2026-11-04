@@ -285,6 +285,48 @@ public sealed class V2CompanyListsTests : IDisposable
         Assert.StartsWith("Another company file was open", row.GetProperty("message").GetString(), StringComparison.Ordinal);
     }
 
+    // ---- final review (5): the worker re-reads the company when the queued sync's turn comes -----------------------
+
+    [Theory]
+    [InlineData("disabled")]
+    [InlineData("re-pointed")]
+    public async Task Should_OpenNoFileAndRecordNothing_When_TheCompanyChangesWhileTheSyncWaits(string change)
+    {
+        SeedCompanies();
+        var otherFile = Path.Combine(Root, "Takoma-2026.QBW");
+        _factory.Companies.Add(CompanyOf(TakomaId, "Takoma Park Grocery Store Inc", TakomaFile, CompanyAccess.Approved) with
+        {
+            Id = 40, FolderName = "40", CandidateFiles = [TakomaFile, otherFile],
+        });
+        const int Takoma2 = 40;
+        var folders = Host.Services.GetRequiredService<CompanyDataFolder>();
+        folders.Prepare(Takoma2);
+        File.Copy(Fixtures.PathOf("multi-company", "takoma-rules.json"), folders.RulesFileOf(Takoma2), overwrite: true);
+        var queue = Host.Services.GetRequiredService<QbAutopost.Api.Jobs.JobQueue>();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var busy = queue.RunExclusiveAsync("folder-job", async _ => { await release.Task; return 0; }, CancellationToken.None);
+
+        var sync = SyncAsync($"?company={Takoma2}");
+        var until = DateTime.UtcNow.AddSeconds(10);
+        while (queue.Depth < 1 && DateTime.UtcNow < until)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.Equal(1, queue.Depth);
+        var patch = change == "disabled" ? new CompanyPatch(null, null, true) : new CompanyPatch(null, otherFile, null);
+        Assert.Equal(CompanyChangeKind.Changed, (await _factory.Companies.UpdateAsync(Takoma2, 1, patch, "admin", T0, default)).Kind);
+        release.SetResult();
+        await busy;
+        var (status, body) = await sync;
+
+        Assert.Equal(HttpStatusCode.Conflict, status);
+        Assert.Equal("company-not-ready", body.GetProperty("type").GetString());
+        Assert.Empty(Gateway.Requests);
+        var (_, history) = await GetAsync($"{History}?company={Takoma2}");
+        Assert.Equal(0, Total(history));
+    }
+
     // ---- review focus 4: the company parameter -------------------------------------------------------------------------
 
     [Theory]

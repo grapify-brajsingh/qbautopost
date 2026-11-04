@@ -86,7 +86,9 @@ public static class CompanyEndpoints
     /// Check access (spec 5.1): the one route that opens a session for a company that is not approved, because it is how a
     /// file becomes approved. A company with no file to open is still refused (409 <c>company-not-ready</c>), and a company
     /// whose file is gone is recorded as <c>file-not-found</c> without a session. QuickBooks must already be running. The
-    /// call runs on the worker through the one gateway lock; another open file is a 409 and changes nothing.
+    /// call runs on the worker through the one gateway lock; another open file is a 409 and changes nothing. On the default
+    /// company a failed session is a 503 <c>company-file-unavailable</c> and a busy timeout is answered as needs-approval,
+    /// neither stored (final review ruling 3): its stored access never goes down.
     /// </summary>
     private static async Task<IResult> CheckAsync(
         HttpContext http, string id, ICompanyResolver resolver, CompanyAccessChecker checker, JobQueue queue, IQbPresence presence,
@@ -134,6 +136,18 @@ public static class CompanyEndpoints
                 : CompanyProblems.FileUnavailable(refusal);
         }
 
+        if (company.IsDefault && check.Access == CompanyAccess.NeedsApproval)
+        {
+            // Final review ruling 3: a busy timeout on the default company is answered, never stored, so its last good
+            // access keeps the upgraded install posting. The answer shows what QuickBooks said; the row is unchanged.
+            var unstamped = new CompanyViews(lists, await PendingAsync(services, ct));
+            http.Response.Headers.ETag = $"\"{company.RowVersion.ToString(CultureInfo.InvariantCulture)}\"";
+            return Results.Ok(unstamped.Of(company with
+            {
+                Access = check.Access, AccessMessage = check.Message, AccessCheckedUtc = check.CheckedUtc,
+            }));
+        }
+
         var change = await store.RecordAccessAsync(companyId, check, CallerMiddleware.CallerOf(http)!.Actor, ct);
         switch (change.Kind)
         {
@@ -175,15 +189,49 @@ public static class CompanyEndpoints
             return CompanyProblems.RootUnavailable(ex.RootFolder);
         }
 
-        var known = (await store.ListAsync(ct)).Where(c => !string.IsNullOrEmpty(c.FolderName))
-            .Select(c => new KnownCompanyFolder(c.Id, c.FolderName!, c.FilePath, c.State, c.IsDefault)).ToList();
-        var plan = CompanyFolderScanner.Reconcile(scan, known);
+        var stored = await store.ListAsync(ct);
+        var adopted = Adoptable(stored, root);
+        var known = stored.Where(c => !string.IsNullOrEmpty(c.FolderName))
+            .Select(c => new KnownCompanyFolder(c.Id, c.FolderName!, c.FilePath, c.State, c.IsDefault))
+            .Concat(adopted is null ? [] : [adopted])
+            .ToList();
+        var plan = Adopt(CompanyFolderScanner.Reconcile(scan, known), scan, adopted);
         var applied = await store.ApplyScanAsync(plan, CallerMiddleware.CallerOf(http)!.Actor, clock.UtcNow, ct);
         var companies = await store.ListAsync(ct);
         PrepareFolders(companies, folders, loggers.CreateLogger(typeof(CompanyEndpoints)));
         var views = new CompanyViews(lists, await PendingAsync(services, ct));
         var items = companies.Select(views.Of).ToList();
         return Results.Ok(new CompanyScanView(applied.Added, applied.Updated, applied.Missing, applied.Ambiguous, plan.NoCompanyFile, items));
+    }
+
+    /// <summary>
+    /// Spec 4.4 (final review 1): a default company bootstrapped while <c>Companies:RootFolder</c> was empty has no folder
+    /// name. When its file lies exactly one folder below the root (full path, case-insensitive) the scan knows it by that
+    /// folder, so it is adopted (folder name and code stored, still the default with its rules, ledger, file and access)
+    /// instead of a second company being added for the same file. Null when there is nothing to adopt.
+    /// </summary>
+    private static KnownCompanyFolder? Adoptable(IReadOnlyList<Company> stored, string root)
+    {
+        if (stored.FirstOrDefault(c => c.IsDefault) is not { FolderName: null or "" } fallback
+            || CompanyBootstrap.FolderOf(root, fallback.FilePath).FolderName is not { } folderName
+            || stored.Any(c => string.Equals(c.FolderName, folderName, StringComparison.OrdinalIgnoreCase)))
+        {
+            return null;
+        }
+
+        return new KnownCompanyFolder(fallback.Id, folderName, fallback.FilePath, fallback.State, IsDefault: true);
+    }
+
+    /// <summary>Makes sure the adopted default's folder is stored even when the scan found nothing else to change.</summary>
+    private static ScanPlan Adopt(ScanPlan plan, ScanResult scan, KnownCompanyFolder? adopted)
+    {
+        if (adopted is null || plan.Update.Any(c => c.CompanyId == adopted.Id)
+            || scan.Folders.FirstOrDefault(f => string.Equals(f.FolderName, adopted.FolderName, StringComparison.OrdinalIgnoreCase)) is not { } folder)
+        {
+            return plan;
+        }
+
+        return plan with { Update = [.. plan.Update, new FolderChange(adopted.Id, folder, adopted.FilePath, adopted.State)] };
     }
 
     /// <summary>
@@ -249,7 +297,8 @@ public static class CompanyEndpoints
             case CompanyChangeKind.NotFound:
                 return CompanyProblems.NotFound(companyId);
             case CompanyChangeKind.Stale:
-                return CompanyProblems.EditedBySomeoneElse(change.Company!.RowVersion);
+                // A save that lost a race may come back without the row (final review 2): read it, as the Check route does.
+                return CompanyProblems.EditedBySomeoneElse((change.Company ?? await store.GetAsync(companyId, ct))?.RowVersion ?? current.RowVersion);
             case CompanyChangeKind.Invalid:
                 return CompanyProblems.InvalidRequest(change.Error ?? "The change is not allowed.");
             default:

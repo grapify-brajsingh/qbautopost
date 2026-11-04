@@ -38,21 +38,37 @@ public sealed class CompanyAccessChecker(IQbGateway gateway, PipelineOptions opt
             var info = QbCompanyQuery.Parse(answer);
             return info.Status.Code == 0
                 ? Result(company, CompanyAccess.Approved, "QuickBooks opened the company file.", info)
-                : Result(company, CompanyAccess.Error, $"QuickBooks refused the company query ({info.Status}).", null);
+                : Failed(company, $"QuickBooks refused the company query ({info.Status}).", null);
         }
         catch (QuickBooksBusyException)
         {
             // SPEC conflict 3: the call is abandoned but the lock stays held until the dialog is answered (COM cannot be cancelled).
+            // For the default company the caller answers this without storing it (final review ruling 3).
             return Result(company, CompanyAccess.NeedsApproval, BusyMessage, null);
         }
         catch (QuickBooksUnavailableException ex) when (CompanyFileRefusal.Of(ex) is null)
         {
-            return Result(company, CompanyAccess.Error, ex.Message, null);
+            return Failed(company, ex.Message, ex);
         }
         catch (Exception ex) when (ex is QuickBooksCallException or FormatException)
         {
-            return Result(company, CompanyAccess.Error, ex.Message, null);
+            return Failed(company, ex.Message, ex);
         }
+    }
+
+    /// <summary>
+    /// A failed check is stored as <c>error</c>, except on the default company (final review ruling 3): its stored access
+    /// is what lets an upgraded single-company install keep posting, so a failure there is never stored. It is thrown as
+    /// <see cref="QuickBooksCompanyFileUnavailableException"/> and the caller answers 503 <c>company-file-unavailable</c>.
+    /// </summary>
+    private CompanyAccessCheck Failed(Company company, string message, Exception? inner)
+    {
+        if (company.IsDefault)
+        {
+            throw new QuickBooksCompanyFileUnavailableException(company.FilePath ?? "", message, inner);
+        }
+
+        return Result(company, CompanyAccess.Error, message, null);
     }
 
     private CompanyAccessCheck Result(Company company, CompanyAccess access, string message, QbCompanyInfo? info) =>

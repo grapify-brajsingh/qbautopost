@@ -17,6 +17,12 @@ public sealed class FakeCompanyStore : ICompanyStore
     private int _nextId = 1;
     private long _nextRequestId = 1;
 
+    /// <summary>
+    /// The next UpdateAsync or RecordAccessAsync that would write answers <c>Stale</c> with no company and writes nothing,
+    /// as a store does whose save lost a concurrency race and could not read the row back.
+    /// </summary>
+    public bool LoseNextWriteRace { get; set; }
+
     public IReadOnlyList<(string Kind, int? CompanyId, string Actor)> AuditEvents
     {
         get { lock (_gate) { return [.. _audit]; } }
@@ -229,6 +235,11 @@ public sealed class FakeCompanyStore : ICompanyStore
                 return Task.FromResult(new CompanyChange(CompanyChangeKind.Changed, row));
             }
 
+            if (LoseRace())
+            {
+                return Task.FromResult(new CompanyChange(CompanyChangeKind.Stale, null));
+            }
+
             next = next with { UpdatedUtc = nowUtc, RowVersion = row.RowVersion + 1 };
             _companies[index] = next;
             _audit.Add((AuditActions.CompanyUpdated, id, actor));
@@ -252,6 +263,11 @@ public sealed class FakeCompanyStore : ICompanyStore
                 return Task.FromResult(new CompanyChange(CompanyChangeKind.Stale, row));
             }
 
+            if (LoseRace())
+            {
+                return Task.FromResult(new CompanyChange(CompanyChangeKind.Stale, null));
+            }
+
             var next = row with
             {
                 Access = check.Access,
@@ -271,6 +287,13 @@ public sealed class FakeCompanyStore : ICompanyStore
     public Task<DateTime?> LastScanUtcAsync(CancellationToken ct)
     {
         lock (_gate) { return Task.FromResult(_lastScan); }
+    }
+
+    private bool LoseRace()
+    {
+        var lose = LoseNextWriteRace;
+        LoseNextWriteRace = false;
+        return lose;
     }
 
     private int IndexFor(FolderChange change)

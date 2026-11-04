@@ -26,8 +26,11 @@ public sealed class CompanyBootstrap(ICompanyStore store, IOptions<AppSettings> 
         return result;
     }
 
-    /// <summary>Folder name and code only when the file sits exactly one folder below the root (as a scan would find it).</summary>
-    private static (string? FolderName, string? Code) FolderOf(string rootFolder, string filePath)
+    /// <summary>
+    /// Folder name and code only when the file sits exactly one folder below the root (as a scan would find it); full
+    /// paths, case-insensitive. The scan uses it too, to adopt a default company bootstrapped before the root was set.
+    /// </summary>
+    public static (string? FolderName, string? Code) FolderOf(string rootFolder, string? filePath)
     {
         if (string.IsNullOrWhiteSpace(rootFolder) || string.IsNullOrWhiteSpace(filePath) || !Path.IsPathFullyQualified(filePath))
         {

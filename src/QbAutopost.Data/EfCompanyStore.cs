@@ -250,8 +250,8 @@ public sealed class EfCompanyStore(IDbContextFactory<QbAutopostDbContext> factor
         }
         catch (DbUpdateConcurrencyException)
         {
-            // Someone else wrote between our read and our update.
-            return new CompanyChange(CompanyChangeKind.Stale, null);
+            // Someone else wrote between our read and our update: answer with the row as it now is (the fake's shape).
+            return new CompanyChange(CompanyChangeKind.Stale, await GetAsync(id, ct));
         }
 
         return new CompanyChange(CompanyChangeKind.Changed, ToModel(row));
@@ -289,7 +289,7 @@ public sealed class EfCompanyStore(IDbContextFactory<QbAutopostDbContext> factor
         }
         catch (DbUpdateConcurrencyException)
         {
-            return new CompanyChange(CompanyChangeKind.Stale, null);
+            return new CompanyChange(CompanyChangeKind.Stale, await GetAsync(id, ct));
         }
 
         return new CompanyChange(CompanyChangeKind.Changed, ToModel(row));

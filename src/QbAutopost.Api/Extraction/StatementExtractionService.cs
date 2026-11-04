@@ -158,7 +158,7 @@ public sealed class StatementExtractionService(
             return ExtractionOutcome.Failed();
         }
 
-        var (match, refs) = await MatchCompanyAsync(answer, ct);
+        var (match, refs) = await MatchCompanyAsync(answer, read.Text, ct);
         var now = Microseconds(clock.UtcNow);
         rows(payload["transactions"]?.AsArray().Count ?? 0);
 
@@ -195,17 +195,26 @@ public sealed class StatementExtractionService(
     /// <summary>
     /// M17 4.5: the model only read the printed names; this decides. Candidates are the matchable companies (the default
     /// company alone when there is no company table). A failure here never fails the extraction: it answers "none".
+    /// T-1711 ruling (hold, don't guess): a name the model returned counts only when the PDF's own text prints it (after
+    /// the matcher's normalisation), so a name the model made up never matches; the answer still shows both names.
     /// </summary>
     private async Task<(CompanyMatch Match, IReadOnlyDictionary<int, CompanyRefView> Refs)> MatchCompanyAsync(
-        ExtractionAnswer answer, CancellationToken ct)
+        ExtractionAnswer answer, string pdfText, CancellationToken ct)
     {
+        var text = CompanyNameMatcher.Normalize(pdfText);
+        string? Printed(string? name) =>
+            CompanyNameMatcher.Normalize(name) is { Length: > 0 } key && text.Contains(key, StringComparison.Ordinal) ? name : null;
+        var (holder, dba) = (Printed(answer.AccountHolderName), Printed(answer.DbaName));
+        CompanyMatch Match(IEnumerable<CompanyNames> companies) =>
+            CompanyNameMatcher.Match(holder, dba, companies) with { PrintedName = answer.AccountHolderName, DbaName = answer.DbaName };
+
         try
         {
             if (companyStore is not null)
             {
                 var companies = await companyStore.ListAsync(ct);
                 return (
-                    CompanyNameMatcher.Match(answer.AccountHolderName, answer.DbaName, companies.Select(c => c.ForMatching())),
+                    Match(companies.Select(c => c.ForMatching())),
                     companies.ToDictionary(c => c.Id, c => new CompanyRefView(c.Id, c.Code, c.DisplayName)));
             }
 
@@ -216,7 +225,7 @@ public sealed class StatementExtractionService(
             }
 
             return (
-                CompanyNameMatcher.Match(answer.AccountHolderName, answer.DbaName, [new CompanyNames(fallback.Id, true, [fallback.DisplayName])]),
+                Match([new CompanyNames(fallback.Id, true, [fallback.DisplayName])]),
                 new Dictionary<int, CompanyRefView> { [fallback.Id] = new CompanyRefView(fallback.Id, null, fallback.DisplayName) });
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

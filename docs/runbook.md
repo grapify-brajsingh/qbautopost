@@ -687,6 +687,11 @@ Developers regenerate the script with
 `dotnet tool run dotnet-ef migrations script --idempotent -p src/QbAutopost.Data -s src/QbAutopost.Data -o deploy/migrations.sql`
 (a test fails if the checked-in file is stale); strip the byte order mark and use LF line ends, as `deploy\migrations.sql` does.
 
+**After applying `deploy\migrations.sql`, always re-run `deploy\grants.sql`.** `apply-migrations.ps1` does both; if you
+ever apply `migrations.sql` by hand (psql, pgAdmin, a restore), run `grants.sql` straight after it as the owner. The M17
+migration drops and recreates the `audit_events` view, and dropping a view drops its `SELECT` grant: until `grants.sql`
+runs again the app role cannot read the audit feed (`permission denied for view audit_events`).
+
 ### 10.4 Start order and the bootstrap admin
 
 `start-all.ps1` starts or verifies the PostgreSQL service and waits for `127.0.0.1:5432` **before** it starts the API.
@@ -999,6 +1004,10 @@ previous version back.
 - **Dumps.** Every deploy keeps `pre-deploy-<timestamp>-<commit>.dump` in `<BackupFolder>\postgres`. The script never
   deletes them: clear old ones by hand.
 - **A rollback does not undo a migration.** The pre-deploy dump is the way back (restore per 10.5).
+- **Upgrade with a migration (M17 and later): re-run `deploy\grants.sql` after `deploy\migrations.sql`.** Apply migrations
+  with `.\deploy\apply-migrations.ps1` (10.3), which runs `grants.sql` after `migrations.sql`. If `migrations.sql` was
+  applied any other way, run `grants.sql` yourself before starting the API: the M17 migration drops and recreates the
+  `audit_events` view, which drops its `SELECT` grant, and the audit feed then fails with `permission denied`.
 - If `deploy.ps1` itself changed in the pull, it stops: run it again.
 - **`app.old.prev` left behind** means an interrupted run. The preflight says so; the next release clears it. Only when
   `app.old` is missing and you need `-Rollback` now, rename `app.old.prev` to `app.old` by hand first.

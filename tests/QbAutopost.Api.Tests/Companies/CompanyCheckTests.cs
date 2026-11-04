@@ -38,8 +38,15 @@ public sealed class CompanyCheckTests : IDisposable
         _factory.Dispose();
     }
 
+    private string? _defaultFile;
+
     private WebApplicationFactory<Program> Host => _host ??= _factory
-        .WithSettings(new Dictionary<string, string?> { ["Companies:RootFolder"] = _root, ["QuickBooks:BusyTimeoutSeconds"] = _busyTimeout })
+        .WithSettings(new Dictionary<string, string?>
+        {
+            ["Companies:RootFolder"] = _root,
+            ["QuickBooks:BusyTimeoutSeconds"] = _busyTimeout,
+            ["Company:FilePath"] = _defaultFile ?? _factory.Dir.Combine("default", "Default.qbw"),
+        })
         .WithWebHostBuilder(b => b.ConfigureTestServices(services =>
         {
             services.RemoveAll<IQbPresence>();
@@ -169,6 +176,51 @@ public sealed class CompanyCheckTests : IDisposable
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("needs-approval", body.GetProperty("access").GetString());
         Assert.Contains("certificate dialog", body.GetProperty("accessMessage").GetString());
+    }
+
+    // ---- final review (3): a failed check never downgrades the default company ------------------------------------
+
+    /// <summary>The default company of an upgraded install, approved at bootstrap, with its configured file on disk.</summary>
+    private async Task<Company> DefaultCompanyAsync()
+    {
+        _defaultFile = _factory.Dir.Combine("default", "Default.qbw");
+        Directory.CreateDirectory(Path.GetDirectoryName(_defaultFile)!);
+        File.WriteAllText(_defaultFile, "qbw");
+        _ = Host.Server; // starts the host, which creates the default company
+        var company = (await _factory.Companies.ListAsync(default)).Single(c => c.IsDefault);
+        Assert.Equal(CompanyAccess.Approved, company.Access);
+        return company;
+    }
+
+    [Fact]
+    public async Task Should_Answer503FileUnavailableAndKeepApproval_When_TheDefaultCompanysSessionCannotOpen()
+    {
+        var company = await DefaultCompanyAsync();
+        _factory.Gateway.QueryThrow = new QuickBooksUnavailableException("simulated: no session");
+
+        using var response = await CheckAsync(company.Id);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("company-file-unavailable", (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("type").GetString());
+        Assert.Equal(company, await StoredAsync(company.Id));
+        Assert.DoesNotContain(_factory.Companies.AuditEvents, e => e.Kind == AuditActions.CompanyChecked);
+    }
+
+    [Fact]
+    public async Task Should_AnswerNeedsApprovalWithoutStamping_When_TheDefaultCompanysCallOutlivesTheBusyTimeout()
+    {
+        _busyTimeout = "1";
+        var company = await DefaultCompanyAsync();
+        _factory.Gateway.QueryHang = true;
+
+        using var response = await CheckAsync(company.Id);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("needs-approval", body.GetProperty("access").GetString());
+        Assert.Contains("certificate dialog", body.GetProperty("accessMessage").GetString());
+        Assert.Equal(company, await StoredAsync(company.Id));
+        Assert.DoesNotContain(_factory.Companies.AuditEvents, e => e.Kind == AuditActions.CompanyChecked);
     }
 
     [Fact]

@@ -238,6 +238,43 @@ public sealed class CompanyEndpointsTests : IDisposable
         Assert.Equal(id, (await _factory.Store.GetAsync(statement, default))!.CompanyId);
     }
 
+    /// <summary>
+    /// Final review (1), spec 4.4: an install upgraded before Companies:RootFolder was set has a default company with no
+    /// folder name. Once the root is set, the scan adopts the default by its file instead of adding a second company for it.
+    /// </summary>
+    [Fact]
+    public async Task Should_AdoptTheDefaultCompany_When_RootIsSetAfterBootstrap()
+    {
+        var defaultFile = Path.Combine(Folder(Alpha), Alpha + ".qbw");
+        using (var before = _factory.WithSettings(new Dictionary<string, string?>
+        {
+            ["Companies:RootFolder"] = "",
+            ["Company:FilePath"] = defaultFile,
+        }))
+        {
+            before.CreateClient().Dispose(); // bootstrap: the default company, with no folder name
+        }
+
+        var bootstrapped = (await _factory.Companies.ListAsync(default)).Single();
+        Assert.Null(bootstrapped.FolderName);
+        using var after = _factory.WithSettings(new Dictionary<string, string?>
+        {
+            ["Companies:RootFolder"] = _root,
+            ["Company:FilePath"] = defaultFile.ToUpperInvariant(),
+        });
+        using var client = after.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _factory.Users.TokenFor(DashboardRoles.Admin));
+
+        using var response = await client.PostAsync("/api/v2/companies/scan", null);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(0, (await BodyAsync(response)).GetProperty("added").GetInt32());
+        var company = Assert.Single(await _factory.Companies.ListAsync(default));
+        Assert.Equal(
+            (bootstrapped.Id, true, Alpha, "18", bootstrapped.DisplayName, bootstrapped.FilePath, CompanyState.Active, CompanyAccess.Approved),
+            (company.Id, company.IsDefault, company.FolderName, company.Code, company.DisplayName, company.FilePath, company.State, company.Access));
+    }
+
     [Fact]
     public async Task Should_ReportFoldersWithoutAQbwFile_When_Scanning()
     {
@@ -407,6 +444,20 @@ public sealed class CompanyEndpointsTests : IDisposable
 
         var problem = await response.ReadProblemAsync();
         Assert.Equal((HttpStatusCode.PreconditionFailed, "edited-by-someone-else"), (response.StatusCode, problem.GetProperty("type").GetString()));
+    }
+
+    /// <summary>Final review (2): a write that lost a race in the store answers Stale with no company; still a 412, never a 500.</summary>
+    [Fact]
+    public async Task Should_Answer412_When_TheStoreLosesTheWriteRace()
+    {
+        var (id, rowVersion) = await ScannedAsync(Alpha);
+        _factory.Companies.LoseNextWriteRace = true;
+
+        using var response = await PatchAsync(id, rowVersion, new { matchNames = new[] { "x" } });
+
+        var problem = await response.ReadProblemAsync();
+        Assert.Equal((HttpStatusCode.PreconditionFailed, "edited-by-someone-else"), (response.StatusCode, problem.GetProperty("type").GetString()));
+        Assert.Equal(rowVersion, problem.GetProperty("rowVersion").GetInt32());
     }
 
     [Fact]

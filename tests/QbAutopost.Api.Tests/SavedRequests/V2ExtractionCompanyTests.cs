@@ -34,12 +34,14 @@ public sealed class V2ExtractionCompanyTests : IDisposable
             """;
     }
 
+    /// <param name="printed">The names the PDF itself prints in its header; by default the ones the model reads.</param>
     private async Task<(JsonElement Company, JsonElement Body)> UploadAsync(
-        string? holder, string? dba, string fileName = "chase-aug-2026.pdf")
+        string? holder, string? dba, string fileName = "chase-aug-2026.pdf", string[]? printed = null)
     {
         _host.Handler.ReplyContent(Reply(holder, dba));
         using var client = _host.User("editor");
-        var pdf = ExtractionTestHost.Pdf(ExtractionTestHost.TextPage());
+        var header = printed ?? new[] { holder, dba }.OfType<string>().ToArray();
+        var pdf = ExtractionTestHost.Pdf(header.Concat(ExtractionTestHost.TextPage()).ToArray());
         var (response, body) = await _host.PostAsync(client, ExtractionTestHost.Upload(pdf, fileName));
         Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
         return (body.GetProperty("company"), body);
@@ -163,6 +165,43 @@ public sealed class V2ExtractionCompanyTests : IDisposable
         var payload = body.GetProperty("payload");
         Assert.False(payload.TryGetProperty("accountHolderName", out _));
         Assert.False(payload.TryGetProperty("dbaName", out _));
+    }
+
+    // ---- T-1711 ruling: a name the PDF does not print never matches --------------------------------------------------
+
+    [Fact]
+    public async Task Should_Match_When_ThePdfPrintsTheNameInAnotherSpelling()
+    {
+        Seed(11, "18", "Takoma Park Grocery Store Inc");
+
+        var (company, _) = await UploadAsync(TakomaName, null, printed: ["Takoma Park Grocery Store, Inc."]);
+
+        Assert.Equal(("matched", 11), (company.GetProperty("match").GetString(), company.GetProperty("companyId").GetInt32()));
+    }
+
+    [Fact]
+    public async Task Should_ReturnNone_When_TheModelsNameIsNotInThePdfText()
+    {
+        Seed(11, "18", "Takoma Park Grocery Store Inc");
+
+        var (company, _) = await UploadAsync(TakomaName, null, printed: []);
+
+        Assert.Equal("none", company.GetProperty("match").GetString());
+        Assert.Equal(JsonValueKind.Null, company.GetProperty("companyId").ValueKind);
+        Assert.Empty(Ids(company));
+        Assert.Equal(TakomaName, company.GetProperty("printedName").GetString());
+    }
+
+    [Fact]
+    public async Task Should_MatchOnlyByTheNameInThePdf_When_TheModelAlsoReturnsAnUnprintedDba()
+    {
+        Seed(11, "18", "Takoma Park Grocery Store Inc");
+        Seed(12, "22", "Zemen Market");
+
+        var (company, _) = await UploadAsync(TakomaName, ZemenDba, printed: [TakomaName]);
+
+        Assert.Equal(("matched", 11), (company.GetProperty("match").GetString(), company.GetProperty("companyId").GetInt32()));
+        Assert.Equal(ZemenDba, company.GetProperty("dbaName").GetString());
     }
 
     [Fact]
